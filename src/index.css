@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #131313;
+    color: #e5e2e1;
+    overflow-x: hidden;
+  }
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
+  vertical-align: middle;
+}
+
+.material-symbols-outlined.fill {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+.bg-gradient-radial {
+  background: radial-gradient(circle at center, rgba(32, 31, 31, 0.5) 0%, rgba(19, 19, 19, 1) 75%);
+}
+
+.project-card {
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.project-card:hover {
+  transform: translateY(-4px);
+}
+
+.project-card:hover .project-thumb {
+  opacity: 1;
+  filter: grayscale(0%);
+}
+
+.project-thumb {
+  transition: all 0.6s ease;
+  filter: grayscale(40%);
+  opacity: 0.85;
+}
+
+/* Minimalist Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #444748;
+}
