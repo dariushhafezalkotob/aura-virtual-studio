@@ -53,6 +53,21 @@ export interface DepthRange {
   far: number;
 }
 
+interface FreeRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface PlacedRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rotated: boolean;
+}
+
 // GLSL Fullscreen Quad Vertex Shader
 const FS_VERT = `
   varying vec2 vUv;
@@ -658,6 +673,170 @@ export class RoomBakeEngine {
     this.renderer.setRenderTarget(null);
   }
 
+  /**
+   * High-Efficiency 2D MaxRects Guillotine Bin Packer with 90° Island Rotation
+   * Maximizes atlas area utilization and completely eliminates wasted shelf gutters.
+   */
+  public maxRectsPack(
+    items: { key: string; w: number; h: number }[],
+    atlasSize: number,
+    pad: number,
+    allowRotation = true
+  ): Record<string, PlacedRect> | null {
+    // Sort items by max side descending, then area descending for optimal placement
+    const sorted = [...items].sort((a, b) => {
+      const maxA = Math.max(a.w, a.h);
+      const maxB = Math.max(b.w, b.h);
+      if (maxB !== maxA) return maxB - maxA;
+      return b.w * b.h - a.w * a.h;
+    });
+
+    const freeRects: FreeRect[] = [
+      { x: pad, y: pad, w: atlasSize - pad * 2, h: atlasSize - pad * 2 },
+    ];
+    const placed: Record<string, PlacedRect> = {};
+
+    for (const item of sorted) {
+      let bestRectIdx = -1;
+      let bestShortSideFit = Infinity;
+      let bestAreaFit = Infinity;
+      let bestRotated = false;
+
+      for (let i = 0; i < freeRects.length; i++) {
+        const fr = freeRects[i];
+
+        // 1. Try normal orientation
+        if (fr.w >= item.w && fr.h >= item.h) {
+          const leftoverX = fr.w - item.w;
+          const leftoverY = fr.h - item.h;
+          const shortSide = Math.min(leftoverX, leftoverY);
+          const area = fr.w * fr.h - item.w * item.h;
+
+          if (shortSide < bestShortSideFit || (shortSide === bestShortSideFit && area < bestAreaFit)) {
+            bestRectIdx = i;
+            bestShortSideFit = shortSide;
+            bestAreaFit = area;
+            bestRotated = false;
+          }
+        }
+
+        // 2. Try 90-degree rotated orientation
+        if (allowRotation && fr.w >= item.h && fr.h >= item.w) {
+          const leftoverX = fr.w - item.h;
+          const leftoverY = fr.h - item.w;
+          const shortSide = Math.min(leftoverX, leftoverY);
+          const area = fr.w * fr.h - item.h * item.w;
+
+          if (shortSide < bestShortSideFit || (shortSide === bestShortSideFit && area < bestAreaFit)) {
+            bestRectIdx = i;
+            bestShortSideFit = shortSide;
+            bestAreaFit = area;
+            bestRotated = true;
+          }
+        }
+      }
+
+      if (bestRectIdx === -1) {
+        return null; // Could not fit all items at this scale
+      }
+
+      const chosen = freeRects[bestRectIdx];
+      const placeW = bestRotated ? item.h : item.w;
+      const placeH = bestRotated ? item.w : item.h;
+
+      placed[item.key] = {
+        x: chosen.x,
+        y: chosen.y,
+        w: placeW,
+        h: placeH,
+        rotated: bestRotated,
+      };
+
+      // Split intersecting free rectangles (MaxRects rule with padding gutter)
+      const placedX = chosen.x;
+      const placedY = chosen.y;
+      const placedRight = placedX + placeW + pad;
+      const placedBottom = placedY + placeH + pad;
+
+      const newFreeRects: FreeRect[] = [];
+
+      for (let i = 0; i < freeRects.length; i++) {
+        const fr = freeRects[i];
+
+        // Check for intersection with the placed rectangle + padding
+        const intersects =
+          fr.x < placedRight &&
+          fr.x + fr.w > placedX &&
+          fr.y < placedBottom &&
+          fr.y + fr.h > placedY;
+
+        if (!intersects) {
+          newFreeRects.push(fr);
+          continue;
+        }
+
+        // Subdivide free rectangle into up to 4 remaining non-overlapping spaces:
+        // Left strip
+        if (placedX > fr.x && placedX < fr.x + fr.w) {
+          newFreeRects.push({
+            x: fr.x,
+            y: fr.y,
+            w: placedX - fr.x,
+            h: fr.h,
+          });
+        }
+        // Right strip
+        if (placedRight < fr.x + fr.w && placedRight > fr.x) {
+          newFreeRects.push({
+            x: placedRight,
+            y: fr.y,
+            w: fr.x + fr.w - placedRight,
+            h: fr.h,
+          });
+        }
+        // Top strip
+        if (placedY > fr.y && placedY < fr.y + fr.h) {
+          newFreeRects.push({
+            x: fr.x,
+            y: fr.y,
+            w: fr.w,
+            h: placedY - fr.y,
+          });
+        }
+        // Bottom strip
+        if (placedBottom < fr.y + fr.h && placedBottom > fr.y) {
+          newFreeRects.push({
+            x: fr.x,
+            y: placedBottom,
+            w: fr.w,
+            h: fr.y + fr.h - placedBottom,
+          });
+        }
+      }
+
+      // Filter out redundant / completely contained free rectangles
+      freeRects.length = 0;
+      for (let i = 0; i < newFreeRects.length; i++) {
+        const a = newFreeRects[i];
+        if (a.w < 2 || a.h < 2) continue;
+        let contained = false;
+        for (let j = 0; j < newFreeRects.length; j++) {
+          if (i === j) continue;
+          const b = newFreeRects[j];
+          if (a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h) {
+            contained = true;
+            break;
+          }
+        }
+        if (!contained) {
+          freeRects.push(a);
+        }
+      }
+    }
+
+    return placed;
+  }
+
   public buildDefaultRoom() {
     for (const m of this.meshes) {
       this.room.remove(m);
@@ -675,33 +854,43 @@ export class RoomBakeEngine {
       { name: 'wall_posX', p0: [W/2, 0, -D/2],  u: [0, 0, D],  v: [0, H, 0], n: [-1, 0, 0] },
     ];
 
-    // UV packing
+    // Maximize UV packing scale via binary search
     const A = this.config.atlas;
     const pad = this.config.pad;
-    let totalArea = 0;
-    for (const s of surfaces) {
-      const uw = Math.hypot(s.u[0], s.u[1], s.u[2]);
-      const vh = Math.hypot(s.v[0], s.v[1], s.v[2]);
-      totalArea += uw * vh;
-    }
-    const scale = Math.sqrt((A * A * 0.82) / totalArea);
-    this.state.scale = scale;
 
-    const items = surfaces.map((s) => {
+    const rawItems = surfaces.map((s) => {
       const uw = Math.hypot(s.u[0], s.u[1], s.u[2]);
       const vh = Math.hypot(s.v[0], s.v[1], s.v[2]);
-      return {
-        key: s.name,
-        w: Math.max(2, Math.round(uw * scale)),
-        h: Math.max(2, Math.round(vh * scale)),
-      };
+      return { key: s.name, uw, vh };
     });
 
-    const rects = this.shelfPack(items, A, pad) || {};
+    let lo = 10, hi = 3000;
+    let bestPlaced: Record<string, PlacedRect> | null = null;
+    let bestScale = 100;
+
+    for (let iter = 0; iter < 24; iter++) {
+      const s = (lo + hi) * 0.5;
+      const items = rawItems.map((it) => ({
+        key: it.key,
+        w: Math.max(2, Math.round(it.uw * s)),
+        h: Math.max(2, Math.round(it.vh * s)),
+      }));
+
+      const res = this.maxRectsPack(items, A, pad, true);
+      if (res) {
+        bestPlaced = res;
+        bestScale = s;
+        lo = s;
+      } else {
+        hi = s;
+      }
+    }
+
+    this.state.scale = bestScale;
     let chartPx = 0;
 
     for (const s of surfaces) {
-      const r = rects[s.name] || { x: 0, y: 0, w: A / 2, h: A / 2 };
+      const r = bestPlaced?.[s.name] || { x: 0, y: 0, w: A / 2, h: A / 2, rotated: false };
       chartPx += r.w * r.h;
 
       const p0 = new THREE.Vector3(...(s.p0 as [number, number, number]));
@@ -723,13 +912,22 @@ export class RoomBakeEngine {
         n.x, n.y, n.z,  n.x, n.y, n.z,  n.x, n.y, n.z,
       ]);
 
-      const u0 = r.x / A, v0 = r.y / A;
-      const u1 = (r.x + r.w) / A, v1 = (r.y + r.h) / A;
-
-      const uvs = new Float32Array([
-        u0, v0,  u1, v0,  u1, v1,
-        u0, v0,  u1, v1,  u0, v1,
-      ]);
+      let uvs: Float32Array;
+      if (r.rotated) {
+        const u0 = r.x / A, v0 = r.y / A;
+        const u1 = (r.x + r.w) / A, v1 = (r.y + r.h) / A;
+        uvs = new Float32Array([
+          u0, v1,  u0, v0,  u1, v0,
+          u0, v1,  u1, v0,  u1, v1,
+        ]);
+      } else {
+        const u0 = r.x / A, v0 = r.y / A;
+        const u1 = (r.x + r.w) / A, v1 = (r.y + r.h) / A;
+        uvs = new Float32Array([
+          u0, v0,  u1, v0,  u1, v1,
+          u0, v0,  u1, v1,  u0, v1,
+        ]);
+      }
 
       const geom = new THREE.BufferGeometry();
       geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -752,34 +950,10 @@ export class RoomBakeEngine {
     this.clearBake();
   }
 
-  public shelfPack(
-    items: { key: string; w: number; h: number }[],
-    atlasSize: number,
-    pad: number
-  ): Record<string, { x: number; y: number; w: number; h: number }> | null {
-    const sorted = [...items].sort((a, b) => b.h - a.h);
-    const rects: Record<string, { x: number; y: number; w: number; h: number }> = {};
-    let curX = pad;
-    let curY = pad;
-    let rowH = 0;
-
-    for (const it of sorted) {
-      if (curX + it.w + pad > atlasSize) {
-        curX = pad;
-        curY += rowH + pad;
-        rowH = 0;
-      }
-      if (curY + it.h + pad > atlasSize) {
-        return null;
-      }
-      rects[it.key] = { x: curX, y: curY, w: it.w, h: it.h };
-      curX += it.w + pad;
-      rowH = Math.max(rowH, it.h);
-    }
-    return rects;
-  }
-
-  public smartUnwrapGeometry(geometry: THREE.BufferGeometry, padding = 0.015) {
+  /**
+   * Smart Coplanar Island Unwrapper with Maximum Atlas Area Packing
+   */
+  public smartUnwrapGeometry(geometry: THREE.BufferGeometry) {
     geometry.computeVertexNormals();
     const pos = geometry.attributes.position;
     const nor = geometry.attributes.normal;
@@ -814,7 +988,8 @@ export class RoomBakeEngine {
       else axis = fnz > 0 ? 4 : 5;
 
       const d = fnx * ax + fny * ay + fnz * az;
-      const dBin = Math.round(d * 3);
+      // High-precision coplanar binning
+      const dBin = Math.round(d * 4);
 
       const islandKey = `${axis}_${dBin}`;
       let isl = islandMap.get(islandKey);
@@ -858,25 +1033,27 @@ export class RoomBakeEngine {
           if (v > isl.maxV) isl.maxV = v;
         }
       }
-      isl.uLen = Math.max(0.05, isl.maxU - isl.minU);
-      isl.vLen = Math.max(0.05, isl.maxV - isl.minV);
+      isl.uLen = Math.max(0.02, isl.maxU - isl.minU);
+      isl.vLen = Math.max(0.02, isl.maxV - isl.minV);
     }
 
     const atlasSize = this.config.atlas;
-    const padPx = 8;
-    let lo = 1, hi = 4000;
-    let bestRects: any = null;
+    const padPx = 6;
+    let lo = 1, hi = 5000;
+    let bestPlaced: Record<string, PlacedRect> | null = null;
 
-    for (let iter = 0; iter < 16; iter++) {
+    // Binary search to find maximum possible scale for 100% atlas utilization
+    for (let iter = 0; iter < 24; iter++) {
       const s = (lo + hi) * 0.5;
       const items = islands.map((isl) => ({
+        key: isl.key,
         w: Math.max(2, Math.round(isl.uLen * s)),
         h: Math.max(2, Math.round(isl.vLen * s)),
-        key: isl.key,
       }));
-      const r = this.shelfPack(items, atlasSize, padPx);
-      if (r) {
-        bestRects = r;
+
+      const res = this.maxRectsPack(items, atlasSize, padPx, true);
+      if (res) {
+        bestPlaced = res;
         lo = s;
       } else {
         hi = s;
@@ -884,9 +1061,10 @@ export class RoomBakeEngine {
     }
 
     const finalUvs = new Float32Array(vertexCount * 2);
-    if (bestRects) {
+
+    if (bestPlaced) {
       for (const isl of islands) {
-        const r = bestRects[isl.key];
+        const r = bestPlaced[isl.key];
         if (!r) continue;
         const rangeU = isl.maxU - isl.minU || 1e-4;
         const rangeV = isl.maxV - isl.minV || 1e-4;
@@ -895,15 +1073,24 @@ export class RoomBakeEngine {
           const i = t * 3;
           for (let k = 0; k < 3; k++) {
             const idx = i + k;
-            const normU = (tempU[idx] - isl.minU) / rangeU;
-            const normV = (tempV[idx] - isl.minV) / rangeV;
+            let normU: number;
+            let normV: number;
+
+            if (r.rotated) {
+              normU = (tempV[idx] - isl.minV) / rangeV;
+              normV = 1.0 - (tempU[idx] - isl.minU) / rangeU;
+            } else {
+              normU = (tempU[idx] - isl.minU) / rangeU;
+              normV = (tempV[idx] - isl.minV) / rangeV;
+            }
+
             finalUvs[idx * 2]     = (r.x + normU * r.w) / atlasSize;
             finalUvs[idx * 2 + 1] = (r.y + normV * r.h) / atlasSize;
           }
         }
       }
     } else {
-      return this.autoUnwrapGeometry(geometry, padding);
+      return this.autoUnwrapGeometry(geometry, 0.015);
     }
 
     geometry.setAttribute('uv', new THREE.BufferAttribute(finalUvs, 2));
@@ -1109,7 +1296,8 @@ export class RoomBakeEngine {
       mergedGeom.setAttribute('uv', new THREE.BufferAttribute(outUv, 2));
     }
 
-    if (uvMode === 'smart' || (uvMode === 'auto' && !hasAnyUv)) {
+    // Default to Smart Coplanar Island Unwrapping
+    if (uvMode === 'smart' || !hasAnyUv || (uvMode === 'auto' && !hasAnyUv)) {
       this.smartUnwrapGeometry(mergedGeom);
     } else if (uvMode === 'box') {
       this.autoUnwrapGeometry(mergedGeom);

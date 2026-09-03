@@ -30,7 +30,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   const [showUVModal, setShowUVModal] = useState(false);
 
   // 00 Geometry
-  const [uvMode, setUvMode] = useState<'auto' | 'smart' | 'box' | 'model'>('auto');
+  const [uvMode, setUvMode] = useState<'smart' | 'auto' | 'box' | 'model'>('smart');
 
   // 01 View
   const [views, setViews] = useState<ViewPoint[]>([]);
@@ -953,8 +953,8 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                     onChange={(e) => setUvMode(e.target.value as any)}
                     className="w-full bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded outline-none focus:border-primary font-mono"
                   >
+                    <option value="smart">Smart Coplanar Island Unwrap (Maximum Area, Zero Overlap)</option>
                     <option value="auto">Auto: Keep Model UVs if present, else Smart Unwrap</option>
-                    <option value="smart">Smart Coplanar Island Unwrap (Zero Overlap)</option>
                     <option value="box">Simple 6-Way Box Projection</option>
                     <option value="model">Force File UVs</option>
                   </select>
