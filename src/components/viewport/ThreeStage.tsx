@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, Suspense, Component, ReactNode } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
   OrbitControls,
   useGLTF,
@@ -285,6 +285,93 @@ const FallbackLoader = () => (
   </Html>
 );
 
+// 60 FPS Continuous Unreal Engine Flight & Navigation Controller
+const UnrealCameraNavigation: React.FC<{
+  controlsRef: React.RefObject<any>;
+  enabled: boolean;
+}> = ({ controlsRef, enabled }) => {
+  const { camera, gl } = useThree();
+  const keysDown = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!enabled) return;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return;
+      const k = e.key.toLowerCase();
+      if (['w', 'a', 's', 'd', 'q', 'e', 'shift'].includes(k)) {
+        keysDown.current.add(k);
+      }
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      keysDown.current.delete(k);
+    };
+
+    const onBlur = () => {
+      keysDown.current.clear();
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+      keysDown.current.clear();
+    };
+  }, [enabled]);
+
+  // Prevent browser context menu on right click inside viewport
+  useEffect(() => {
+    const dom = gl.domElement;
+    const preventContext = (e: MouseEvent) => e.preventDefault();
+    dom.addEventListener('contextmenu', preventContext);
+    return () => {
+      dom.removeEventListener('contextmenu', preventContext);
+    };
+  }, [gl]);
+
+  useFrame((_, delta) => {
+    if (!enabled || keysDown.current.size === 0) return;
+
+    const isShift = keysDown.current.has('shift');
+    const moveSpeed = (isShift ? 14.0 : 5.5) * delta;
+
+    // Camera 3D Forward look direction
+    const fwd = new THREE.Vector3();
+    camera.getWorldDirection(fwd);
+
+    // Camera Right direction on horizontal plane
+    const rgt = new THREE.Vector3();
+    rgt.crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+
+    // World Up direction
+    const up = new THREE.Vector3(0, 1, 0);
+
+    const moveDelta = new THREE.Vector3();
+
+    if (keysDown.current.has('w')) moveDelta.addScaledVector(fwd, moveSpeed);
+    if (keysDown.current.has('s')) moveDelta.addScaledVector(fwd, -moveSpeed);
+    if (keysDown.current.has('d')) moveDelta.addScaledVector(rgt, moveSpeed);
+    if (keysDown.current.has('a')) moveDelta.addScaledVector(rgt, -moveSpeed);
+    if (keysDown.current.has('e')) moveDelta.addScaledVector(up, moveSpeed);
+    if (keysDown.current.has('q')) moveDelta.addScaledVector(up, -moveSpeed);
+
+    if (moveDelta.lengthSq() > 0) {
+      camera.position.add(moveDelta);
+      if (controlsRef.current && controlsRef.current.target) {
+        controlsRef.current.target.add(moveDelta);
+        controlsRef.current.update();
+      }
+    }
+  });
+
+  return null;
+};
+
 export const ThreeStage: React.FC<ThreeStageProps> = ({
   assets,
   selectedAssetId,
@@ -413,15 +500,18 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           )}
         </Suspense>
 
+        {/* 60 FPS Continuous Unreal Engine Keyboard & Mouse Flight Controller */}
+        <UnrealCameraNavigation controlsRef={controlsRef} enabled={!isTransformDragging} />
+
         <OrbitControls
           ref={controlsRef}
           makeDefault
           enabled={!isTransformDragging}
           enableDamping
-          dampingFactor={0.05}
-          maxPolarAngle={Math.PI / 2 + 0.08}
-          minDistance={0.5}
-          maxDistance={80}
+          dampingFactor={0.06}
+          maxPolarAngle={Math.PI / 2 + 0.15}
+          minDistance={0.1}
+          maxDistance={300}
         />
       </Canvas>
     </div>
