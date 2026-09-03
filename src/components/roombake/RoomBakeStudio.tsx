@@ -210,8 +210,8 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     const onKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return;
       const step = 0.35;
-      const fwd = new THREE.Vector3(Math.sin(engine.orbit.yaw), 0, Math.cos(engine.orbit.yaw));
-      const rgt = new THREE.Vector3(fwd.z, 0, -fwd.x);
+      const fwd = new THREE.Vector3(Math.sin(engine.orbit.yaw), 0, Math.cos(engine.orbit.yaw)).normalize();
+      const rgt = new THREE.Vector3(-fwd.z, 0, fwd.x).normalize();
       const k = e.key.toLowerCase();
       if (k === 'w') engine.orbit.target.addScaledVector(fwd, step);
       if (k === 's') engine.orbit.target.addScaledVector(fwd, -step);
