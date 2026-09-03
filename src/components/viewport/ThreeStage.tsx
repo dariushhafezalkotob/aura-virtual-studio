@@ -196,6 +196,7 @@ const GLTFModel: React.FC<{
             }
             if (mat.metalness !== undefined) mat.metalness = Math.min(mat.metalness, 0.35);
             if (mat.roughness !== undefined) mat.roughness = Math.max(0.3, Math.min(mat.roughness, 0.85));
+            mat.side = THREE.DoubleSide;
             mat.needsUpdate = true;
           }
         }
@@ -203,7 +204,9 @@ const GLTFModel: React.FC<{
       return c;
     }, [scene]);
 
-    content = (
+    content = asset.category === 'environment' ? (
+      <primitive object={cloned} />
+    ) : (
       <Center top>
         <primitive object={cloned} />
       </Center>

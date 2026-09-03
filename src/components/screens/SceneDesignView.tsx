@@ -380,19 +380,32 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
 
   const handleAddRoomBakeAsset = (assetData: { name: string; glbUrl?: string; modelBlob?: Blob }) => {
     if (assetData.glbUrl) {
+      const existingIdx = (currentProject.scenes || []).findIndex(
+        (a) => a.category === 'environment' && (a.id.startsWith('roombake_') || a.name.includes('Room'))
+      );
+
       const newAsset: SceneAsset = {
-        id: `roombake_${Date.now()}`,
+        id: existingIdx >= 0 ? currentProject.scenes![existingIdx].id : `roombake_${Date.now()}`,
         name: assetData.name || 'AI Baked Room Environment',
         category: 'environment',
         glbUrl: assetData.glbUrl,
-        position: [0, 0, 0],
-        rotation: [0, 0, 0],
-        scale: [1, 1, 1],
+        position: existingIdx >= 0 ? currentProject.scenes![existingIdx].position : [0, 0, 0],
+        rotation: existingIdx >= 0 ? currentProject.scenes![existingIdx].rotation : [0, 0, 0],
+        scale: existingIdx >= 0 ? currentProject.scenes![existingIdx].scale : [1, 1, 1],
         createdAt: new Date().toISOString(),
       };
+
+      let updatedScenes: SceneAsset[];
+      if (existingIdx >= 0) {
+        updatedScenes = [...(currentProject.scenes || [])];
+        updatedScenes[existingIdx] = newAsset;
+      } else {
+        updatedScenes = [...(currentProject.scenes || []), newAsset];
+      }
+
       onUpdateProject({
         ...currentProject,
-        scenes: [...(currentProject.scenes || []), newAsset],
+        scenes: updatedScenes,
       });
       setSelectedAssetId(newAsset.id);
     }
@@ -603,7 +616,16 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               <div>ROT: {selectedAsset.rotation.map((v) => v.toFixed(2)).join(', ')}</div>
               <div>SCL: {selectedAsset.scale.map((v) => v.toFixed(2)).join(', ')}</div>
             </div>
-            <div className="flex gap-xs pt-xs border-t border-outline-variant/20">
+            <div className="flex flex-col gap-xs pt-xs border-t border-outline-variant/20">
+              {selectedAsset.category === 'environment' && (
+                <button
+                  onClick={() => setShowRoomBakeStudio(true)}
+                  className="w-full font-label-caps text-[10px] text-primary border border-primary/40 bg-primary/10 hover:bg-primary/20 py-[4px] rounded transition-colors cursor-pointer flex items-center justify-center gap-1 font-semibold"
+                >
+                  <span className="material-symbols-outlined text-[14px]">brush</span>
+                  EDIT IN ROOMBAKE STUDIO
+                </button>
+              )}
               <button
                 onClick={() => handleDeleteAsset(selectedAsset.id)}
                 className="w-full font-label-caps text-[10px] text-error hover:bg-error/10 py-[3px] rounded transition-colors cursor-pointer"

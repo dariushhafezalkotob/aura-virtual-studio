@@ -1882,17 +1882,19 @@ export class RoomBakeEngine {
     const atlasCanvas = this.getAtlasCanvas();
     const bakedTexture = new THREE.CanvasTexture(atlasCanvas);
     bakedTexture.colorSpace = THREE.SRGBColorSpace;
-    bakedTexture.flipY = false;
+    bakedTexture.flipY = true;
+    bakedTexture.needsUpdate = true;
 
     const exportMat = new THREE.MeshStandardMaterial({
       map: bakedTexture,
-      roughness: 0.8,
-      metalness: 0.1,
+      roughness: 0.85,
+      metalness: 0.05,
       side: THREE.DoubleSide,
     });
 
     for (const m of this.meshes) {
-      const cloned = new THREE.Mesh(m.geometry.clone(), exportMat);
+      const clonedGeom = m.geometry.clone();
+      const cloned = new THREE.Mesh(clonedGeom, exportMat);
       cloned.name = m.name;
       exportScene.add(cloned);
     }

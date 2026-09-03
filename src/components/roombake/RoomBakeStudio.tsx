@@ -153,30 +153,25 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     }
   }, []);
 
-  // Initialize Engine & Viewport
+  // Initialize Engine & Viewport (Persistent Session)
   useEffect(() => {
-    if (!isOpen || !canvasRef.current) return;
+    if (!canvasRef.current) return;
 
-    const engine = new RoomBakeEngine(canvasRef.current);
-    engineRef.current = engine;
-    setViews([...engine.views]);
-    setModelStatus(engine.state.modelName);
+    if (!engineRef.current) {
+      const engine = new RoomBakeEngine(canvasRef.current);
+      engineRef.current = engine;
+      setViews([...engine.views]);
+      setModelStatus(engine.state.modelName);
 
-    addLog('RoomBake projective texture baking engine online.', 'ok');
+      addLog('RoomBake projective texture baking engine online.', 'ok');
 
-    const v = engine.views[1] || engine.views[0];
-    if (v) {
-      engine.renderConditioning(v, autoRange, depthInvert, maskFeather);
-      refreshViewInfo(v);
-      updateStats();
+      const v = engine.views[1] || engine.views[0];
+      if (v) {
+        engine.renderConditioning(v, autoRange, depthInvert, maskFeather);
+        refreshViewInfo(v);
+        updateStats();
+      }
     }
-
-    let animId: number;
-    const renderLoop = () => {
-      engine.render();
-      animId = requestAnimationFrame(renderLoop);
-    };
-    animId = requestAnimationFrame(renderLoop);
 
     let dragging = false;
     let lx = 0, ly = 0;
@@ -193,32 +188,34 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
       try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
     };
     const onPointerMove = (e: PointerEvent) => {
-      if (!dragging) return;
-      engine.orbit.yaw -= (e.clientX - lx) * 0.005;
-      engine.orbit.pitch -= (e.clientY - ly) * 0.005;
-      engine.orbit.pitch = Math.max(-1.5, Math.min(1.5, engine.orbit.pitch));
+      if (!dragging || !engineRef.current) return;
+      engineRef.current.orbit.yaw -= (e.clientX - lx) * 0.005;
+      engineRef.current.orbit.pitch -= (e.clientY - ly) * 0.005;
+      engineRef.current.orbit.pitch = Math.max(-1.5, Math.min(1.5, engineRef.current.orbit.pitch));
       lx = e.clientX;
       ly = e.clientY;
     };
     const onWheel = (e: WheelEvent) => {
+      if (!engineRef.current) return;
       e.preventDefault();
-      engine.orbit.dist = Math.max(
+      engineRef.current.orbit.dist = Math.max(
         0.01,
-        Math.min(40, engine.orbit.dist * (1 + Math.sign(e.deltaY) * 0.15) + (e.deltaY > 0 ? 0.05 : 0))
+        Math.min(40, engineRef.current.orbit.dist * (1 + Math.sign(e.deltaY) * 0.15) + (e.deltaY > 0 ? 0.05 : 0))
       );
     };
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!isOpen || !engineRef.current) return;
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return;
       const step = 0.35;
-      const fwd = new THREE.Vector3(Math.sin(engine.orbit.yaw), 0, Math.cos(engine.orbit.yaw)).normalize();
+      const fwd = new THREE.Vector3(Math.sin(engineRef.current.orbit.yaw), 0, Math.cos(engineRef.current.orbit.yaw)).normalize();
       const rgt = new THREE.Vector3(-fwd.z, 0, fwd.x).normalize();
       const k = e.key.toLowerCase();
-      if (k === 'w') engine.orbit.target.addScaledVector(fwd, step);
-      if (k === 's') engine.orbit.target.addScaledVector(fwd, -step);
-      if (k === 'a') engine.orbit.target.addScaledVector(rgt, -step);
-      if (k === 'd') engine.orbit.target.addScaledVector(rgt, step);
-      if (k === 'q') engine.orbit.target.y -= step;
-      if (k === 'e') engine.orbit.target.y += step;
+      if (k === 'w') engineRef.current.orbit.target.addScaledVector(fwd, step);
+      if (k === 's') engineRef.current.orbit.target.addScaledVector(fwd, -step);
+      if (k === 'a') engineRef.current.orbit.target.addScaledVector(rgt, -step);
+      if (k === 'd') engineRef.current.orbit.target.addScaledVector(rgt, step);
+      if (k === 'q') engineRef.current.orbit.target.y -= step;
+      if (k === 'e') engineRef.current.orbit.target.y += step;
     };
 
     canvas.addEventListener('pointerdown', onPointerDown);
@@ -228,16 +225,39 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     window.addEventListener('keydown', onKeyDown);
 
     return () => {
-      cancelAnimationFrame(animId);
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointerup', onPointerUp);
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('wheel', onWheel);
       window.removeEventListener('keydown', onKeyDown);
-      engine.dispose();
-      engineRef.current = null;
+      if (engineRef.current) {
+        engineRef.current.dispose();
+        engineRef.current = null;
+      }
     };
-  }, [isOpen, addLog, updateStats, refreshViewInfo]);
+  }, []);
+
+  // Resume / Pause Render Loop and Sync View on Modal Open/Close
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!isOpen || !engine || !canvasRef.current) return;
+
+    engine.resize(canvasRef.current.clientWidth || 800, canvasRef.current.clientHeight || 600);
+    updateStats();
+    const v = engine.views[selectedViewIdx];
+    if (v) refreshViewInfo(v);
+
+    let animId: number;
+    const renderLoop = () => {
+      engine.render();
+      animId = requestAnimationFrame(renderLoop);
+    };
+    animId = requestAnimationFrame(renderLoop);
+
+    return () => {
+      cancelAnimationFrame(animId);
+    };
+  }, [isOpen, selectedViewIdx, updateStats, refreshViewInfo]);
 
   // Section 00: Geometry Handlers
   const handleImport3DModel = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -735,10 +755,12 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-surface-container-lowest text-on-surface overflow-hidden animate-fade-in font-sans">
+    <div
+      className={`fixed inset-0 z-50 flex flex-col bg-surface-container-lowest text-on-surface overflow-hidden font-sans ${
+        isOpen ? 'flex animate-fade-in' : 'hidden'
+      }`}
+    >
       {/* Top Header Bar */}
       <header className="h-14 border-b border-surface-container-highest bg-surface-container-low px-6 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
