@@ -8,11 +8,13 @@ import { execSync } from 'node:child_process';
 
 const env = { ...process.env, ...loadEnv('', process.cwd(), '') };
 const HF_TOKEN = env.HF_TOKEN || env.VITE_HF_TOKEN || '';
-const TRELLIS_SPACE = 'dariushh/trellis-3d-engine';
-const HUNYUAN_3D_SPACE = 'dariushh/hunyuan3d-2-engine';
+const TRELLIS_SPACE = 'https://dariushh-trellis-3d-engine.hf.space';
+const HUNYUAN_3D_SPACE = 'https://dariushh-hunyuan3d-2-engine.hf.space';
 const HUNYUAN_WORLD_SPACE = 'https://dariushh-hunyuanworld-engine.hf.space';
-const KIMODO_SPACE = 'dariushh/kimodo-virtual-stage';
-const PANORAMA_360_SPACE = 'hugging-apps/krea2-360-panorama-lora';
+const KIMODO_SPACE = 'https://dariushh-kimodo-virtual-stage.hf.space';
+const PANORAMA_360_SPACE = 'https://hugging-apps-krea2-360-panorama-lora.hf.space';
+
+const connectOpts = HF_TOKEN ? { hf_token: HF_TOKEN as `hf_${string}` } : {};
 
 let trellisClient: any = null;
 let hunyuan3DClient: any = null;
@@ -22,36 +24,61 @@ let panoramaClient: any = null;
 
 async function getTrellisClient() {
   if (!trellisClient) {
-    trellisClient = await Client.connect(TRELLIS_SPACE, { hf_token: HF_TOKEN as `hf_${string}` });
+    try {
+      console.log(`Connecting to TRELLIS Engine at ${TRELLIS_SPACE}...`);
+      trellisClient = await Client.connect(TRELLIS_SPACE, connectOpts);
+    } catch (e: any) {
+      console.warn(`Direct TRELLIS space connect failed, falling back to repo ID: ${e.message}`);
+      trellisClient = await Client.connect('dariushh/trellis-3d-engine', connectOpts);
+    }
   }
   return trellisClient;
 }
 
 async function getHunyuan3DClient() {
   if (!hunyuan3DClient) {
-    hunyuan3DClient = await Client.connect(HUNYUAN_3D_SPACE, { hf_token: HF_TOKEN as `hf_${string}` });
+    try {
+      console.log(`Connecting to Hunyuan3D Engine at ${HUNYUAN_3D_SPACE}...`);
+      hunyuan3DClient = await Client.connect(HUNYUAN_3D_SPACE, connectOpts);
+    } catch (e: any) {
+      console.warn(`Direct Hunyuan3D space connect failed, falling back to repo ID: ${e.message}`);
+      hunyuan3DClient = await Client.connect('dariushh/hunyuan3d-2-engine', connectOpts);
+    }
   }
   return hunyuan3DClient;
 }
 
 async function getHunyuanWorldClient() {
   if (!hunyuanWorldClient) {
-    console.log(`Connecting to HunyuanWorld ZeroGPU Engine at ${HUNYUAN_WORLD_SPACE}...`);
-    hunyuanWorldClient = await Client.connect(HUNYUAN_WORLD_SPACE, { hf_token: HF_TOKEN as `hf_${string}` });
+    try {
+      console.log(`Connecting to HunyuanWorld ZeroGPU Engine at ${HUNYUAN_WORLD_SPACE}...`);
+      hunyuanWorldClient = await Client.connect(HUNYUAN_WORLD_SPACE, connectOpts);
+    } catch (e: any) {
+      console.warn(`Direct HunyuanWorld connect failed, falling back to repo ID: ${e.message}`);
+      hunyuanWorldClient = await Client.connect('dariushh/hunyuanworld-engine', connectOpts);
+    }
   }
   return hunyuanWorldClient;
 }
 
 async function getKimodoClient() {
   if (!kimodoClient) {
-    kimodoClient = await Client.connect(KIMODO_SPACE, { hf_token: HF_TOKEN as `hf_${string}` });
+    try {
+      kimodoClient = await Client.connect(KIMODO_SPACE, connectOpts);
+    } catch (e: any) {
+      kimodoClient = await Client.connect('dariushh/kimodo-virtual-stage', connectOpts);
+    }
   }
   return kimodoClient;
 }
 
 async function getPanoramaClient() {
   if (!panoramaClient) {
-    panoramaClient = await Client.connect(PANORAMA_360_SPACE, { hf_token: HF_TOKEN as `hf_${string}` });
+    try {
+      panoramaClient = await Client.connect(PANORAMA_360_SPACE, connectOpts);
+    } catch (e: any) {
+      panoramaClient = await Client.connect('hugging-apps/krea2-360-panorama-lora', connectOpts);
+    }
   }
   return panoramaClient;
 }
