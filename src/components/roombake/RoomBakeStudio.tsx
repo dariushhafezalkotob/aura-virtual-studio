@@ -153,7 +153,11 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     }
   }, []);
 
-  // Initialize Engine & Viewport (Persistent Session)
+  const isOpenRef = useRef(isOpen);
+  isOpenRef.current = isOpen;
+  const keysDownRef = useRef<Set<string>>(new Set());
+
+  // Initialize Engine & Viewport (Persistent Session with Unreal Navigation)
   useEffect(() => {
     if (!canvasRef.current) return;
 
@@ -174,62 +178,105 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     }
 
     let dragging = false;
+    let dragButton = 0;
     let lx = 0, ly = 0;
     const canvas = canvasRef.current;
 
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       dragging = true;
+      dragButton = e.button;
       lx = e.clientX;
       ly = e.clientY;
       canvas.setPointerCapture(e.pointerId);
     };
+
     const onPointerUp = (e: PointerEvent) => {
       dragging = false;
       try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
     };
+
     const onPointerMove = (e: PointerEvent) => {
       if (!dragging || !engineRef.current) return;
-      engineRef.current.orbit.yaw -= (e.clientX - lx) * 0.005;
-      engineRef.current.orbit.pitch -= (e.clientY - ly) * 0.005;
-      engineRef.current.orbit.pitch = Math.max(-1.5, Math.min(1.5, engineRef.current.orbit.pitch));
+      const dx = e.clientX - lx;
+      const dy = e.clientY - ly;
       lx = e.clientX;
       ly = e.clientY;
+
+      const eng = engineRef.current;
+      const cp = Math.cos(eng.orbit.pitch);
+      const fwd = new THREE.Vector3(
+        Math.sin(eng.orbit.yaw) * cp,
+        Math.sin(eng.orbit.pitch),
+        Math.cos(eng.orbit.yaw) * cp
+      ).normalize();
+      const rgt = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+
+      // Middle click (1) or Alt/Shift+Left Click = Unreal Pan
+      if (dragButton === 1 || (dragButton === 0 && (e.altKey || e.shiftKey))) {
+        const panSpeed = 0.005 * Math.max(0.5, eng.orbit.dist);
+        eng.orbit.target.addScaledVector(rgt, -dx * panSpeed);
+        eng.orbit.target.y += dy * panSpeed;
+      } else {
+        // Left Click (0) or Right Click (2) = Unreal Free Fly Look
+        eng.orbit.yaw -= dx * 0.004;
+        eng.orbit.pitch -= dy * 0.004;
+        eng.orbit.pitch = Math.max(-1.55, Math.min(1.55, eng.orbit.pitch));
+      }
     };
+
     const onWheel = (e: WheelEvent) => {
       if (!engineRef.current) return;
       e.preventDefault();
-      engineRef.current.orbit.dist = Math.max(
-        0.01,
-        Math.min(40, engineRef.current.orbit.dist * (1 + Math.sign(e.deltaY) * 0.15) + (e.deltaY > 0 ? 0.05 : 0))
-      );
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (!isOpen || !engineRef.current) return;
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return;
-      const step = 0.35;
-      const fwd = new THREE.Vector3(Math.sin(engineRef.current.orbit.yaw), 0, Math.cos(engineRef.current.orbit.yaw)).normalize();
-      const rgt = new THREE.Vector3(-fwd.z, 0, fwd.x).normalize();
-      const k = e.key.toLowerCase();
-      if (k === 'w') engineRef.current.orbit.target.addScaledVector(fwd, step);
-      if (k === 's') engineRef.current.orbit.target.addScaledVector(fwd, -step);
-      if (k === 'a') engineRef.current.orbit.target.addScaledVector(rgt, -step);
-      if (k === 'd') engineRef.current.orbit.target.addScaledVector(rgt, step);
-      if (k === 'q') engineRef.current.orbit.target.y -= step;
-      if (k === 'e') engineRef.current.orbit.target.y += step;
+      const eng = engineRef.current;
+      const cp = Math.cos(eng.orbit.pitch);
+      const fwd = new THREE.Vector3(
+        Math.sin(eng.orbit.yaw) * cp,
+        Math.sin(eng.orbit.pitch),
+        Math.cos(eng.orbit.yaw) * cp
+      ).normalize();
+      eng.orbit.target.addScaledVector(fwd, -Math.sign(e.deltaY) * 0.35);
     };
 
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!isOpenRef.current || !engineRef.current) return;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return;
+      const k = e.key.toLowerCase();
+      if (['w', 'a', 's', 'd', 'q', 'e', 'shift'].includes(k)) {
+        keysDownRef.current.add(k);
+      }
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      keysDownRef.current.delete(k);
+    };
+
+    const onBlur = () => {
+      keysDownRef.current.clear();
+    };
+
+    canvas.addEventListener('contextmenu', onContextMenu);
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointerup', onPointerUp);
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
 
     return () => {
+      canvas.removeEventListener('contextmenu', onContextMenu);
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointerup', onPointerUp);
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('wheel', onWheel);
       window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
       if (engineRef.current) {
         engineRef.current.dispose();
         engineRef.current = null;
@@ -237,7 +284,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     };
   }, []);
 
-  // Resume / Pause Render Loop and Sync View on Modal Open/Close
+  // Resume / Pause 60 FPS Render Loop & Delta-Time Unreal Fly Navigation
   useEffect(() => {
     const engine = engineRef.current;
     if (!isOpen || !engine || !canvasRef.current) return;
@@ -248,7 +295,34 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     if (v) refreshViewInfo(v);
 
     let animId: number;
-    const renderLoop = () => {
+    let lastTime = performance.now();
+
+    const renderLoop = (time: number) => {
+      const dt = Math.min(0.1, (time - lastTime) / 1000);
+      lastTime = time;
+
+      if (keysDownRef.current.size > 0 && engineRef.current) {
+        const eng = engineRef.current;
+        const isShift = keysDownRef.current.has('shift');
+        const moveSpeed = (isShift ? 9.0 : 3.8) * dt;
+
+        const cp = Math.cos(eng.orbit.pitch);
+        const fwd = new THREE.Vector3(
+          Math.sin(eng.orbit.yaw) * cp,
+          Math.sin(eng.orbit.pitch),
+          Math.cos(eng.orbit.yaw) * cp
+        ).normalize();
+        const rgt = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+        const up = new THREE.Vector3(0, 1, 0);
+
+        if (keysDownRef.current.has('w')) eng.orbit.target.addScaledVector(fwd, moveSpeed);
+        if (keysDownRef.current.has('s')) eng.orbit.target.addScaledVector(fwd, -moveSpeed);
+        if (keysDownRef.current.has('d')) eng.orbit.target.addScaledVector(rgt, moveSpeed);
+        if (keysDownRef.current.has('a')) eng.orbit.target.addScaledVector(rgt, -moveSpeed);
+        if (keysDownRef.current.has('e')) eng.orbit.target.addScaledVector(up, moveSpeed);
+        if (keysDownRef.current.has('q')) eng.orbit.target.addScaledVector(up, -moveSpeed);
+      }
+
       engine.render();
       animId = requestAnimationFrame(renderLoop);
     };
@@ -256,6 +330,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
 
     return () => {
       cancelAnimationFrame(animId);
+      keysDownRef.current.clear();
     };
   }, [isOpen, selectedViewIdx, updateStats, refreshViewInfo]);
 
