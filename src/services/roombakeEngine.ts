@@ -114,6 +114,7 @@ export class RoomBakeEngine {
   public meshes: THREE.Mesh[] = [];
   public views: ViewPoint[] = [];
   public currentViewIndex: number = 0;
+  public dilationPasses: number = 8;
 
   public orbit = {
     yaw: Math.PI,
@@ -129,6 +130,7 @@ export class RoomBakeEngine {
     chartFraction: 1,
     coverage: 0,
     modelName: 'Default Box Room',
+    lastGeneratedTexture: null as THREE.Texture | null,
   };
 
   public RTs: {
@@ -575,6 +577,78 @@ export class RoomBakeEngine {
 
     // Build default room and preset views
     this.buildDefaultRoom();
+  }
+
+  public setGenSize(w: number, h: number) {
+    if (w === this.config.genW && h === this.config.genH) return;
+    this.config.genW = w;
+    this.config.genH = h;
+    for (const k of ['gbuf', 'viz', 'maskA', 'maskB'] as const) {
+      this.RTs[k].dispose();
+    }
+    this.RTs.gbuf = rt(w, h);
+    this.RTs.viz = rt8(w, h);
+    this.RTs.maskA = rt8(w, h);
+    this.RTs.maskB = rt8(w, h);
+    for (const v of this.views) {
+      if (v.type !== 'pano' && v.cam) {
+        v.cam.aspect = w / h;
+        v.cam.updateProjectionMatrix();
+        v.cam.updateMatrixWorld(true);
+        v.viewProj = new THREE.Matrix4().multiplyMatrices(v.cam.projectionMatrix, v.cam.matrixWorldInverse);
+      }
+    }
+  }
+
+  public updateViewFov(viewIndex: number, fov: number) {
+    const v = this.views[viewIndex];
+    if (v && v.cam) {
+      v.fov = fov;
+      v.cam.fov = fov;
+      v.cam.updateProjectionMatrix();
+      v.cam.updateMatrixWorld(true);
+      v.viewProj = new THREE.Matrix4().multiplyMatrices(v.cam.projectionMatrix, v.cam.matrixWorldInverse);
+    }
+  }
+
+  public addAimView(fov = 60): ViewPoint {
+    const p = this.previewCam.position.clone();
+    const t = p.clone().addScaledVector(
+      new THREE.Vector3(0, 0, -1).applyQuaternion(this.previewCam.quaternion),
+      3
+    );
+    const cam = new THREE.PerspectiveCamera(fov, this.config.genW / this.config.genH, 0.05, 200);
+    cam.position.copy(p);
+    cam.lookAt(t);
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld(true);
+    const viewProj = new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+
+    const v: ViewPoint = {
+      name: `Free View ${this.views.length}`,
+      pos: [p.x, p.y, p.z],
+      target: [t.x, t.y, t.z],
+      fov,
+      cam,
+      viewProj,
+    };
+    this.views.push(v);
+    return v;
+  }
+
+  public addPanoView(): ViewPoint {
+    const p = this.previewCam.position.clone();
+    const v: ViewPoint = {
+      name: `Panorama ${this.views.length}`,
+      type: 'pano',
+      pos: [p.x, p.y, p.z],
+    };
+    this.views.push(v);
+    return v;
+  }
+
+  public setShowGaps(show: boolean) {
+    this.roomMat.uniforms.uShowGaps.value = show ? 1.0 : 0.0;
   }
 
   public fsPass(material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null) {
@@ -1192,7 +1266,7 @@ export class RoomBakeEngine {
     return cv;
   }
 
-  public renderConditioning(view: ViewPoint, autoRange = true, depthInvert = false, feather = 4) {
+  public renderConditioning(view: ViewPoint, autoRange = true, depthInvert = false, feather = 6) {
     const isPano = view.type === 'pano';
     const src = this.renderGBuffer(view);
     const W = isPano ? this.config.panoW : this.config.genW;
@@ -1319,7 +1393,8 @@ export class RoomBakeEngine {
     this.RTs.bakeA = this.RTs.bakeB;
     this.RTs.bakeB = t;
     this.state.bakes++;
-    this.refreshDisplay();
+    this.state.lastGeneratedTexture = genTexture;
+    this.refreshDisplay(this.dilationPasses);
   }
 
   public undoBake(): boolean {
@@ -1330,7 +1405,7 @@ export class RoomBakeEngine {
     this.RTs.bakeB = t;
     this.state.hasSnapshot = false;
     this.state.bakes = Math.max(0, this.state.bakes - 1);
-    this.refreshDisplay();
+    this.refreshDisplay(this.dilationPasses);
     return true;
   }
 
@@ -1344,10 +1419,12 @@ export class RoomBakeEngine {
     this.renderer.setClearColor(0x0a0c10, 1);
     this.state.bakes = 0;
     this.state.hasSnapshot = false;
-    this.refreshDisplay();
+    this.state.lastGeneratedTexture = null;
+    this.refreshDisplay(this.dilationPasses);
   }
 
   public refreshDisplay(iterations = 8) {
+    this.dilationPasses = iterations;
     this.resolveMat.uniforms.uTex.value = this.RTs.bakeA.texture;
     this.fsPass(this.resolveMat, this.RTs.dispA);
 
