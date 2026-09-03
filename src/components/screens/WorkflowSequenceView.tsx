@@ -48,7 +48,7 @@ export const WorkflowSequenceView: React.FC<WorkflowSequenceViewProps> = ({
             </h3>
             <div className="h-px w-8 bg-on-surface-variant/30 my-2 group-hover:w-full group-hover:bg-primary/50 transition-all duration-500" />
             <p className="font-body-sm text-body-sm text-on-surface-variant leading-relaxed opacity-80 group-hover:opacity-100 transition-opacity duration-300">
-              Set up the environment, characters, objects, and actor positions using AI 3D generation (TRELLIS).
+              Construct environments with RoomBake projective texture baking, HunyuanWorld 3DGS scenes, 360° AI skyboxes, and TRELLIS / Hunyuan3D props.
             </p>
             <div className="mt-md flex items-center gap-xs text-primary font-label-caps text-[10px] tracking-widest opacity-0 group-hover:opacity-100 transition-opacity duration-300">
               ENTER STUDIO <span className="material-symbols-outlined text-[14px]">arrow_forward</span>

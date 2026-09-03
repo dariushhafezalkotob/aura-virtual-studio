@@ -6,6 +6,7 @@ import {
   TransformMode,
   LightingEnvironmentPreset,
 } from '../viewport/ThreeStage';
+import { RoomBakeStudio } from '../roombake/RoomBakeStudio';
 
 interface SceneDesignViewProps {
   currentProject: Project;
@@ -70,6 +71,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const [showImagePicker, setShowImagePicker] = useState(false);
   const [showPanoramaModal, setShowPanoramaModal] = useState(false);
   const [showHunyuanWorldModal, setShowHunyuanWorldModal] = useState(false);
+  const [showRoomBakeStudio, setShowRoomBakeStudio] = useState(false);
 
   // 360 AI Generator State
   const [isGenerating360, setIsGenerating360] = useState(false);
@@ -376,6 +378,26 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     }
   };
 
+  const handleAddRoomBakeAsset = (assetData: { name: string; glbUrl?: string; modelBlob?: Blob }) => {
+    if (assetData.glbUrl) {
+      const newAsset: SceneAsset = {
+        id: `roombake_${Date.now()}`,
+        name: assetData.name || 'AI Baked Room Environment',
+        category: 'environment',
+        glbUrl: assetData.glbUrl,
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1],
+        createdAt: new Date().toISOString(),
+      };
+      onUpdateProject({
+        ...currentProject,
+        scenes: [...(currentProject.scenes || []), newAsset],
+      });
+      setSelectedAssetId(newAsset.id);
+    }
+  };
+
   const handleUpdateAssetTransform = (
     id: string,
     position: [number, number, number],
@@ -446,6 +468,16 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
 
         {/* Viewport & 360 / 3DGS World Toggles */}
         <div className="flex items-center gap-sm">
+          {/* RoomBake AI Texture Studio Button */}
+          <button
+            onClick={() => setShowRoomBakeStudio(true)}
+            className="flex items-center gap-xs px-sm py-[4px] rounded-lg text-[11px] font-label-caps font-bold transition-all border cursor-pointer bg-surface-container-high/60 text-cyan-400 border-cyan-400/40 hover:bg-cyan-400/20"
+            title="RoomBake: Projective 3D Texture Baking Harness (Gemini / OpenAI)"
+          >
+            <span className="material-symbols-outlined text-[16px]">brush</span>
+            ROOMBAKE (AI TEXTURE)
+          </button>
+
           {/* HunyuanWorld 3DGS Scene Button */}
           <button
             onClick={() => setShowHunyuanWorldModal(true)}
@@ -987,6 +1019,13 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* RoomBake AI Texture Studio Modal */}
+      <RoomBakeStudio
+        isOpen={showRoomBakeStudio}
+        onClose={() => setShowRoomBakeStudio(false)}
+        onAddSceneAsset={handleAddRoomBakeAsset}
+      />
     </div>
   );
 };
