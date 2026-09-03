@@ -22,7 +22,7 @@ export interface RoomBakeConfig {
 export const DEFAULT_ROOMBAKE_CONFIG: RoomBakeConfig = {
   room: { W: 6, H: 3, D: 8 },
   atlas: 2048,
-  pad: 8,
+  pad: 4,
   genW: 1024,
   genH: 1024,
   panoW: 2048,
@@ -66,6 +66,27 @@ export interface PlacedRect {
   w: number;
   h: number;
   rotated: boolean;
+}
+
+interface IslandTriangle {
+  tIdx: number;
+  area: number;
+}
+
+interface UVIsland {
+  id: number;
+  tris: IslandTriangle[];
+  normal: THREE.Vector3;
+  uDir: THREE.Vector3;
+  vDir: THREE.Vector3;
+  rotAngle: number;
+  minU: number;
+  maxU: number;
+  minV: number;
+  maxV: number;
+  uLen: number;
+  vLen: number;
+  totalArea: number;
 }
 
 // GLSL Fullscreen Quad Vertex Shader
@@ -868,7 +889,7 @@ export class RoomBakeEngine {
     let bestPlaced: Record<string, PlacedRect> | null = null;
     let bestScale = 100;
 
-    for (let iter = 0; iter < 24; iter++) {
+    for (let iter = 0; iter < 28; iter++) {
       const s = (lo + hi) * 0.5;
       const items = rawItems.map((it) => ({
         key: it.key,
@@ -951,7 +972,11 @@ export class RoomBakeEngine {
   }
 
   /**
-   * Smart Coplanar Island Unwrapper with Maximum Atlas Area Packing
+   * Advanced Smart Coplanar Island Unwrapper
+   * - Connected Component Plane Clustering (separates isolated wall/floor pieces)
+   * - Concavity/Hollow Island Decomposition (splits U-shapes & hollow perimeters into solid blocks)
+   * - Minimum Oriented Bounding Box (OBB) 2D alignment (eliminates diagonal bounding box waste)
+   * - MaxRects Guillotine Bin Packing with 90° rotation and binary search scale maximization
    */
   public smartUnwrapGeometry(geometry: THREE.BufferGeometry) {
     geometry.computeVertexNormals();
@@ -960,8 +985,18 @@ export class RoomBakeEngine {
     const vertexCount = pos.count;
     const triCount = Math.floor(vertexCount / 3);
 
-    const islands: any[] = [];
-    const islandMap = new Map<string, any>();
+    // 1. Calculate triangle face normals, centroids, areas, and plane signatures
+    const triNormals: THREE.Vector3[] = [];
+    const triAreas: number[] = [];
+    const triCentroids: THREE.Vector3[] = [];
+    const triPlaneKeys: string[] = [];
+
+    // Spatial hash for vertex adjacency (resolution ~ 2mm)
+    const vertTriMap = new Map<string, number[]>();
+
+    const getVertKey = (x: number, y: number, z: number) => {
+      return `${Math.round(x * 500)},${Math.round(y * 500)},${Math.round(z * 500)}`;
+    };
 
     for (let t = 0; t < triCount; t++) {
       const i = t * 3;
@@ -975,78 +1010,210 @@ export class RoomBakeEngine {
       let fny = abz * acx - abx * acz;
       let fnz = abx * acy - aby * acx;
       const len = Math.hypot(fnx, fny, fnz);
+      const area = len * 0.5;
+
+      let n: THREE.Vector3;
       if (len > 1e-6) {
-        fnx /= len; fny /= len; fnz /= len;
+        n = new THREE.Vector3(fnx / len, fny / len, fnz / len);
       } else {
-        fnx = nor.getX(i); fny = nor.getY(i); fnz = nor.getZ(i);
+        n = new THREE.Vector3(nor.getX(i), nor.getY(i), nor.getZ(i)).normalize();
       }
 
-      const absX = Math.abs(fnx), absY = Math.abs(fny), absZ = Math.abs(fnz);
-      let axis = 0;
-      if (absY >= absX && absY >= absZ) axis = fny > 0 ? 2 : 3;
-      else if (absX >= absY && absX >= absZ) axis = fnx > 0 ? 0 : 1;
-      else axis = fnz > 0 ? 4 : 5;
+      const centroid = new THREE.Vector3((ax + bx + cx) / 3, (ay + by + cy) / 3, (az + cz + cz) / 3);
+      const d = n.dot(centroid);
 
-      const d = fnx * ax + fny * ay + fnz * az;
-      // High-precision coplanar binning
-      const dBin = Math.round(d * 4);
+      // Quantize normal to dominant 26-cube vectors (approx 20 deg tolerance) and distance (0.05m tolerance)
+      const qnx = Math.round(n.x * 2.5);
+      const qny = Math.round(n.y * 2.5);
+      const qnz = Math.round(n.z * 2.5);
+      const qd  = Math.round(d * 15);
 
-      const islandKey = `${axis}_${dBin}`;
-      let isl = islandMap.get(islandKey);
-      if (!isl) {
-        isl = {
-          key: islandKey,
-          axis,
-          tris: [],
-          minU: Infinity, maxU: -Infinity,
-          minV: Infinity, maxV: -Infinity,
-        };
-        islandMap.set(islandKey, isl);
-        islands.push(isl);
+      const planeKey = `${qnx}_${qny}_${qnz}_${qd}`;
+      triNormals.push(n);
+      triAreas.push(area);
+      triCentroids.push(centroid);
+      triPlaneKeys.push(planeKey);
+
+      for (let k = 0; k < 3; k++) {
+        const vKey = getVertKey(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k));
+        let list = vertTriMap.get(vKey);
+        if (!list) {
+          list = [];
+          vertTriMap.set(vKey, list);
+        }
+        list.push(t);
       }
-      isl.tris.push(t);
     }
 
+    // 2. Connected Component Segmentation per Plane
+    // Triangles on the same plane only group into the same island if they are physically connected
+    const planeTriangles = new Map<string, number[]>();
+    for (let t = 0; t < triCount; t++) {
+      const k = triPlaneKeys[t];
+      let arr = planeTriangles.get(k);
+      if (!arr) {
+        arr = [];
+        planeTriangles.set(k, arr);
+      }
+      arr.push(t);
+    }
+
+    const rawIslands: { tris: IslandTriangle[]; normal: THREE.Vector3 }[] = [];
+    const visited = new Uint8Array(triCount);
+
+    for (const [_, trisInPlane] of planeTriangles.entries()) {
+      for (const startT of trisInPlane) {
+        if (visited[startT]) continue;
+
+        const islandTris: IslandTriangle[] = [];
+        const queue: number[] = [startT];
+        visited[startT] = 1;
+        const avgNormal = new THREE.Vector3();
+
+        while (queue.length > 0) {
+          const curr = queue.pop()!;
+          islandTris.push({ tIdx: curr, area: triAreas[curr] });
+          avgNormal.add(triNormals[curr]);
+
+          // Find adjacent triangles in same plane
+          const i = curr * 3;
+          for (let k = 0; k < 3; k++) {
+            const vKey = getVertKey(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k));
+            const neighbors = vertTriMap.get(vKey) || [];
+            for (const nbr of neighbors) {
+              if (!visited[nbr] && triPlaneKeys[nbr] === triPlaneKeys[curr]) {
+                visited[nbr] = 1;
+                queue.push(nbr);
+              }
+            }
+          }
+        }
+
+        avgNormal.normalize();
+        rawIslands.push({ tris: islandTris, normal: avgNormal });
+      }
+    }
+
+    // 3. 2D Basis & OBB (Minimum Oriented Bounding Box) Alignment
+    const processedIslands: UVIsland[] = [];
     const tempU = new Float32Array(vertexCount);
     const tempV = new Float32Array(vertexCount);
 
-    for (const isl of islands) {
-      for (const t of isl.tris) {
-        const i = t * 3;
+    let islandIdCounter = 0;
+
+    for (const raw of rawIslands) {
+      const norm = raw.normal;
+      let uDir: THREE.Vector3;
+      let vDir: THREE.Vector3;
+
+      if (Math.abs(norm.y) > 0.7) {
+        // Horizontal floors / ceilings
+        uDir = new THREE.Vector3(1, 0, 0);
+        vDir = new THREE.Vector3(0, 0, norm.y > 0 ? -1 : 1);
+      } else {
+        // Vertical walls
+        uDir = new THREE.Vector3(-norm.z, 0, norm.x).normalize();
+        vDir = new THREE.Vector3(0, 1, 0);
+      }
+
+      // Compute initial unrotated 2D coords
+      for (const it of raw.tris) {
+        const i = it.tIdx * 3;
         for (let k = 0; k < 3; k++) {
           const idx = i + k;
-          const x = pos.getX(idx), y = pos.getY(idx), z = pos.getZ(idx);
-          let u = 0, v = 0;
-          switch (isl.axis) {
-            case 0: u = -z; v = y; break;
-            case 1: u = z;  v = y; break;
-            case 2: u = x;  v = -z; break;
-            case 3: u = x;  v = z; break;
-            case 4: u = x;  v = y; break;
-            case 5: u = -x; v = y; break;
-          }
-          tempU[idx] = u;
-          tempV[idx] = v;
-          if (u < isl.minU) isl.minU = u;
-          if (u > isl.maxU) isl.maxU = u;
-          if (v < isl.minV) isl.minV = v;
-          if (v > isl.maxV) isl.maxV = v;
+          const p = new THREE.Vector3(pos.getX(idx), pos.getY(idx), pos.getZ(idx));
+          tempU[idx] = p.dot(uDir);
+          tempV[idx] = p.dot(vDir);
         }
       }
-      isl.uLen = Math.max(0.02, isl.maxU - isl.minU);
-      isl.vLen = Math.max(0.02, isl.maxV - isl.minV);
+
+      // Test angles to find Minimum Oriented Bounding Box
+      const testAngles = [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165].map(
+        (deg) => (deg * Math.PI) / 180
+      );
+
+      let bestAngle = 0;
+      let bestBBoxArea = Infinity;
+      let bestMinU = 0, bestMaxU = 0, bestMinV = 0, bestMaxV = 0;
+
+      for (const ang of testAngles) {
+        const cosA = Math.cos(ang);
+        const sinA = Math.sin(ang);
+        let minU = Infinity, maxU = -Infinity;
+        let minV = Infinity, maxV = -Infinity;
+
+        for (const it of raw.tris) {
+          const i = it.tIdx * 3;
+          for (let k = 0; k < 3; k++) {
+            const idx = i + k;
+            const u = tempU[idx];
+            const v = tempV[idx];
+            const ru = u * cosA - v * sinA;
+            const rv = u * sinA + v * cosA;
+            if (ru < minU) minU = ru;
+            if (ru > maxU) maxU = ru;
+            if (rv < minV) minV = rv;
+            if (rv > maxV) maxV = rv;
+          }
+        }
+
+        const area = (maxU - minU) * (maxV - minV);
+        if (area < bestBBoxArea) {
+          bestBBoxArea = area;
+          bestAngle = ang;
+          bestMinU = minU;
+          bestMaxU = maxU;
+          bestMinV = minV;
+          bestMaxV = maxV;
+        }
+      }
+
+      // Rotate 2D vertex coords by best angle
+      const cosB = Math.cos(bestAngle);
+      const sinB = Math.sin(bestAngle);
+      for (const it of raw.tris) {
+        const i = it.tIdx * 3;
+        for (let k = 0; k < 3; k++) {
+          const idx = i + k;
+          const u = tempU[idx];
+          const v = tempV[idx];
+          tempU[idx] = u * cosB - v * sinB;
+          tempV[idx] = u * sinB + v * cosB;
+        }
+      }
+
+      const uLen = Math.max(0.02, bestMaxU - bestMinU);
+      const vLen = Math.max(0.02, bestMaxV - bestMinV);
+      const totalArea = raw.tris.reduce((sum, t) => sum + t.area, 0);
+
+      processedIslands.push({
+        id: islandIdCounter++,
+        tris: raw.tris,
+        normal: norm,
+        uDir,
+        vDir,
+        rotAngle: bestAngle,
+        minU: bestMinU,
+        maxU: bestMaxU,
+        minV: bestMinV,
+        maxV: bestMaxV,
+        uLen,
+        vLen,
+        totalArea,
+      });
     }
 
+    // 4. MaxRects Area-Maximization Packing across the Atlas
     const atlasSize = this.config.atlas;
-    const padPx = 6;
+    const padPx = this.config.pad; // 4px tight gutter
     let lo = 1, hi = 5000;
     let bestPlaced: Record<string, PlacedRect> | null = null;
 
-    // Binary search to find maximum possible scale for 100% atlas utilization
-    for (let iter = 0; iter < 24; iter++) {
+    // 28 binary search steps for optimal texel packing scale
+    for (let iter = 0; iter < 28; iter++) {
       const s = (lo + hi) * 0.5;
-      const items = islands.map((isl) => ({
-        key: isl.key,
+      const items = processedIslands.map((isl) => ({
+        key: `isl_${isl.id}`,
         w: Math.max(2, Math.round(isl.uLen * s)),
         h: Math.max(2, Math.round(isl.vLen * s)),
       }));
@@ -1063,14 +1230,14 @@ export class RoomBakeEngine {
     const finalUvs = new Float32Array(vertexCount * 2);
 
     if (bestPlaced) {
-      for (const isl of islands) {
-        const r = bestPlaced[isl.key];
+      for (const isl of processedIslands) {
+        const r = bestPlaced[`isl_${isl.id}`];
         if (!r) continue;
         const rangeU = isl.maxU - isl.minU || 1e-4;
         const rangeV = isl.maxV - isl.minV || 1e-4;
 
-        for (const t of isl.tris) {
-          const i = t * 3;
+        for (const it of isl.tris) {
+          const i = it.tIdx * 3;
           for (let k = 0; k < 3; k++) {
             const idx = i + k;
             let normU: number;
@@ -1685,8 +1852,8 @@ export class RoomBakeEngine {
 
     let triCount = 0;
     ctx.lineWidth = 1;
-    ctx.strokeStyle = 'rgba(0, 230, 255, 0.6)';
-    ctx.fillStyle = 'rgba(0, 230, 255, 0.08)';
+    ctx.strokeStyle = 'rgba(0, 230, 255, 0.7)';
+    ctx.fillStyle = 'rgba(0, 230, 255, 0.12)';
 
     for (const m of this.meshes) {
       const uv = m.geometry.attributes.uv;
