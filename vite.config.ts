@@ -745,8 +745,33 @@ function apiMiddlewarePlugin(): Plugin {
               }
 
               if (!resp.ok) {
-                const errText = await resp.text();
-                throw new Error(`Kimodo Space HTTP ${resp.status}: ${errText || resp.statusText}`);
+                const rawText = await resp.text();
+                let errDetail = '';
+                try {
+                  const errJson = JSON.parse(rawText);
+                  errDetail = errJson.detail || errJson.error || JSON.stringify(errJson);
+                } catch {
+                  if (rawText.trim().startsWith('<')) {
+                    // HTML error page from Hugging Face Gateway (e.g. 502 Bad Gateway during container boot)
+                    try {
+                      const statusCheck = await fetch('https://huggingface.co/api/spaces/dariushh/kimodo-virtual-stage', {
+                        headers: token ? { Authorization: `Bearer ${token}` } : {},
+                      });
+                      if (statusCheck.ok) {
+                        const statusJson = await statusCheck.json();
+                        const stage = statusJson.runtime?.stage || 'STARTING';
+                        errDetail = `Hugging Face Kimodo Space is currently in stage '${stage}'. Please wait ~1-2 minutes for the GPU container to finish booting and try again.`;
+                      } else {
+                        errDetail = `Hugging Face Space returned HTTP ${resp.status}. The container is currently booting up.`;
+                      }
+                    } catch {
+                      errDetail = `Hugging Face Space returned HTTP ${resp.status} (Container starting up).`;
+                    }
+                  } else {
+                    errDetail = rawText.slice(0, 300);
+                  }
+                }
+                throw new Error(errDetail || `Kimodo Space HTTP ${resp.status}`);
               }
 
               const result = await resp.json();

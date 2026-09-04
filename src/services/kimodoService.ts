@@ -273,8 +273,17 @@ export class KimodoService {
           motionData,
         };
       } else {
-        const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.error || errJson.detail || `Kimodo server returned ${response.status}`);
+        let errMsg = `Kimodo server returned ${response.status}`;
+        try {
+          const rawText = await response.text();
+          try {
+            const errJson = JSON.parse(rawText);
+            errMsg = errJson.error || errJson.detail || rawText;
+          } catch {
+            errMsg = rawText || errMsg;
+          }
+        } catch (_) {}
+        throw new Error(errMsg);
       }
     } catch (err: any) {
       console.warn('Kimodo generation error:', err);

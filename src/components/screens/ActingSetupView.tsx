@@ -76,6 +76,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [statusText, setStatusText] = useState<string | null>(null);
+  const [errorText, setErrorText] = useState<string | null>(null);
 
   const selectedActor = characters.find((c) => c.id === selectedActorId) || characters[0];
   const maxDuration = Math.max(5.0, ...characters.map((c) => c.duration || 4.0));
@@ -164,7 +165,8 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   const handleGenerateMotion = async () => {
     if (!motionPrompt.trim() || !selectedActor) return;
     setIsGenerating(true);
-    setStatusText('Synthesizing motion with NVIDIA Kimodo Stage...');
+    setErrorText(null);
+    setStatusText('Synthesizing motion with NVIDIA Kimodo Stage on Hugging Face GPU...');
 
     try {
       const res = await KimodoService.generateMotion(
@@ -200,7 +202,9 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
       setStatusText(`✓ True Kimodo Neural Motion applied to ${selectedActor.name}`);
       setTimeout(() => setStatusText(null), 4000);
     } catch (e: any) {
-      alert(`Kimodo generation failed: ${e.message}`);
+      console.error('Kimodo generation failed:', e);
+      setErrorText(e.message || 'Kimodo generation encountered an issue.');
+      setStatusText(null);
     } finally {
       setIsGenerating(false);
     }
@@ -214,6 +218,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
     setTrajectoryMode(preset.trajectoryMode);
 
     setIsGenerating(true);
+    setErrorText(null);
     setStatusText(`Synthesizing real Kimodo neural motion for: "${preset.name}"...`);
 
     try {
@@ -251,9 +256,8 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
       setTimeout(() => setStatusText(null), 3000);
     } catch (e: any) {
       console.warn('Kimodo preset generation note:', e);
-      // Even if remote generation encounters an issue, update prompt & duration
-      setStatusText(`Prompt set to: ${preset.name}`);
-      setTimeout(() => setStatusText(null), 3000);
+      setErrorText(e.message || 'Preset generation encountered an issue.');
+      setStatusText(null);
     } finally {
       setIsGenerating(false);
     }
@@ -322,13 +326,47 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
 
           {/* Status Toast */}
           {statusText && (
-            <div className="absolute top-md left-1/2 -translate-x-1/2 z-40 bg-surface-container/95 border border-primary/40 px-lg py-sm rounded-lg backdrop-blur-xl shadow-2xl flex items-center gap-md animate-fadeIn">
-              <span className="material-symbols-outlined text-primary text-[20px]">
+            <div className="absolute top-md left-1/2 -translate-x-1/2 z-40 bg-surface-container/95 border border-primary/40 px-lg py-sm rounded-xl backdrop-blur-xl shadow-2xl flex items-center gap-md animate-fadeIn">
+              <span className={`material-symbols-outlined text-primary text-[20px] ${isGenerating ? 'animate-spin' : ''}`}>
                 {isGenerating ? 'progress_activity' : 'check_circle'}
               </span>
               <span className="font-label-caps text-xs text-primary tracking-wider uppercase font-medium">
                 {statusText}
               </span>
+            </div>
+          )}
+
+          {/* Error / Cold-Start Alert Banner */}
+          {errorText && (
+            <div className="absolute top-md left-1/2 -translate-x-1/2 z-40 bg-surface-container-highest/95 border border-amber-500/60 px-lg py-sm rounded-xl backdrop-blur-xl shadow-2xl flex items-center gap-md max-w-xl animate-fadeIn">
+              <span className="material-symbols-outlined text-amber-400 text-[22px] shrink-0">
+                {errorText.toLowerCase().includes('stage') || errorText.toLowerCase().includes('booting') || errorText.toLowerCase().includes('building') ? 'hourglass_top' : 'warning'}
+              </span>
+              <div className="flex flex-col gap-[2px] flex-1">
+                <span className="text-xs font-semibold text-amber-300 tracking-wide font-label-caps">
+                  {errorText.toLowerCase().includes('stage') || errorText.toLowerCase().includes('booting') || errorText.toLowerCase().includes('building')
+                    ? 'KIMODO GPU CONTAINER STARTING UP'
+                    : 'MOTION GENERATION NOTE'}
+                </span>
+                <span className="text-[11px] text-on-surface-variant leading-relaxed font-mono">
+                  {errorText}
+                </span>
+              </div>
+              <div className="flex items-center gap-xs shrink-0">
+                <button
+                  onClick={handleGenerateMotion}
+                  className="bg-amber-500/20 hover:bg-amber-500 text-amber-200 hover:text-black border border-amber-500/40 px-sm py-[3px] rounded-lg text-xs font-label-caps transition-all cursor-pointer font-medium"
+                >
+                  RETRY
+                </button>
+                <button
+                  onClick={() => setErrorText(null)}
+                  className="text-on-surface-variant hover:text-on-surface p-xs rounded-lg cursor-pointer"
+                  title="Dismiss"
+                >
+                  <span className="material-symbols-outlined text-[18px]">close</span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -582,7 +620,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             disabled={isGenerating}
             className="bg-primary text-background font-label-caps text-label-caps px-lg py-sm rounded-xl hover:bg-white/90 transition-all font-semibold shrink-0 flex items-center gap-xs cursor-pointer disabled:opacity-50 shadow-lg"
           >
-            <span className="material-symbols-outlined text-[18px]">
+            <span className={`material-symbols-outlined text-[18px] ${isGenerating ? 'animate-spin' : ''}`}>
               {isGenerating ? 'progress_activity' : 'auto_fix_high'}
             </span>
             {isGenerating ? 'KIMODO GENERATING...' : 'GENERATE MOTION'}
