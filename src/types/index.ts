@@ -36,11 +36,18 @@ export interface SceneAsset {
 export interface CharacterActor {
   id: string;
   name: string;
-  modelUrl: string;
+  modelUrl?: string;
+  characterType?: 'soma' | 'g1' | 'mannequin' | 'custom';
+  avatar?: string;
   position: [number, number, number];
   rotation: [number, number, number];
+  scale?: [number, number, number];
   currentAnimation?: string;
   motionPrompt?: string;
+  duration?: number;
+  trajectory?: [number, number, number][];
+  color?: string;
+  visible?: boolean;
 }
 
 export interface TrellisGenerateParams {

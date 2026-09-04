@@ -149,6 +149,7 @@ export function App() {
           <ActingSetupView
             currentProject={currentProject}
             onUpdateProject={handleUpdateProject}
+            onNavigateStage={setCurrentStage}
           />
         )}
 

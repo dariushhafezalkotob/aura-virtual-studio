@@ -10,7 +10,8 @@ import {
   Splat,
 } from '@react-three/drei';
 import * as THREE from 'three';
-import { SceneAsset } from '../../types';
+import { SceneAsset, CharacterActor } from '../../types';
+import { CharacterActorModel } from './CharacterActorModel';
 
 export type TransformMode = 'translate' | 'rotate' | 'scale';
 export type LightingEnvironmentPreset = 'studio' | 'city' | 'sunset' | 'dawn' | 'park';
@@ -18,6 +19,8 @@ export type LightingEnvironmentPreset = 'studio' | 'city' | 'sunset' | 'dawn' | 
 interface ThreeStageProps {
   assets: SceneAsset[];
   selectedAssetId: string | null;
+  characters?: CharacterActor[];
+  selectedActorId?: string | null;
   transformMode?: TransformMode;
   lightIntensity?: number;
   environmentPreset?: LightingEnvironmentPreset;
@@ -32,6 +35,16 @@ interface ThreeStageProps {
     rotation: [number, number, number],
     scale: [number, number, number]
   ) => void;
+  onSelectActor?: (id: string | null) => void;
+  onUpdateActorTransform?: (
+    id: string,
+    position: [number, number, number],
+    rotation: [number, number, number],
+    scale: [number, number, number]
+  ) => void;
+  currentTimelineTime?: number;
+  isPlaying?: boolean;
+  showTrajectories?: boolean;
   showGrid?: boolean;
 }
 
@@ -463,6 +476,8 @@ const UnrealCameraNavigation: React.FC<{
 export const ThreeStage: React.FC<ThreeStageProps> = ({
   assets,
   selectedAssetId,
+  characters = [],
+  selectedActorId = null,
   transformMode = 'translate',
   lightIntensity = 1.0,
   environmentPreset = 'studio',
@@ -472,6 +487,11 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   splatUrl,
   onSelectAsset,
   onUpdateAssetTransform,
+  onSelectActor,
+  onUpdateActorTransform,
+  currentTimelineTime = 0,
+  isPlaying = false,
+  showTrajectories = true,
   showGrid = true,
 }) => {
   const [isTransformDragging, setIsTransformDragging] = useState(false);
@@ -490,6 +510,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         onPointerMissed={() => {
           if (!isTransformDragging) {
             onSelectAsset?.(null);
+            onSelectActor?.(null);
           }
         }}
       >
@@ -569,15 +590,37 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
                 asset={asset}
                 isSelected={asset.id === selectedAssetId}
                 transformMode={transformMode}
-                onSelect={() => onSelectAsset?.(asset.id)}
+                onSelect={() => {
+                  onSelectActor?.(null);
+                  onSelectAsset?.(asset.id);
+                }}
                 onDraggingChange={setIsTransformDragging}
                 onTransformChange={onUpdateAssetTransform}
               />
             </ModelErrorBoundary>
           ))}
 
+          {/* Render All Character Actors with Kimodo Kinematics & Trajectories */}
+          {characters.map((actor) => (
+            <CharacterActorModel
+              key={actor.id}
+              actor={actor}
+              isSelected={actor.id === selectedActorId}
+              transformMode={transformMode}
+              currentTimelineTime={currentTimelineTime}
+              isPlaying={isPlaying}
+              showTrajectory={showTrajectories}
+              onSelect={() => {
+                onSelectAsset?.(null);
+                onSelectActor?.(actor.id);
+              }}
+              onDraggingChange={setIsTransformDragging}
+              onTransformChange={onUpdateActorTransform}
+            />
+          ))}
+
           {/* Default Demo Pedestal if empty */}
-          {assets.length === 0 && (
+          {assets.length === 0 && characters.length === 0 && (
             <group position={[0, 0, 0]}>
               <mesh position={[0, 0.05, 0]}>
                 <cylinderGeometry args={[1.5, 1.6, 0.1, 32]} />
