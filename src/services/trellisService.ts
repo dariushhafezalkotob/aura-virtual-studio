@@ -56,11 +56,17 @@ export class TrellisService {
         });
       }
 
+      const hfToken = localStorage.getItem('hf_token') || localStorage.getItem('roombake_hf_token') || '';
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (hfToken) {
+        headers['x-hf-token'] = hfToken;
+      }
+
       const response = await fetch('/api/generate-3d', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           engine: params.engine || 'trellis',
           category: params.category || 'prop',

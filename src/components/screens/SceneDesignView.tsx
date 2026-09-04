@@ -99,6 +99,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const [panoramaRotation, setPanoramaRotation] = useState<number>(0);
   const [showPanorama, setShowPanorama] = useState<boolean>(true);
   const [splatUrl, setSplatUrl] = useState<string | null>(currentProject.splatUrl || null);
+  const [showHfTokenModal, setShowHfTokenModal] = useState<boolean>(false);
+  const [hfTokenInput, setHfTokenInput] = useState<string>(localStorage.getItem('hf_token') || '');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const panoInputRef = useRef<HTMLInputElement>(null);
@@ -530,6 +532,20 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               </>
             )}
           </div>
+
+          {/* Hugging Face Token Auth Button */}
+          <button
+            onClick={() => setShowHfTokenModal(true)}
+            className={`flex items-center gap-xs px-sm py-[4px] rounded-lg text-[11px] font-label-caps font-semibold transition-all border cursor-pointer ${
+              hfTokenInput
+                ? 'bg-amber-400/10 text-amber-400 border-amber-400/40 hover:bg-amber-400/20'
+                : 'bg-surface-container-high/60 text-on-surface-variant border-outline-variant/40 hover:text-on-surface'
+            }`}
+            title="Hugging Face API Token for ZeroGPU quota"
+          >
+            <span className="material-symbols-outlined text-[16px]">key</span>
+            {hfTokenInput ? 'HF TOKEN (SAVED)' : 'HF TOKEN'}
+          </button>
 
           {/* Lighting Mode Presets */}
           <div className="flex items-center gap-xs bg-surface-container-high/60 p-[2px] rounded-lg border border-outline-variant/30">
@@ -1038,6 +1054,82 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               <span className="material-symbols-outlined text-[16px]">upload_file</span>
               UPLOAD FROM COMPUTER
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Hugging Face Token Settings Modal */}
+      {showHfTokenModal && (
+        <div className="fixed inset-0 z-50 bg-surface-container-lowest/80 backdrop-blur-md flex items-center justify-center p-md animate-fade-in">
+          <div className="w-full max-w-md bg-surface-container-high border border-outline-variant/60 rounded-2xl p-lg shadow-2xl flex flex-col gap-md">
+            <div className="flex items-center justify-between pb-xs border-b border-outline-variant/30">
+              <div className="flex items-center gap-xs">
+                <span className="material-symbols-outlined text-primary text-[20px]">key</span>
+                <span className="font-headline-sm text-sm text-primary font-bold tracking-wide uppercase">
+                  Hugging Face API Token
+                </span>
+              </div>
+              <button
+                onClick={() => setShowHfTokenModal(false)}
+                className="text-on-surface-variant hover:text-on-surface cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-on-surface-variant leading-relaxed">
+              Your ZeroGPU spaces run faster and have higher compute quotas when authenticated with your Hugging Face Access Token.
+            </p>
+
+            <div className="flex flex-col gap-xs">
+              <label className="text-[11px] font-label-caps text-on-surface-variant">
+                HF User Access Token (Read / Write)
+              </label>
+              <input
+                type="password"
+                value={hfTokenInput}
+                onChange={(e) => setHfTokenInput(e.target.value)}
+                placeholder="hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                className="w-full bg-surface-container-low border border-outline-variant px-sm py-xs rounded-lg text-xs text-on-surface font-mono outline-none focus:border-primary"
+              />
+              <span className="text-[10px] text-on-surface-variant/70">
+                Get your token from{' '}
+                <a
+                  href="https://huggingface.co/settings/tokens"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary underline hover:text-primary/80"
+                >
+                  huggingface.co/settings/tokens
+                </a>
+              </span>
+            </div>
+
+            <div className="flex justify-end gap-sm pt-xs border-t border-outline-variant/30">
+              <button
+                onClick={() => {
+                  localStorage.removeItem('hf_token');
+                  setHfTokenInput('');
+                  setShowHfTokenModal(false);
+                }}
+                className="px-sm py-xs text-xs text-error hover:bg-error/10 rounded font-label-caps cursor-pointer"
+              >
+                Clear Token
+              </button>
+              <button
+                onClick={() => {
+                  if (hfTokenInput.trim()) {
+                    localStorage.setItem('hf_token', hfTokenInput.trim());
+                  } else {
+                    localStorage.removeItem('hf_token');
+                  }
+                  setShowHfTokenModal(false);
+                }}
+                className="px-md py-xs text-xs bg-primary text-surface-container-lowest font-bold rounded-lg hover:bg-primary/90 transition-colors font-label-caps cursor-pointer shadow"
+              >
+                Save Token
+              </button>
+            </div>
           </div>
         </div>
       )}

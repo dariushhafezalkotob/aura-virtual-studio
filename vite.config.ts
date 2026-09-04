@@ -14,7 +14,24 @@ const HUNYUAN_WORLD_SPACE = 'https://dariushh-hunyuanworld-engine.hf.space';
 const KIMODO_SPACE = 'https://dariushh-kimodo-virtual-stage.hf.space';
 const PANORAMA_360_SPACE = 'https://hugging-apps-krea2-360-panorama-lora.hf.space';
 
-const connectOpts = HF_TOKEN ? { hf_token: HF_TOKEN as `hf_${string}` } : {};
+function getConnectOpts(token?: string) {
+  const t = token || HF_TOKEN;
+  return t ? { hf_token: t as `hf_${string}` } : {};
+}
+
+function extractErrorMessage(err: any): string {
+  if (!err) return 'Unknown generation error';
+  if (typeof err === 'string') return err;
+  if (err.message) return err.message;
+  if (err.title && err.message) return `${err.title}: ${err.message}`;
+  if (err.title) return err.title;
+  if (err.error) return typeof err.error === 'string' ? err.error : extractErrorMessage(err.error);
+  try {
+    return JSON.stringify(err);
+  } catch (_) {
+    return String(err);
+  }
+}
 
 let trellisClient: any = null;
 let hunyuan3DClient: any = null;
@@ -22,42 +39,52 @@ let hunyuanWorldClient: any = null;
 let kimodoClient: any = null;
 let panoramaClient: any = null;
 
-async function getTrellisClient(forceFresh = false) {
-  if (!trellisClient || forceFresh) {
+async function getTrellisClient(forceFresh = false, token?: string) {
+  if (!trellisClient || forceFresh || token) {
     console.log(`[ZeroGPU] Connecting to TRELLIS Engine at ${TRELLIS_SPACE}...`);
-    trellisClient = await Client.connect(TRELLIS_SPACE, connectOpts);
+    const c = await Client.connect(TRELLIS_SPACE, getConnectOpts(token));
+    if (!token) trellisClient = c;
+    return c;
   }
   return trellisClient;
 }
 
-async function getHunyuan3DClient(forceFresh = false) {
-  if (!hunyuan3DClient || forceFresh) {
+async function getHunyuan3DClient(forceFresh = false, token?: string) {
+  if (!hunyuan3DClient || forceFresh || token) {
     console.log(`[ZeroGPU] Connecting to Hunyuan3D Engine at ${HUNYUAN_3D_SPACE}...`);
-    hunyuan3DClient = await Client.connect(HUNYUAN_3D_SPACE, connectOpts);
+    const c = await Client.connect(HUNYUAN_3D_SPACE, getConnectOpts(token));
+    if (!token) hunyuan3DClient = c;
+    return c;
   }
   return hunyuan3DClient;
 }
 
-async function getHunyuanWorldClient(forceFresh = false) {
-  if (!hunyuanWorldClient || forceFresh) {
+async function getHunyuanWorldClient(forceFresh = false, token?: string) {
+  if (!hunyuanWorldClient || forceFresh || token) {
     console.log(`[ZeroGPU] Connecting to HunyuanWorld Engine at ${HUNYUAN_WORLD_SPACE}...`);
-    hunyuanWorldClient = await Client.connect(HUNYUAN_WORLD_SPACE, connectOpts);
+    const c = await Client.connect(HUNYUAN_WORLD_SPACE, getConnectOpts(token));
+    if (!token) hunyuanWorldClient = c;
+    return c;
   }
   return hunyuanWorldClient;
 }
 
-async function getKimodoClient(forceFresh = false) {
-  if (!kimodoClient || forceFresh) {
+async function getKimodoClient(forceFresh = false, token?: string) {
+  if (!kimodoClient || forceFresh || token) {
     console.log(`[ZeroGPU] Connecting to Kimodo Stage at ${KIMODO_SPACE}...`);
-    kimodoClient = await Client.connect(KIMODO_SPACE, connectOpts);
+    const c = await Client.connect(KIMODO_SPACE, getConnectOpts(token));
+    if (!token) kimodoClient = c;
+    return c;
   }
   return kimodoClient;
 }
 
-async function getPanoramaClient(forceFresh = false) {
-  if (!panoramaClient || forceFresh) {
+async function getPanoramaClient(forceFresh = false, token?: string) {
+  if (!panoramaClient || forceFresh || token) {
     console.log(`[ZeroGPU] Connecting to 360 Panorama at ${PANORAMA_360_SPACE}...`);
-    panoramaClient = await Client.connect(PANORAMA_360_SPACE, connectOpts);
+    const c = await Client.connect(PANORAMA_360_SPACE, getConnectOpts(token));
+    if (!token) panoramaClient = c;
+    return c;
   }
   return panoramaClient;
 }
@@ -326,7 +353,8 @@ function apiMiddlewarePlugin(): Plugin {
             try {
               const params = JSON.parse(body);
               const engine = params.engine || 'trellis';
-              console.log(`[API /api/generate-3d] Generating 3D with engine: ${engine}...`);
+              const userToken = (req.headers['x-hf-token'] as string) || params.hfToken;
+              console.log(`[API /api/generate-3d] Generating 3D with engine: ${engine}... (Auth: ${userToken ? 'Custom HF Token' : 'Default'})`);
 
               let fileToPass: any = null;
               const tmpDir = os.tmpdir();
@@ -350,7 +378,7 @@ function apiMiddlewarePlugin(): Plugin {
 
               if (engine === 'hunyuan3d') {
                 if (!fileToPass) throw new Error('Hunyuan3D requires a reference image.');
-                let client = await getHunyuan3DClient();
+                let client = await getHunyuan3DClient(false, userToken);
                 let result: any;
                 try {
                   result = await client.predict('/generation_all', [
@@ -369,8 +397,8 @@ function apiMiddlewarePlugin(): Plugin {
                     true
                   ]);
                 } catch (predErr: any) {
-                  console.warn('[Hunyuan3D] Reconnecting and retrying prediction...', predErr.message);
-                  client = await getHunyuan3DClient(true);
+                  console.warn('[Hunyuan3D] Reconnecting and retrying prediction...', extractErrorMessage(predErr));
+                  client = await getHunyuan3DClient(true, userToken);
                   result = await client.predict('/generation_all', [
                     params.prompt || null,
                     fileToPass,
@@ -409,13 +437,13 @@ function apiMiddlewarePlugin(): Plugin {
                 throw new Error('Please upload an image to generate a 3D model with TRELLIS.');
               }
 
-              let client = await getTrellisClient();
+              let client = await getTrellisClient(false, userToken);
               let result: any;
               try {
                 result = await client.predict('/generate_and_extract_glb', [
                   fileToPass,
                   [],
-                  false,
+                  null,
                   params.seed ?? Math.floor(Math.random() * 2147483647),
                   params.ssGuidance ?? 7.5,
                   params.ssSteps ?? 12,
@@ -426,12 +454,12 @@ function apiMiddlewarePlugin(): Plugin {
                   params.textureSize ?? 1024,
                 ]);
               } catch (predErr: any) {
-                console.warn('[TRELLIS] Reconnecting and retrying prediction...', predErr.message);
-                client = await getTrellisClient(true);
+                console.warn('[TRELLIS] Reconnecting and retrying prediction...', extractErrorMessage(predErr));
+                client = await getTrellisClient(true, userToken);
                 result = await client.predict('/generate_and_extract_glb', [
                   fileToPass,
                   [],
-                  false,
+                  null,
                   params.seed ?? Math.floor(Math.random() * 2147483647),
                   params.ssGuidance ?? 7.5,
                   params.ssSteps ?? 12,
@@ -463,10 +491,11 @@ function apiMiddlewarePlugin(): Plugin {
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify({ success: true, glbUrl, videoUrl, engine: engine }));
             } catch (err: any) {
-              console.error('[API /api/generate-3d] Error:', err);
+              const errMsg = extractErrorMessage(err);
+              console.error('[API /api/generate-3d] Error:', errMsg);
               res.statusCode = 500;
               res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ success: false, error: err.message || String(err) }));
+              res.end(JSON.stringify({ success: false, error: errMsg }));
             }
           });
           return;
