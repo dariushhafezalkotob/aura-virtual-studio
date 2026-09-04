@@ -1198,7 +1198,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             <textarea
               value={aiImagePrompt}
               onChange={(e) => setAiImagePrompt(e.target.value)}
-              placeholder="Describe your desired 3D prop in detail (e.g. 'An ornate medieval treasure chest with bronze engravings, heavy iron padlock, weathered dark oak wood, isolated on neutral studio white background, photorealistic 8k octane render')..."
+              placeholder="Describe your desired 3D prop (e.g. 'An ornate medieval treasure chest with bronze engravings, heavy iron padlock, weathered dark oak wood, isolated on solid black background, no floor, 8k octane render')..."
               rows={3}
               className="w-full bg-surface-container border border-outline-variant/50 p-sm text-xs text-on-surface placeholder:text-on-surface-variant/40 rounded-xl focus:outline-none focus:border-primary font-sans resize-none leading-relaxed shadow-sm transition-colors"
               onKeyDown={(e) => {

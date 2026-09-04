@@ -365,7 +365,7 @@ function apiMiddlewarePlugin(): Plugin {
               if (geminiKey) {
                 // Method A: Gemini generateContent with IMAGE output modality
                 try {
-                  console.log(`[API /api/generate-image] Attempting Gemini ${model}:generateContent...`);
+                  console.log(`[API /api/generate-image] Attempting Gemini ${model}:generateContent with pure black background isolate...`);
                   const genRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -373,7 +373,7 @@ function apiMiddlewarePlugin(): Plugin {
                       contents: [
                         {
                           parts: [
-                            { text: `Generate a single isolated 3D prop asset: ${prompt}, isolated on neutral clean studio background, centered, photorealistic, sharp focus, octane render 8k.` }
+                            { text: `Generate a single isolated 3D prop asset: ${prompt}. The object must be floating in the center on a pure solid pitch black background (#000000). Absolutely no floor, no ground, no shadow on ground, no table, no room, no walls, no environment. Only the standalone 3D object completely isolated against a black void background, photorealistic, crisp sharp edges, 8k resolution, cinematic studio lighting.` }
                           ]
                         }
                       ],
@@ -409,9 +409,9 @@ function apiMiddlewarePlugin(): Plugin {
                 // Method B: Try Imagen 3.0 predict if generateContent was not available
                 if (!imageBase64) {
                   try {
-                    console.log('[API /api/generate-image] Attempting imagen-3.0-generate-002:predict...');
+                    console.log('[API /api/generate-image] Attempting imagen-3.0-generate-002:predict with black background isolate...');
                     const imgPayload = {
-                      instances: [{ prompt: `${prompt}, photorealistic 3D prop asset isolated on neutral studio white background, high detail, 8k resolution, sharp focus` }],
+                      instances: [{ prompt: `${prompt}, single 3D prop asset centered, floating isolated on pure solid pitch black background (#000000), no floor, no ground plane, no shadow underneath, no table, no room, no walls, clean sharp silhouette, photorealistic, 8k resolution, octane render.` }],
                       parameters: { sampleCount: 1, aspectRatio: '1:1', outputMimeType: 'image/png' },
                     };
                     const resG = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${geminiKey}`, {
@@ -435,8 +435,8 @@ function apiMiddlewarePlugin(): Plugin {
 
               // 2. High-speed, high-quality Pollinations Flux / Turbo engine fallback
               if (!imageBase64) {
-                console.log('[API /api/generate-image] Using Pollinations fast rendering engine fallback...');
-                const encodedPrompt = encodeURIComponent(`${prompt}, single isolated 3d asset, neutral light grey background, photorealistic, octane render, sharp product photograph`);
+                console.log('[API /api/generate-image] Using Pollinations fast rendering engine fallback (black background isolate)...');
+                const encodedPrompt = encodeURIComponent(`${prompt}, single isolated 3d asset centered, floating on pure solid pitch black background, no floor, no ground, no table, no room, no walls, studio object isolate, sharp edges, octane render 8k`);
                 const seed = Math.floor(Math.random() * 1000000);
                 const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}`;
                 const fetchRes = await fetch(pollinationsUrl);
