@@ -86,6 +86,14 @@ export function App() {
     setProjects(projects.map((p) => (p.id === updated.id ? updated : p)));
   };
 
+  const handleDeleteProject = (projectId: string) => {
+    setProjects((prev) => prev.filter((p) => p.id !== projectId));
+    if (currentProjectId === projectId) {
+      setCurrentProjectId(null);
+      setCurrentStage('projects');
+    }
+  };
+
   const getStageSubtitle = (): string => {
     switch (currentStage) {
       case 'stage1_scene':
@@ -119,6 +127,7 @@ export function App() {
             projects={projects}
             onSelectProject={handleSelectProject}
             onCreateProject={handleCreateProject}
+            onDeleteProject={handleDeleteProject}
           />
         )}
 
