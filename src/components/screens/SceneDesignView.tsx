@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Project, SceneAsset, AI3DEngine, AssetCategory } from '../../types';
 import { TrellisService, GenerationProgress } from '../../services/trellisService';
 import {
@@ -93,6 +93,91 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const [lightIntensity, setLightIntensity] = useState<number>(1.0);
   const [environmentPreset, setEnvironmentPreset] = useState<LightingEnvironmentPreset>('studio');
   const [showGrid, setShowGrid] = useState<boolean>(true);
+
+  // Undo / Redo History Stack for Scene Assets (Transforms, Additions, Deletions)
+  const undoStackRef = useRef<SceneAsset[][]>([]);
+  const redoStackRef = useRef<SceneAsset[][]>([]);
+  const currentAssetsRef = useRef<SceneAsset[]>(currentProject.scenes || []);
+  currentAssetsRef.current = currentProject.scenes || [];
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  const pushUndoSnapshot = useCallback(() => {
+    const snapshot = JSON.parse(JSON.stringify(currentAssetsRef.current));
+    undoStackRef.current.push(snapshot);
+    if (undoStackRef.current.length > 50) {
+      undoStackRef.current.shift();
+    }
+    redoStackRef.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    if (undoStackRef.current.length === 0) return;
+
+    const prevScenes = undoStackRef.current.pop()!;
+    const currentSnapshot = JSON.parse(JSON.stringify(currentAssetsRef.current));
+    redoStackRef.current.push(currentSnapshot);
+
+    setCanUndo(undoStackRef.current.length > 0);
+    setCanRedo(true);
+
+    onUpdateProject({
+      ...currentProject,
+      scenes: prevScenes,
+    });
+  }, [currentProject, onUpdateProject]);
+
+  const handleRedo = useCallback(() => {
+    if (redoStackRef.current.length === 0) return;
+
+    const nextScenes = redoStackRef.current.pop()!;
+    const currentSnapshot = JSON.parse(JSON.stringify(currentAssetsRef.current));
+    undoStackRef.current.push(currentSnapshot);
+
+    setCanUndo(true);
+    setCanRedo(redoStackRef.current.length > 0);
+
+    onUpdateProject({
+      ...currentProject,
+      scenes: nextScenes,
+    });
+  }, [currentProject, onUpdateProject]);
+
+  // Global Keyboard Shortcuts for Undo (Ctrl+Z / Cmd+Z) and Redo (Ctrl+Y / Ctrl+Shift+Z / Cmd+Shift+Z)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept if user is typing inside text inputs/textareas
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+      if (!isCmdOrCtrl) return;
+
+      const key = e.key.toLowerCase();
+
+      // Undo: Cmd+Z (Mac) or Ctrl+Z without Shift
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      }
+      // Redo: Cmd+Shift+Z (Mac) or Ctrl+Shift+Z or Ctrl+Y / Cmd+Y
+      else if ((key === 'z' && e.shiftKey) || key === 'y') {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleUndo, handleRedo]);
 
   // 360 & 3DGS World State
   const [panoramaUrl, setPanoramaUrl] = useState<string | null>(currentProject.panoramaUrl || null);
@@ -514,6 +599,25 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     rotation: [number, number, number],
     scale: [number, number, number]
   ) => {
+    // Check if the transform actually changed to avoid redundant history
+    const existingAsset = assets.find((a) => a.id === id);
+    if (
+      existingAsset &&
+      existingAsset.position[0] === position[0] &&
+      existingAsset.position[1] === position[1] &&
+      existingAsset.position[2] === position[2] &&
+      existingAsset.rotation[0] === rotation[0] &&
+      existingAsset.rotation[1] === rotation[1] &&
+      existingAsset.rotation[2] === rotation[2] &&
+      existingAsset.scale[0] === scale[0] &&
+      existingAsset.scale[1] === scale[1] &&
+      existingAsset.scale[2] === scale[2]
+    ) {
+      return;
+    }
+
+    pushUndoSnapshot();
+
     const updated = {
       ...currentProject,
       scenes: assets.map((a) =>
@@ -524,6 +628,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   };
 
   const handleDeleteAsset = (id: string) => {
+    pushUndoSnapshot();
     const updated = {
       ...currentProject,
       scenes: assets.filter((a) => a.id !== id),
@@ -536,44 +641,77 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     <div className="flex-1 flex flex-col h-full w-full min-h-0 bg-background relative overflow-hidden select-none">
       {/* Top Controls Bar */}
       <div className="h-[48px] border-b border-outline-variant/30 px-md flex items-center justify-between z-10 bg-surface-container/60 backdrop-blur-md shrink-0">
-        {/* Transform Tools */}
-        <div className="flex items-center gap-xs bg-surface-container-high/60 p-[2px] rounded-lg border border-outline-variant/30">
-          <button
-            onClick={() => setTransformMode('translate')}
-            className={`flex items-center gap-xs px-sm py-[4px] rounded text-[11px] font-label-caps transition-all cursor-pointer ${
-              transformMode === 'translate'
-                ? 'bg-primary text-surface-container-lowest shadow font-semibold'
-                : 'text-on-surface-variant hover:text-on-surface'
-            }`}
-            title="Translate (W)"
-          >
-            <span className="material-symbols-outlined text-[14px]">open_with</span>
-            MOVE
-          </button>
-          <button
-            onClick={() => setTransformMode('rotate')}
-            className={`flex items-center gap-xs px-sm py-[4px] rounded text-[11px] font-label-caps transition-all cursor-pointer ${
-              transformMode === 'rotate'
-                ? 'bg-primary text-surface-container-lowest shadow font-semibold'
-                : 'text-on-surface-variant hover:text-on-surface'
-            }`}
-            title="Rotate (E)"
-          >
-            <span className="material-symbols-outlined text-[14px]">sync</span>
-            ROTATE
-          </button>
-          <button
-            onClick={() => setTransformMode('scale')}
-            className={`flex items-center gap-xs px-sm py-[4px] rounded text-[11px] font-label-caps transition-all cursor-pointer ${
-              transformMode === 'scale'
-                ? 'bg-primary text-surface-container-lowest shadow font-semibold'
-                : 'text-on-surface-variant hover:text-on-surface'
-            }`}
-            title="Scale (R)"
-          >
-            <span className="material-symbols-outlined text-[14px]">aspect_ratio</span>
-            SCALE
-          </button>
+        {/* Transform & History Tools */}
+        <div className="flex items-center gap-xs">
+          {/* Transform Tools */}
+          <div className="flex items-center gap-xs bg-surface-container-high/60 p-[2px] rounded-lg border border-outline-variant/30">
+            <button
+              onClick={() => setTransformMode('translate')}
+              className={`flex items-center gap-xs px-sm py-[4px] rounded text-[11px] font-label-caps transition-all cursor-pointer ${
+                transformMode === 'translate'
+                  ? 'bg-primary text-surface-container-lowest shadow font-semibold'
+                  : 'text-on-surface-variant hover:text-on-surface'
+              }`}
+              title="Translate / Move (W)"
+            >
+              <span className="material-symbols-outlined text-[14px]">open_with</span>
+              MOVE
+            </button>
+            <button
+              onClick={() => setTransformMode('rotate')}
+              className={`flex items-center gap-xs px-sm py-[4px] rounded text-[11px] font-label-caps transition-all cursor-pointer ${
+                transformMode === 'rotate'
+                  ? 'bg-primary text-surface-container-lowest shadow font-semibold'
+                  : 'text-on-surface-variant hover:text-on-surface'
+              }`}
+              title="Rotate (E)"
+            >
+              <span className="material-symbols-outlined text-[14px]">sync</span>
+              ROTATE
+            </button>
+            <button
+              onClick={() => setTransformMode('scale')}
+              className={`flex items-center gap-xs px-sm py-[4px] rounded text-[11px] font-label-caps transition-all cursor-pointer ${
+                transformMode === 'scale'
+                  ? 'bg-primary text-surface-container-lowest shadow font-semibold'
+                  : 'text-on-surface-variant hover:text-on-surface'
+              }`}
+              title="Scale (R)"
+            >
+              <span className="material-symbols-outlined text-[14px]">aspect_ratio</span>
+              SCALE
+            </button>
+          </div>
+
+          {/* Undo / Redo History Controls */}
+          <div className="flex items-center gap-[2px] bg-surface-container-high/60 p-[2px] rounded-lg border border-outline-variant/30">
+            <button
+              onClick={handleUndo}
+              disabled={!canUndo}
+              className={`flex items-center gap-xs px-xs py-[4px] rounded text-[11px] font-label-caps transition-all ${
+                canUndo
+                  ? 'text-on-surface hover:text-primary hover:bg-surface-container-highest cursor-pointer font-medium'
+                  : 'text-on-surface-variant/30 cursor-not-allowed'
+              }`}
+              title="Undo Move, Rotate, Scale (Ctrl+Z / ⌘Z)"
+            >
+              <span className="material-symbols-outlined text-[15px]">undo</span>
+              UNDO
+            </button>
+            <button
+              onClick={handleRedo}
+              disabled={!canRedo}
+              className={`flex items-center gap-xs px-xs py-[4px] rounded text-[11px] font-label-caps transition-all ${
+                canRedo
+                  ? 'text-on-surface hover:text-primary hover:bg-surface-container-highest cursor-pointer font-medium'
+                  : 'text-on-surface-variant/30 cursor-not-allowed'
+              }`}
+              title="Redo Move, Rotate, Scale (Ctrl+Y / ⌘⇧Z)"
+            >
+              <span className="material-symbols-outlined text-[15px]">redo</span>
+              REDO
+            </button>
+          </div>
         </div>
 
         {/* Viewport & 360 / 3DGS World Toggles */}
@@ -761,6 +899,21 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               <div>ROT: {selectedAsset.rotation.map((v) => v.toFixed(2)).join(', ')}</div>
               <div>SCL: {selectedAsset.scale.map((v) => v.toFixed(2)).join(', ')}</div>
             </div>
+            <button
+              onClick={() =>
+                handleUpdateAssetTransform(
+                  selectedAsset.id,
+                  [0, 0, 0],
+                  [0, 0, 0],
+                  [1, 1, 1]
+                )
+              }
+              className="font-label-caps text-[9px] text-on-surface-variant hover:text-on-surface bg-surface-container-high/50 hover:bg-surface-container-highest py-[3px] rounded transition-colors cursor-pointer flex items-center justify-center gap-1 border border-outline-variant/30"
+              title="Reset Position to (0,0,0), Rotation to (0,0,0), and Scale to (1,1,1) [Undoable with Ctrl+Z]"
+            >
+              <span className="material-symbols-outlined text-[13px]">restart_alt</span>
+              RESET TRANSFORM (ORIGIN)
+            </button>
             <div className="flex flex-col gap-xs pt-xs border-t border-outline-variant/20">
               <button
                 onClick={() => setShowRoomBakeStudio(true)}

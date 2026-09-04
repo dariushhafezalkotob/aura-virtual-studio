@@ -165,6 +165,16 @@ const GLTFModel: React.FC<{
   const groupRef = useRef<THREE.Group>(null);
   const { glbUrl, position, rotation, scale } = asset;
 
+  // Synchronize internal Three.js group coordinates whenever props update (e.g. Undo/Redo)
+  useEffect(() => {
+    if (groupRef.current) {
+      groupRef.current.position.set(position[0], position[1], position[2]);
+      groupRef.current.rotation.set(rotation[0], rotation[1], rotation[2]);
+      groupRef.current.scale.set(scale[0], scale[1], scale[2]);
+      groupRef.current.updateMatrixWorld(true);
+    }
+  }, [position[0], position[1], position[2], rotation[0], rotation[1], rotation[2], scale[0], scale[1], scale[2]]);
+
   // If not a valid model URL, return procedural box
   const isCustomModel =
     glbUrl &&
