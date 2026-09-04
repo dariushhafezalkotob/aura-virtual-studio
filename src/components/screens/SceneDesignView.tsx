@@ -62,7 +62,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   currentProject,
   onUpdateProject,
 }) => {
-  const [selectedEngine, setSelectedEngine] = useState<AI3DEngine>('hunyuan3d');
+  const [selectedEngine, setSelectedEngine] = useState<AI3DEngine>('trellis');
   const [selectedCategory] = useState<AssetCategory>('prop');
   const [prompt, setPrompt] = useState('');
   const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
@@ -742,15 +742,14 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               <div>SCL: {selectedAsset.scale.map((v) => v.toFixed(2)).join(', ')}</div>
             </div>
             <div className="flex flex-col gap-xs pt-xs border-t border-outline-variant/20">
-              {selectedAsset.category === 'environment' && (
-                <button
-                  onClick={() => setShowRoomBakeStudio(true)}
-                  className="w-full font-label-caps text-[10px] text-primary border border-primary/40 bg-primary/10 hover:bg-primary/20 py-[4px] rounded transition-colors cursor-pointer flex items-center justify-center gap-1 font-semibold"
-                >
-                  <span className="material-symbols-outlined text-[14px]">brush</span>
-                  EDIT IN ROOMBAKE STUDIO
-                </button>
-              )}
+              <button
+                onClick={() => setShowRoomBakeStudio(true)}
+                className="w-full font-label-caps text-[10px] text-cyan-400 border border-cyan-400/40 bg-cyan-400/10 hover:bg-cyan-400/20 py-[4px] rounded transition-colors cursor-pointer flex items-center justify-center gap-1 font-semibold"
+                title="Bake custom high-resolution AI textures onto this model with Gemini in RoomBake Studio"
+              >
+                <span className="material-symbols-outlined text-[14px]">brush</span>
+                PAINT / BAKE TEXTURE (ROOMBAKE)
+              </button>
               <button
                 onClick={() => handleDeleteAsset(selectedAsset.id)}
                 className="w-full font-label-caps text-[10px] text-error hover:bg-error/10 py-[3px] rounded transition-colors cursor-pointer"
@@ -788,24 +787,26 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           {/* Dual Engine Selector Switch */}
           <div className="flex items-center bg-surface-container/80 p-[2px] rounded-lg border border-outline-variant/30 shrink-0">
             <button
-              onClick={() => setSelectedEngine('hunyuan3d')}
-              className={`px-sm py-xs rounded text-[10px] font-label-caps transition-all cursor-pointer ${
-                selectedEngine === 'hunyuan3d'
-                  ? 'bg-primary text-background font-bold shadow'
-                  : 'text-on-surface-variant hover:text-on-surface'
-              }`}
-            >
-              HUNYUAN 3D-2
-            </button>
-            <button
               onClick={() => setSelectedEngine('trellis')}
               className={`px-sm py-xs rounded text-[10px] font-label-caps transition-all cursor-pointer ${
                 selectedEngine === 'trellis'
                   ? 'bg-primary text-background font-bold shadow'
                   : 'text-on-surface-variant hover:text-on-surface'
               }`}
+              title="TRELLIS: Generates full-color PBR textured 3D models"
             >
-              TRELLIS FAST
+              TRELLIS (TEXTURED)
+            </button>
+            <button
+              onClick={() => setSelectedEngine('hunyuan3d')}
+              className={`px-sm py-xs rounded text-[10px] font-label-caps transition-all cursor-pointer ${
+                selectedEngine === 'hunyuan3d'
+                  ? 'bg-primary text-background font-bold shadow'
+                  : 'text-on-surface-variant hover:text-on-surface'
+              }`}
+              title="Hunyuan3D-2: Geometry Mesh (Shape Only on ZeroGPU)"
+            >
+              HUNYUAN 3D (SHAPE)
             </button>
           </div>
 
@@ -1161,22 +1162,25 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                 <div className="flex flex-col gap-xs pt-xs border-t border-outline-variant/20">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-xs">
                     <button
-                      onClick={handleAcceptAndSendToHunyuan}
+                      onClick={handleAcceptAndSendToTrellis}
                       className="bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-label-caps text-xs font-bold py-2.5 px-sm rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow-lg hover:scale-[1.01]"
-                      title="Generate high-resolution 3D Model with full PBR textures and colors"
+                      title="TRELLIS extracts full-color PBR materials and textures into the 3D model"
                     >
                       <span className="material-symbols-outlined text-[18px]">palette</span>
-                      ✓ SEND TO HUNYUAN (TEXTURED)
+                      ✓ SEND TO TRELLIS (COLOR & TEXTURE)
                     </button>
                     <button
-                      onClick={handleAcceptAndSendToTrellis}
-                      className="bg-primary hover:bg-primary/90 text-surface-container-lowest font-label-caps text-xs font-bold py-2.5 px-sm rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow-lg hover:scale-[1.01]"
-                      title="Generate fast structural 3D geometry mesh with Trellis"
+                      onClick={handleAcceptAndSendToHunyuan}
+                      className="bg-surface-container-highest hover:bg-surface-container-high border border-outline-variant/60 text-on-surface font-label-caps text-xs font-semibold py-2.5 px-sm rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow hover:scale-[1.01]"
+                      title="Hunyuan3D-2 outputs clean high-poly geometry (shape only on ZeroGPU; can be painted in RoomBake)"
                     >
-                      <span className="material-symbols-outlined text-[18px]">rocket_launch</span>
-                      ✓ SEND TO TRELLIS (FAST)
+                      <span className="material-symbols-outlined text-[18px]">view_in_ar</span>
+                      ✓ SEND TO HUNYUAN (SHAPE ONLY)
                     </button>
                   </div>
+                  <p className="text-[10px] text-on-surface-variant/80 text-center font-sans mt-[2px]">
+                    ✨ <strong>TRELLIS</strong> outputs full colors and textures directly. <strong>Hunyuan 3D</strong> outputs clean geometry (paint with RoomBake).
+                  </p>
                   <div className="flex gap-xs mt-1">
                     <button
                       onClick={handleAcceptReferenceOnly}

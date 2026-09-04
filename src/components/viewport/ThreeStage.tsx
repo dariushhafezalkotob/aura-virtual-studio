@@ -188,15 +188,21 @@ const GLTFModel: React.FC<{
           mesh.castShadow = true;
           mesh.receiveShadow = true;
           if (mesh.material) {
-            const mat = mesh.material as THREE.MeshStandardMaterial;
-            if (mat.map) {
-              mat.map.colorSpace = THREE.SRGBColorSpace;
-              mat.map.needsUpdate = true;
+            const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            for (const m of mats) {
+              const mat = m as THREE.MeshStandardMaterial;
+              if (mat.map) {
+                mat.map.colorSpace = THREE.SRGBColorSpace;
+                mat.map.needsUpdate = true;
+              }
+              if (mesh.geometry?.attributes?.color) {
+                mat.vertexColors = true;
+              }
+              if (mat.metalness !== undefined) mat.metalness = Math.min(mat.metalness, 0.25);
+              if (mat.roughness !== undefined) mat.roughness = Math.max(0.3, Math.min(mat.roughness, 0.85));
+              mat.side = THREE.DoubleSide;
+              mat.needsUpdate = true;
             }
-            if (mat.metalness !== undefined) mat.metalness = Math.min(mat.metalness, 0.35);
-            if (mat.roughness !== undefined) mat.roughness = Math.max(0.3, Math.min(mat.roughness, 0.85));
-            mat.side = THREE.DoubleSide;
-            mat.needsUpdate = true;
           }
         }
       });
