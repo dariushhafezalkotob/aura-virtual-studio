@@ -28,135 +28,81 @@ interface CharacterActorModelProps {
 // ---------------------------------------------------------------------------
 interface SOMAJointDef {
   name: string;
+  pos: THREE.Vector3;
   radius: number;
+  parent: number;
   isEndEffector?: boolean;
 }
 
-const SOMA_JOINTS: Record<string, SOMAJointDef> = {
-  pelvis: { name: 'Pelvis / Root', radius: 0.048, isEndEffector: false },
-  spine1: { name: 'Spine (Lumbar)', radius: 0.038 },
-  spine2: { name: 'Spine (Thoracic)', radius: 0.038 },
-  spine3: { name: 'Spine (Chest)', radius: 0.042 },
-  neck: { name: 'Neck', radius: 0.032 },
-  head: { name: 'Head (Cranial)', radius: 0.055, isEndEffector: true },
+// SOMA Joint T-Pose Coordinates in Mesh Space (centered at pelvis root)
+const SOMA_JOINTS_DEF: SOMAJointDef[] = [
+  { name: 'Pelvis', pos: new THREE.Vector3(0, 0, 0), radius: 0.18, parent: -1 },
+  { name: 'Spine1', pos: new THREE.Vector3(0, 0.13, -0.01), radius: 0.16, parent: 0 },
+  { name: 'Spine2', pos: new THREE.Vector3(0, 0.27, 0), radius: 0.18, parent: 1 },
+  { name: 'Spine3', pos: new THREE.Vector3(0, 0.41, 0.02), radius: 0.20, parent: 2 },
+  { name: 'Neck', pos: new THREE.Vector3(0, 0.53, 0.01), radius: 0.10, parent: 3 },
+  { name: 'Head', pos: new THREE.Vector3(0, 0.65, 0.04), radius: 0.15, parent: 4, isEndEffector: true },
   
-  leftCollar: { name: 'L Clavicle', radius: 0.028 },
-  leftShoulder: { name: 'L Shoulder', radius: 0.038 },
-  leftElbow: { name: 'L Elbow', radius: 0.032 },
-  leftWrist: { name: 'L Wrist', radius: 0.026 },
-  leftHand: { name: 'L Hand', radius: 0.024, isEndEffector: true },
-  
-  rightCollar: { name: 'R Clavicle', radius: 0.028 },
-  rightShoulder: { name: 'R Shoulder', radius: 0.038 },
-  rightElbow: { name: 'R Elbow', radius: 0.032 },
-  rightWrist: { name: 'R Wrist', radius: 0.026 },
-  rightHand: { name: 'R Hand', radius: 0.024, isEndEffector: true },
-  
-  leftHip: { name: 'L Hip Joint', radius: 0.042 },
-  leftKnee: { name: 'L Knee', radius: 0.036 },
-  leftAnkle: { name: 'L Ankle', radius: 0.03 },
-  leftToe: { name: 'L Foot / Toe', radius: 0.026, isEndEffector: true },
-  
-  rightHip: { name: 'R Hip Joint', radius: 0.042 },
-  rightKnee: { name: 'R Knee', radius: 0.036 },
-  rightAnkle: { name: 'R Ankle', radius: 0.03 },
-  rightToe: { name: 'R Foot / Toe', radius: 0.026, isEndEffector: true },
-};
+  { name: 'L_Collar', pos: new THREE.Vector3(-0.08, 0.43, 0.01), radius: 0.12, parent: 3 },
+  { name: 'L_Shoulder', pos: new THREE.Vector3(-0.20, 0.41, 0), radius: 0.14, parent: 6 },
+  { name: 'L_Elbow', pos: new THREE.Vector3(-0.46, 0.41, 0), radius: 0.12, parent: 7 },
+  { name: 'L_Wrist', pos: new THREE.Vector3(-0.70, 0.41, 0), radius: 0.09, parent: 8 },
+  { name: 'L_Hand', pos: new THREE.Vector3(-0.80, 0.41, 0), radius: 0.08, parent: 9, isEndEffector: true },
 
-// Anatomical Tapered Bone Link Segment Component
-const SOMABoneLink: React.FC<{
-  start: THREE.Vector3;
-  end: THREE.Vector3;
-  rTop?: number;
-  rBottom?: number;
-  color?: string;
-}> = ({ start, end, rTop = 0.022, rBottom = 0.016, color = '#383c42' }) => {
-  const meshRef = useRef<THREE.Mesh>(null);
+  { name: 'R_Collar', pos: new THREE.Vector3(0.08, 0.43, 0.01), radius: 0.12, parent: 3 },
+  { name: 'R_Shoulder', pos: new THREE.Vector3(0.20, 0.41, 0), radius: 0.14, parent: 11 },
+  { name: 'R_Elbow', pos: new THREE.Vector3(0.46, 0.41, 0), radius: 0.12, parent: 12 },
+  { name: 'R_Wrist', pos: new THREE.Vector3(0.70, 0.41, 0), radius: 0.09, parent: 13 },
+  { name: 'R_Hand', pos: new THREE.Vector3(0.80, 0.41, 0), radius: 0.08, parent: 14, isEndEffector: true },
 
-  const { position, quaternion, length } = useMemo(() => {
-    const dir = new THREE.Vector3().subVectors(end, start);
-    const len = dir.length();
-    const pos = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
-    const quat = new THREE.Quaternion();
-    
-    if (len > 0.0001) {
-      const normDir = dir.clone().normalize();
-      const up = new THREE.Vector3(0, 1, 0);
-      quat.setFromUnitVectors(up, normDir);
+  { name: 'L_Hip', pos: new THREE.Vector3(-0.10, -0.07, 0), radius: 0.16, parent: 0 },
+  { name: 'L_Knee', pos: new THREE.Vector3(-0.10, -0.49, 0.01), radius: 0.14, parent: 16 },
+  { name: 'L_Ankle', pos: new THREE.Vector3(-0.10, -0.87, -0.02), radius: 0.10, parent: 17 },
+  { name: 'L_Toe', pos: new THREE.Vector3(-0.10, -0.95, 0.08), radius: 0.10, parent: 18, isEndEffector: true },
+
+  { name: 'R_Hip', pos: new THREE.Vector3(0.10, -0.07, 0), radius: 0.16, parent: 0 },
+  { name: 'R_Knee', pos: new THREE.Vector3(0.10, -0.49, 0.01), radius: 0.14, parent: 20 },
+  { name: 'R_Ankle', pos: new THREE.Vector3(0.10, -0.87, -0.02), radius: 0.10, parent: 21 },
+  { name: 'R_Toe', pos: new THREE.Vector3(0.10, -0.95, 0.08), radius: 0.10, parent: 22, isEndEffector: true },
+];
+
+// Helper to calculate Linear Blend Skinning (LBS) weights on SOMA mesh geometry
+function applySOMALBSSkinning(geometry: THREE.BufferGeometry) {
+  const posAttr = geometry.attributes.position;
+  const count = posAttr.count;
+  const skinIndices: number[] = [];
+  const skinWeights: number[] = [];
+  const v = new THREE.Vector3();
+
+  for (let i = 0; i < count; i++) {
+    v.fromBufferAttribute(posAttr, i);
+
+    const dists: { index: number; weight: number }[] = [];
+    for (let j = 0; j < SOMA_JOINTS_DEF.length; j++) {
+      const joint = SOMA_JOINTS_DEF[j];
+      const d = v.distanceTo(joint.pos);
+      const sigma = joint.radius * 1.5;
+      const weight = Math.exp(-(d * d) / (2 * sigma * sigma));
+      dists.push({ index: j, weight });
     }
-    return { position: pos, quaternion: quat, length: len };
-  }, [start.x, start.y, start.z, end.x, end.y, end.z]);
 
-  if (length < 0.001) return null;
+    dists.sort((a, b) => b.weight - a.weight);
+    let totalW = dists[0].weight + dists[1].weight + dists[2].weight + dists[3].weight;
+    if (totalW < 1e-6) totalW = 1.0;
 
-  return (
-    <mesh ref={meshRef} position={position} quaternion={quaternion} castShadow>
-      <cylinderGeometry args={[rTop, rBottom, length, 12]} />
-      <meshStandardMaterial
-        color={color}
-        roughness={0.35}
-        metalness={0.7}
-        envMapIntensity={0.8}
-      />
-    </mesh>
-  );
-};
-
-// ---------------------------------------------------------------------------
-// Official NVIDIA SOMA SMPL-X Single-Piece Continuous Human Body Mesh Loader
-// ---------------------------------------------------------------------------
-const SOMAExactSMPLHumanMesh: React.FC<{
-  color: string;
-  isHybrid: boolean;
-}> = ({ color, isHybrid }) => {
-  const [meshObj, setMeshObj] = useState<THREE.Group | null>(null);
-
-  useEffect(() => {
-    let isMounted = true;
-    const loader = new OBJLoader();
-
-    loader.load(
-      '/models/soma_smplx_body.obj',
-      (obj) => {
-        if (!isMounted) return;
-        obj.traverse((child) => {
-          if ((child as THREE.Mesh).isMesh) {
-            const m = child as THREE.Mesh;
-            m.geometry.computeVertexNormals();
-            m.castShadow = true;
-            m.receiveShadow = true;
-            m.material = new THREE.MeshStandardMaterial({
-              color: color || '#2c3036',
-              roughness: 0.35,
-              metalness: 0.45,
-              transparent: isHybrid,
-              opacity: isHybrid ? 0.45 : 1.0,
-              side: THREE.DoubleSide,
-            });
-          }
-        });
-
-        // Center mesh and place feet accurately on the floor
-        obj.position.set(0, 1.30, 0);
-        setMeshObj(obj);
-      },
-      undefined,
-      (err) => {
-        console.warn('Failed to load official SOMA SMPL-X mesh:', err);
-      }
+    skinIndices.push(dists[0].index, dists[1].index, dists[2].index, dists[3].index);
+    skinWeights.push(
+      dists[0].weight / totalW,
+      dists[1].weight / totalW,
+      dists[2].weight / totalW,
+      dists[3].weight / totalW
     );
+  }
 
-    return () => {
-      isMounted = false;
-    };
-  }, [color, isHybrid]);
-
-  if (!meshObj) return null;
-
-  return (
-    <primitive object={meshObj.clone()} />
-  );
-};
+  geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndices, 4));
+  geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeights, 4));
+  geometry.computeVertexNormals();
+}
 
 // 3D Motion Trajectory Floor Spline
 const TrajectoryPath: React.FC<{
@@ -210,34 +156,11 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
 }) => {
   const rootGroupRef = useRef<THREE.Group>(null);
   const bodyGroupRef = useRef<THREE.Group>(null);
+  const skinnedMeshRef = useRef<THREE.SkinnedMesh | null>(null);
 
-  // SOMA Hierarchical Joint Rig Node Refs
-  const pelvisRef = useRef<THREE.Group>(null);
-  const spine1Ref = useRef<THREE.Group>(null);
-  const spine2Ref = useRef<THREE.Group>(null);
-  const spine3Ref = useRef<THREE.Group>(null);
-  const neckRef = useRef<THREE.Group>(null);
-  const headRef = useRef<THREE.Group>(null);
-
-  const leftShoulderRef = useRef<THREE.Group>(null);
-  const leftElbowRef = useRef<THREE.Group>(null);
-  const leftWristRef = useRef<THREE.Group>(null);
-  const leftHandRef = useRef<THREE.Group>(null);
-
-  const rightShoulderRef = useRef<THREE.Group>(null);
-  const rightElbowRef = useRef<THREE.Group>(null);
-  const rightWristRef = useRef<THREE.Group>(null);
-  const rightHandRef = useRef<THREE.Group>(null);
-
-  const leftHipRef = useRef<THREE.Group>(null);
-  const leftKneeRef = useRef<THREE.Group>(null);
-  const leftAnkleRef = useRef<THREE.Group>(null);
-  const leftToeRef = useRef<THREE.Group>(null);
-
-  const rightHipRef = useRef<THREE.Group>(null);
-  const rightKneeRef = useRef<THREE.Group>(null);
-  const rightAnkleRef = useRef<THREE.Group>(null);
-  const rightToeRef = useRef<THREE.Group>(null);
+  // Store Bone Tree array
+  const bonesRef = useRef<THREE.Bone[]>([]);
+  const [isRigReady, setIsRigReady] = useState<boolean>(false);
 
   const {
     position,
@@ -248,6 +171,92 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     color = '#00ffcc',
     renderMode = 'mesh', // 'mesh' | 'skeleton' | 'hybrid'
   } = actor;
+
+  // Build SOMA Bone Hierarchy & Rigged SkinnedMesh on Mount
+  useEffect(() => {
+    let isMounted = true;
+
+    // 1. Build SOMA Bone Nodes
+    const bones = SOMA_JOINTS_DEF.map((j) => {
+      const b = new THREE.Bone();
+      b.name = j.name;
+      b.position.copy(j.pos);
+      return b;
+    });
+
+    // Structure parent-child relative hierarchy
+    for (let i = 0; i < SOMA_JOINTS_DEF.length; i++) {
+      const pIdx = SOMA_JOINTS_DEF[i].parent;
+      if (pIdx >= 0) {
+        const parentPos = SOMA_JOINTS_DEF[pIdx].pos;
+        bones[i].position.sub(parentPos);
+        bones[pIdx].add(bones[i]);
+      }
+    }
+
+    bonesRef.current = bones;
+
+    // 2. Load Official SOMA SMPL Human Body Mesh OBJ & Apply Linear Blend Skinning
+    const loader = new OBJLoader();
+    loader.load(
+      '/models/soma_smpl_body.obj',
+      (obj) => {
+        if (!isMounted) return;
+
+        let geom: THREE.BufferGeometry | null = null;
+        obj.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh && !geom) {
+            geom = (child as THREE.Mesh).geometry.clone();
+          }
+        });
+
+        if (geom) {
+          applySOMALBSSkinning(geom);
+
+          const skeleton = new THREE.Skeleton(bones);
+          const material = new THREE.MeshStandardMaterial({
+            color: actor.characterType === 'g1' ? '#e5e5ea' : '#32363d',
+            roughness: 0.35,
+            metalness: 0.45,
+            side: THREE.DoubleSide,
+          });
+
+          const sm = new THREE.SkinnedMesh(geom, material);
+          sm.castShadow = true;
+          sm.receiveShadow = true;
+          sm.add(bones[0]); // Add root bone (Pelvis)
+          sm.bind(skeleton);
+          sm.position.set(0, 0.95, 0); // Ground alignment
+
+          skinnedMeshRef.current = sm;
+          setIsRigReady(true);
+        }
+      },
+      undefined,
+      (err) => console.warn('SOMA Mesh load note:', err)
+    );
+
+    return () => {
+      isMounted = false;
+    };
+  }, [actor.characterType]);
+
+  // Update material appearance when renderMode or selection changes
+  useEffect(() => {
+    if (skinnedMeshRef.current) {
+      const isHybrid = renderMode === 'hybrid';
+      const isMesh = renderMode === 'mesh';
+      skinnedMeshRef.current.visible = isMesh || isHybrid;
+
+      const mat = skinnedMeshRef.current.material as THREE.MeshStandardMaterial;
+      if (mat) {
+        mat.transparent = isHybrid;
+        mat.opacity = isHybrid ? 0.45 : 1.0;
+        mat.color.set(actor.characterType === 'g1' ? '#e5e5ea' : '#32363d');
+        mat.needsUpdate = true;
+      }
+    }
+  }, [renderMode, actor.characterType]);
 
   // Sync initial root transform
   useEffect(() => {
@@ -266,11 +275,12 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     return new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.2);
   }, [trajectory]);
 
-  // Real-time SOMA Kinematic Animation Engine
+  // Real-time SOMA Kinematic Animation Engine driving the Skinned Skeleton
   useFrame(() => {
     const tTotal = Math.max(0.1, duration);
     const progress = (currentTimelineTime % tTotal) / tTotal;
     const animName = (actor.currentAnimation || actor.motionPrompt || '').toLowerCase();
+    const bones = bonesRef.current;
 
     // 1. Root Trajectory Translation & Heading
     if (bodyGroupRef.current && trajectoryCurve && trajectory.length >= 2) {
@@ -292,7 +302,15 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
       bodyGroupRef.current.rotation.set(0, 0, 0);
     }
 
-    // 2. Kinematic Joint Calculations for SOMA Skeleton
+    if (bones.length < 24) return;
+
+    // Bone index references:
+    // 0: Pelvis, 1: Spine1, 2: Spine2, 3: Spine3, 4: Neck, 5: Head
+    // 6: L_Collar, 7: L_Shoulder, 8: L_Elbow, 9: L_Wrist, 10: L_Hand
+    // 11: R_Collar, 12: R_Shoulder, 13: R_Elbow, 14: R_Wrist, 15: R_Hand
+    // 16: L_Hip, 17: L_Knee, 18: L_Ankle, 19: L_Toe
+    // 20: R_Hip, 21: R_Knee, 22: R_Ankle, 23: R_Toe
+
     const isWalking =
       animName.includes('walk') ||
       animName.includes('jog') ||
@@ -308,97 +326,85 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     const strideRate = animName.includes('run') || animName.includes('jog') ? 8.5 : 5.0;
     const stridePhase = currentTimelineTime * strideRate;
 
-    // A. Locomotion / Leg Kinematics
+    // Reset default rest pose
+    for (let i = 0; i < bones.length; i++) {
+      bones[i].rotation.set(0, 0, 0);
+    }
+
+    // A. Locomotion / Leg Kinematics (LBS mesh deform)
     if (isWalking) {
       const legSwing = Math.sin(stridePhase) * 0.7;
       const hipBob = Math.abs(Math.sin(stridePhase * 2)) * 0.045;
 
-      if (leftHipRef.current) leftHipRef.current.rotation.x = legSwing;
-      if (rightHipRef.current) rightHipRef.current.rotation.x = -legSwing;
+      bones[16].rotation.x = legSwing; // L_Hip
+      bones[20].rotation.x = -legSwing; // R_Hip
 
-      if (leftKneeRef.current) leftKneeRef.current.rotation.x = Math.max(0, -legSwing * 1.1);
-      if (rightKneeRef.current) rightKneeRef.current.rotation.x = Math.max(0, legSwing * 1.1);
+      bones[17].rotation.x = Math.max(0, -legSwing * 1.1); // L_Knee
+      bones[21].rotation.x = Math.max(0, legSwing * 1.1); // R_Knee
 
-      if (leftAnkleRef.current) leftAnkleRef.current.rotation.x = -legSwing * 0.4;
-      if (rightAnkleRef.current) rightAnkleRef.current.rotation.x = legSwing * 0.4;
+      bones[18].rotation.x = -legSwing * 0.4; // L_Ankle
+      bones[22].rotation.x = legSwing * 0.4; // R_Ankle
 
-      if (leftShoulderRef.current) leftShoulderRef.current.rotation.x = -legSwing * 0.8;
-      if (rightShoulderRef.current && !isWaving) rightShoulderRef.current.rotation.x = legSwing * 0.8;
+      bones[7].rotation.x = -legSwing * 0.8; // L_Shoulder
+      if (!isWaving) bones[12].rotation.x = legSwing * 0.8; // R_Shoulder
 
-      if (leftElbowRef.current) leftElbowRef.current.rotation.x = Math.max(0.1, -legSwing * 0.4);
-      if (rightElbowRef.current && !isWaving) rightElbowRef.current.rotation.x = Math.max(0.1, legSwing * 0.4);
+      bones[8].rotation.x = Math.max(0.1, -legSwing * 0.4); // L_Elbow
+      if (!isWaving) bones[13].rotation.x = Math.max(0.1, legSwing * 0.4); // R_Elbow
 
-      if (pelvisRef.current) {
-        pelvisRef.current.position.y = hipBob;
-        pelvisRef.current.rotation.y = Math.sin(stridePhase) * 0.08;
-      }
-      if (spine1Ref.current) spine1Ref.current.rotation.y = -Math.sin(stridePhase) * 0.05;
-      if (spine3Ref.current) spine3Ref.current.rotation.y = -Math.sin(stridePhase) * 0.05;
+      bones[0].position.y = hipBob; // Pelvis
+      bones[0].rotation.y = Math.sin(stridePhase) * 0.08;
+      bones[1].rotation.y = -Math.sin(stridePhase) * 0.05; // Spine1
+      bones[3].rotation.y = -Math.sin(stridePhase) * 0.05; // Spine3
     } else if (isDancing) {
       const beat = currentTimelineTime * 5.0;
-      if (pelvisRef.current) {
-        pelvisRef.current.position.y = Math.abs(Math.sin(beat)) * 0.05;
-        pelvisRef.current.rotation.z = Math.sin(beat) * 0.18;
-      }
-      if (spine2Ref.current) spine2Ref.current.rotation.y = Math.cos(beat * 0.5) * 0.25;
-      if (leftShoulderRef.current) {
-        leftShoulderRef.current.rotation.z = 0.6 + Math.sin(beat) * 0.4;
-        leftShoulderRef.current.rotation.x = Math.cos(beat) * 0.3;
-      }
-      if (rightShoulderRef.current) {
-        rightShoulderRef.current.rotation.z = -0.6 - Math.cos(beat) * 0.4;
-        rightShoulderRef.current.rotation.x = -Math.sin(beat) * 0.3;
-      }
-      if (leftHipRef.current) leftHipRef.current.rotation.x = Math.sin(beat) * 0.3;
-      if (rightHipRef.current) rightHipRef.current.rotation.x = -Math.sin(beat) * 0.3;
+      bones[0].position.y = Math.abs(Math.sin(beat)) * 0.05;
+      bones[0].rotation.z = Math.sin(beat) * 0.18;
+      bones[2].rotation.y = Math.cos(beat * 0.5) * 0.25; // Spine2
+
+      bones[7].rotation.z = 0.6 + Math.sin(beat) * 0.4; // L_Shoulder
+      bones[7].rotation.x = Math.cos(beat) * 0.3;
+      bones[12].rotation.z = -0.6 - Math.cos(beat) * 0.4; // R_Shoulder
+      bones[12].rotation.x = -Math.sin(beat) * 0.3;
+
+      bones[16].rotation.x = Math.sin(beat) * 0.3; // L_Hip
+      bones[20].rotation.x = -Math.sin(beat) * 0.3; // R_Hip
     } else if (isMartial) {
       const phase = (currentTimelineTime % 3.0) / 3.0;
       if (phase < 0.4) {
         const k = phase / 0.4;
-        if (rightHipRef.current) rightHipRef.current.rotation.x = -Math.PI * 0.6 * Math.sin(k * Math.PI);
-        if (rightKneeRef.current) rightKneeRef.current.rotation.x = 0.3;
-        if (leftShoulderRef.current) leftShoulderRef.current.rotation.x = -0.9;
-        if (rightShoulderRef.current) rightShoulderRef.current.rotation.x = -0.6;
-        if (spine2Ref.current) spine2Ref.current.rotation.y = -0.4 * Math.sin(k * Math.PI);
+        bones[20].rotation.x = -Math.PI * 0.6 * Math.sin(k * Math.PI); // R_Hip kick
+        bones[21].rotation.x = 0.3; // R_Knee
+        bones[7].rotation.x = -0.9; // L_Shoulder
+        bones[12].rotation.x = -0.6; // R_Shoulder
+        bones[2].rotation.y = -0.4 * Math.sin(k * Math.PI);
       } else {
-        if (rightHipRef.current) rightHipRef.current.rotation.x = 0;
-        if (leftShoulderRef.current) leftShoulderRef.current.rotation.x = -0.4;
-        if (rightShoulderRef.current) rightShoulderRef.current.rotation.x = -0.4;
+        bones[20].rotation.x = 0;
+        bones[7].rotation.x = -0.4;
+        bones[12].rotation.x = -0.4;
       }
     } else {
+      // Idle Breathing
       const breath = Math.sin(currentTimelineTime * 2.2) * 0.02;
-      if (pelvisRef.current) pelvisRef.current.position.y = breath * 0.4;
-      if (spine2Ref.current) {
-        spine2Ref.current.rotation.x = breath * 0.6;
-        spine2Ref.current.position.z = breath * 0.02;
-      }
-      if (leftHipRef.current) leftHipRef.current.rotation.x = 0;
-      if (rightHipRef.current) rightHipRef.current.rotation.x = 0;
-      if (leftKneeRef.current) leftKneeRef.current.rotation.x = 0;
-      if (rightKneeRef.current) rightKneeRef.current.rotation.x = 0;
-      if (leftShoulderRef.current) leftShoulderRef.current.rotation.x = 0;
-      if (rightShoulderRef.current && !isWaving) rightShoulderRef.current.rotation.x = 0;
+      bones[0].position.y = breath * 0.4;
+      bones[2].rotation.x = breath * 0.6;
     }
 
-    // Hand & Arm Gestures
-    if (isWaving && rightShoulderRef.current && rightElbowRef.current) {
-      rightShoulderRef.current.rotation.x = -2.3;
-      rightShoulderRef.current.rotation.z = -0.35;
-      rightElbowRef.current.rotation.z = -0.7 + Math.sin(currentTimelineTime * 8.5) * 0.5;
-    } else if (isTalking && leftShoulderRef.current && rightShoulderRef.current) {
-      leftShoulderRef.current.rotation.x = -0.8 + Math.sin(currentTimelineTime * 3.5) * 0.25;
-      rightShoulderRef.current.rotation.x = -0.8 + Math.cos(currentTimelineTime * 3.5) * 0.25;
+    // Gestures: Waving
+    if (isWaving) {
+      bones[12].rotation.x = -2.3; // R_Shoulder
+      bones[12].rotation.z = -0.35;
+      bones[13].rotation.z = -0.7 + Math.sin(currentTimelineTime * 8.5) * 0.5; // R_Elbow
+    } else if (isTalking) {
+      bones[7].rotation.x = -0.8 + Math.sin(currentTimelineTime * 3.5) * 0.25;
+      bones[12].rotation.x = -0.8 + Math.cos(currentTimelineTime * 3.5) * 0.25;
     }
 
-    // Head Gaze & Scanning
-    if (headRef.current) {
-      if (isLooking) {
-        headRef.current.rotation.y = Math.sin(currentTimelineTime * 1.6) * 0.6;
-        headRef.current.rotation.x = Math.sin(currentTimelineTime * 0.8) * 0.12;
-      } else {
-        headRef.current.rotation.y = Math.sin(currentTimelineTime * 0.8) * 0.08;
-        headRef.current.rotation.x = 0;
-      }
+    // Head Scanning & Gaze
+    if (isLooking) {
+      bones[5].rotation.y = Math.sin(currentTimelineTime * 1.6) * 0.6; // Head
+      bones[5].rotation.x = Math.sin(currentTimelineTime * 0.8) * 0.12;
+    } else {
+      bones[5].rotation.y = Math.sin(currentTimelineTime * 0.8) * 0.08;
     }
   });
 
@@ -426,13 +432,6 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
 
   const isRobot = actor.characterType === 'g1';
   const jointColor = color || (isRobot ? '#ff9500' : '#00ffcc');
-  const boneColor = isRobot ? '#8e9297' : '#22252a';
-  const skinColor = isRobot ? '#e5e5ea' : '#32363d';
-  const endEffectorColor = '#ff3b30';
-
-  const showMesh = renderMode === 'mesh' || renderMode === 'hybrid';
-  const showSkeleton = renderMode === 'skeleton' || renderMode === 'hybrid';
-  const isHybrid = renderMode === 'hybrid';
 
   return (
     <>
@@ -452,254 +451,25 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
           onSelect();
         }}
       >
-        {/* Animated SOMA Multi-Body Kinematic Skeleton & Single-Piece Mesh */}
+        {/* Animated Rigged SOMA Multi-Body Skinned Mesh */}
         <group ref={bodyGroupRef}>
-          {/* ========================================================= */}
-          {/* OFFICIAL SOMA SMPL-X SINGLE CONTINUOUS HUMAN BODY MESH    */}
-          {/* ========================================================= */}
-          {showMesh && (
-            <SOMAExactSMPLHumanMesh color={skinColor} isHybrid={isHybrid} />
+          {/* Rigged Skinned Mesh Primitive */}
+          {isRigReady && skinnedMeshRef.current && (
+            <primitive object={skinnedMeshRef.current} />
           )}
 
-          {/* ========================================================= */}
-          {/* SOMA 24-JOINT BIOMECHANICAL SKELETON RIG & END-EFFECTORS  */}
-          {/* ========================================================= */}
-          {showSkeleton && (
-            <group position={[0, 0.95, 0]} ref={pelvisRef}>
-              {/* Pelvis Joint Node */}
-              <mesh castShadow>
-                <sphereGeometry args={[SOMA_JOINTS.pelvis.radius, 16, 16]} />
-                <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-              </mesh>
-
-              {/* Sacrum Bone */}
-              <mesh position={[0, -0.02, 0]}>
-                <boxGeometry args={[0.22, 0.08, 0.12]} />
-                <meshStandardMaterial color={boneColor} roughness={0.3} metalness={0.7} />
-              </mesh>
-
-              {/* Spine 1 (Lumbar) */}
-              <group ref={spine1Ref} position={[0, 0.12, -0.01]}>
-                <mesh castShadow>
-                  <sphereGeometry args={[SOMA_JOINTS.spine1.radius, 14, 14]} />
-                  <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                </mesh>
-                <SOMABoneLink start={new THREE.Vector3(0, -0.12, 0.01)} end={new THREE.Vector3(0, 0, 0)} rTop={0.026} rBottom={0.03} color={boneColor} />
-
-                {/* Spine 2 (Thoracic) */}
-                <group ref={spine2Ref} position={[0, 0.14, 0.01]}>
-                  <mesh castShadow>
-                    <sphereGeometry args={[SOMA_JOINTS.spine2.radius, 14, 14]} />
-                    <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                  </mesh>
-                  <SOMABoneLink start={new THREE.Vector3(0, -0.14, -0.01)} end={new THREE.Vector3(0, 0, 0)} rTop={0.028} rBottom={0.026} color={boneColor} />
-
-                  {/* Spine 3 (Chest / Upper Thorax) */}
-                  <group ref={spine3Ref} position={[0, 0.14, 0.02]}>
-                    <mesh castShadow>
-                      <sphereGeometry args={[SOMA_JOINTS.spine3.radius, 16, 16]} />
-                      <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                    </mesh>
-                    <SOMABoneLink start={new THREE.Vector3(0, -0.14, -0.01)} end={new THREE.Vector3(0, 0, 0)} rTop={0.034} rBottom={0.028} color={boneColor} />
-
-                    {/* Neck Joint */}
-                    <group ref={neckRef} position={[0, 0.12, -0.01]}>
-                      <mesh castShadow>
-                        <sphereGeometry args={[SOMA_JOINTS.neck.radius, 14, 14]} />
-                        <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                      </mesh>
-                      <SOMABoneLink start={new THREE.Vector3(0, -0.12, 0.01)} end={new THREE.Vector3(0, 0, 0)} rTop={0.02} rBottom={0.025} color={boneColor} />
-
-                      {/* Head / Cranial Joint (End-Effector) */}
-                      <group ref={headRef} position={[0, 0.14, 0.03]}>
-                        <mesh castShadow>
-                          <sphereGeometry args={[SOMA_JOINTS.head.radius, 20, 20]} />
-                          <meshStandardMaterial color={boneColor} roughness={0.25} metalness={0.7} />
-                        </mesh>
-                        <SOMABoneLink start={new THREE.Vector3(0, -0.14, -0.03)} end={new THREE.Vector3(0, 0, 0)} rTop={0.024} rBottom={0.02} color={boneColor} />
-
-                        {/* Head Gaze Visor */}
-                        <mesh position={[0, 0.01, 0.06]}>
-                          <boxGeometry args={[0.09, 0.03, 0.03]} />
-                          <meshStandardMaterial color={jointColor} emissive={jointColor} emissiveIntensity={1.5} />
-                        </mesh>
-                      </group>
-                    </group>
-
-                    {/* Left Clavicle & Shoulder Chain */}
-                    <group position={[-0.08, 0.02, -0.01]}>
-                      <mesh castShadow>
-                        <sphereGeometry args={[SOMA_JOINTS.leftCollar.radius, 12, 12]} />
-                        <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                      </mesh>
-                      <SOMABoneLink start={new THREE.Vector3(0.08, -0.02, 0.01)} end={new THREE.Vector3(0, 0, 0)} rTop={0.018} rBottom={0.024} color={boneColor} />
-
-                      <group ref={leftShoulderRef} position={[-0.12, -0.02, 0]}>
-                        <mesh castShadow>
-                          <sphereGeometry args={[SOMA_JOINTS.leftShoulder.radius, 14, 14]} />
-                          <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                        </mesh>
-                        <SOMABoneLink start={new THREE.Vector3(0.12, 0.02, 0)} end={new THREE.Vector3(0, 0, 0)} rTop={0.022} rBottom={0.018} color={boneColor} />
-                        <SOMABoneLink start={new THREE.Vector3(0, 0, 0)} end={new THREE.Vector3(0, -0.26, 0)} rTop={0.024} rBottom={0.018} color={boneColor} />
-
-                        {/* Left Elbow */}
-                        <group ref={leftElbowRef} position={[0, -0.26, 0]}>
-                          <mesh castShadow>
-                            <sphereGeometry args={[SOMA_JOINTS.leftElbow.radius, 12, 12]} />
-                            <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                          </mesh>
-                          <SOMABoneLink start={new THREE.Vector3(0, 0, 0)} end={new THREE.Vector3(0, -0.24, 0)} rTop={0.02} rBottom={0.016} color={boneColor} />
-
-                          {/* Left Wrist */}
-                          <group ref={leftWristRef} position={[0, -0.24, 0]}>
-                            <mesh castShadow>
-                              <sphereGeometry args={[SOMA_JOINTS.leftWrist.radius, 10, 10]} />
-                              <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                            </mesh>
-
-                            {/* Left Hand End-Effector */}
-                            <group ref={leftHandRef} position={[0, -0.08, 0]}>
-                              <mesh castShadow>
-                                <sphereGeometry args={[SOMA_JOINTS.leftHand.radius, 10, 10]} />
-                                <meshStandardMaterial color={endEffectorColor} emissive={endEffectorColor} emissiveIntensity={0.6} />
-                              </mesh>
-                            </group>
-                          </group>
-                        </group>
-                      </group>
-                    </group>
-
-                    {/* Right Clavicle & Shoulder Chain */}
-                    <group position={[0.08, 0.02, -0.01]}>
-                      <mesh castShadow>
-                        <sphereGeometry args={[SOMA_JOINTS.rightCollar.radius, 12, 12]} />
-                        <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                      </mesh>
-                      <SOMABoneLink start={new THREE.Vector3(-0.08, -0.02, 0.01)} end={new THREE.Vector3(0, 0, 0)} rTop={0.018} rBottom={0.024} color={boneColor} />
-
-                      <group ref={rightShoulderRef} position={[0.12, -0.02, 0]}>
-                        <mesh castShadow>
-                          <sphereGeometry args={[SOMA_JOINTS.rightShoulder.radius, 14, 14]} />
-                          <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                        </mesh>
-                        <SOMABoneLink start={new THREE.Vector3(-0.12, 0.02, 0)} end={new THREE.Vector3(0, 0, 0)} rTop={0.022} rBottom={0.018} color={boneColor} />
-                        <SOMABoneLink start={new THREE.Vector3(0, 0, 0)} end={new THREE.Vector3(0, -0.26, 0)} rTop={0.024} rBottom={0.018} color={boneColor} />
-
-                        {/* Right Elbow */}
-                        <group ref={rightElbowRef} position={[0, -0.26, 0]}>
-                          <mesh castShadow>
-                            <sphereGeometry args={[SOMA_JOINTS.rightElbow.radius, 12, 12]} />
-                            <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                          </mesh>
-                          <SOMABoneLink start={new THREE.Vector3(0, 0, 0)} end={new THREE.Vector3(0, -0.24, 0)} rTop={0.02} rBottom={0.016} color={boneColor} />
-
-                          {/* Right Wrist */}
-                          <group ref={rightWristRef} position={[0, -0.24, 0]}>
-                            <mesh castShadow>
-                              <sphereGeometry args={[SOMA_JOINTS.rightWrist.radius, 10, 10]} />
-                              <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                            </mesh>
-
-                            {/* Right Hand End-Effector */}
-                            <group ref={rightHandRef} position={[0, -0.08, 0]}>
-                              <mesh castShadow>
-                                <sphereGeometry args={[SOMA_JOINTS.rightHand.radius, 10, 10]} />
-                                <meshStandardMaterial color={endEffectorColor} emissive={endEffectorColor} emissiveIntensity={0.6} />
-                              </mesh>
-                            </group>
-                          </group>
-                        </group>
-                      </group>
-                    </group>
-                  </group>
-                </group>
-              </group>
-
-              {/* Left Hip & Leg Chain */}
-              <group position={[-0.1, -0.05, 0]}>
-                <group ref={leftHipRef}>
-                  <mesh castShadow>
-                    <sphereGeometry args={[SOMA_JOINTS.leftHip.radius, 16, 16]} />
-                    <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                  </mesh>
-                  <SOMABoneLink start={new THREE.Vector3(0.1, 0.05, 0)} end={new THREE.Vector3(0, 0, 0)} rTop={0.028} rBottom={0.032} color={boneColor} />
-                  <SOMABoneLink start={new THREE.Vector3(0, 0, 0)} end={new THREE.Vector3(0, -0.42, 0)} rTop={0.034} rBottom={0.026} color={boneColor} />
-
-                  {/* Left Knee */}
-                  <group ref={leftKneeRef} position={[0, -0.42, 0]}>
-                    <mesh castShadow>
-                      <sphereGeometry args={[SOMA_JOINTS.leftKnee.radius, 14, 14]} />
-                      <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                    </mesh>
-                    <SOMABoneLink start={new THREE.Vector3(0, 0, 0)} end={new THREE.Vector3(0, -0.38, 0)} rTop={0.028} rBottom={0.022} color={boneColor} />
-
-                    {/* Left Ankle */}
-                    <group ref={leftAnkleRef} position={[0, -0.38, 0]}>
-                      <mesh castShadow>
-                        <sphereGeometry args={[SOMA_JOINTS.leftAnkle.radius, 12, 12]} />
-                        <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                      </mesh>
-
-                      {/* Left Toe End-Effector */}
-                      <group ref={leftToeRef} position={[0, -0.06, 0.1]}>
-                        <mesh castShadow>
-                          <sphereGeometry args={[SOMA_JOINTS.leftToe.radius, 10, 10]} />
-                          <meshStandardMaterial color={endEffectorColor} emissive={endEffectorColor} emissiveIntensity={0.6} />
-                        </mesh>
-                        <mesh position={[0, 0.01, -0.04]} castShadow receiveShadow>
-                          <boxGeometry args={[0.08, 0.035, 0.16]} />
-                          <meshStandardMaterial color={boneColor} roughness={0.4} metalness={0.7} />
-                        </mesh>
-                        <SOMABoneLink start={new THREE.Vector3(0, 0.06, -0.1)} end={new THREE.Vector3(0, 0, 0)} rTop={0.02} rBottom={0.016} color={boneColor} />
-                      </group>
-                    </group>
-                  </group>
-                </group>
-              </group>
-
-              {/* Right Hip & Leg Chain */}
-              <group position={[0.1, -0.05, 0]}>
-                <group ref={rightHipRef}>
-                  <mesh castShadow>
-                    <sphereGeometry args={[SOMA_JOINTS.rightHip.radius, 16, 16]} />
-                    <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                  </mesh>
-                  <SOMABoneLink start={new THREE.Vector3(-0.1, 0.05, 0)} end={new THREE.Vector3(0, 0, 0)} rTop={0.028} rBottom={0.032} color={boneColor} />
-                  <SOMABoneLink start={new THREE.Vector3(0, 0, 0)} end={new THREE.Vector3(0, -0.42, 0)} rTop={0.034} rBottom={0.026} color={boneColor} />
-
-                  {/* Right Knee */}
-                  <group ref={rightKneeRef} position={[0, -0.42, 0]}>
-                    <mesh castShadow>
-                      <sphereGeometry args={[SOMA_JOINTS.rightKnee.radius, 14, 14]} />
-                      <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                    </mesh>
-                    <SOMABoneLink start={new THREE.Vector3(0, 0, 0)} end={new THREE.Vector3(0, -0.38, 0)} rTop={0.028} rBottom={0.022} color={boneColor} />
-
-                    {/* Right Ankle */}
-                    <group ref={rightAnkleRef} position={[0, -0.38, 0]}>
-                      <mesh castShadow>
-                        <sphereGeometry args={[SOMA_JOINTS.rightAnkle.radius, 12, 12]} />
-                        <meshStandardMaterial color={jointColor} roughness={0.2} metalness={0.8} />
-                      </mesh>
-
-                      {/* Right Toe End-Effector */}
-                      <group ref={rightToeRef} position={[0, -0.06, 0.1]}>
-                        <mesh castShadow>
-                          <sphereGeometry args={[SOMA_JOINTS.rightToe.radius, 10, 10]} />
-                          <meshStandardMaterial color={endEffectorColor} emissive={endEffectorColor} emissiveIntensity={0.6} />
-                        </mesh>
-                        <mesh position={[0, 0.01, -0.04]} castShadow receiveShadow>
-                          <boxGeometry args={[0.08, 0.035, 0.16]} />
-                          <meshStandardMaterial color={boneColor} roughness={0.4} metalness={0.7} />
-                        </mesh>
-                        <SOMABoneLink start={new THREE.Vector3(0, 0.06, -0.1)} end={new THREE.Vector3(0, 0, 0)} rTop={0.02} rBottom={0.016} color={boneColor} />
-                      </group>
-                    </group>
-                  </group>
-                </group>
-              </group>
-            </group>
-          )}
+          {/* SOMA Glowing Optical Visor Attached to Head */}
+          <group position={[0, 1.60, 0.08]}>
+            <mesh position={[0, 0, 0.04]}>
+              <boxGeometry args={[0.16, 0.04, 0.03]} />
+              <meshStandardMaterial
+                color={jointColor}
+                emissive={jointColor}
+                emissiveIntensity={1.8}
+                roughness={0.1}
+              />
+            </mesh>
+          </group>
         </group>
 
         {/* Selection Ring & Name Tag */}
@@ -711,7 +481,7 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
             </mesh>
             <Html position={[0, 1.95, 0]} center distanceFactor={8}>
               <div className="bg-surface-container/95 border border-primary/50 text-primary px-sm py-[2px] rounded font-label-caps text-[10px] tracking-wider whitespace-nowrap shadow-xl">
-                {actor.name} ({renderMode.toUpperCase()})
+                {actor.name} (SOMA Rigged)
               </div>
             </Html>
           </group>
