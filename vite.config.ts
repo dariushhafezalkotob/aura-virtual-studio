@@ -22,63 +22,42 @@ let hunyuanWorldClient: any = null;
 let kimodoClient: any = null;
 let panoramaClient: any = null;
 
-async function getTrellisClient() {
-  if (!trellisClient) {
-    try {
-      console.log(`Connecting to TRELLIS Engine at ${TRELLIS_SPACE}...`);
-      trellisClient = await Client.connect(TRELLIS_SPACE, connectOpts);
-    } catch (e: any) {
-      console.warn(`Direct TRELLIS space connect failed, falling back to repo ID: ${e.message}`);
-      trellisClient = await Client.connect('dariushh/trellis-3d-engine', connectOpts);
-    }
+async function getTrellisClient(forceFresh = false) {
+  if (!trellisClient || forceFresh) {
+    console.log(`[ZeroGPU] Connecting to TRELLIS Engine at ${TRELLIS_SPACE}...`);
+    trellisClient = await Client.connect(TRELLIS_SPACE, connectOpts);
   }
   return trellisClient;
 }
 
-async function getHunyuan3DClient() {
-  if (!hunyuan3DClient) {
-    try {
-      console.log(`Connecting to Hunyuan3D Engine at ${HUNYUAN_3D_SPACE}...`);
-      hunyuan3DClient = await Client.connect(HUNYUAN_3D_SPACE, connectOpts);
-    } catch (e: any) {
-      console.warn(`Direct Hunyuan3D space connect failed, falling back to repo ID: ${e.message}`);
-      hunyuan3DClient = await Client.connect('dariushh/hunyuan3d-2-engine', connectOpts);
-    }
+async function getHunyuan3DClient(forceFresh = false) {
+  if (!hunyuan3DClient || forceFresh) {
+    console.log(`[ZeroGPU] Connecting to Hunyuan3D Engine at ${HUNYUAN_3D_SPACE}...`);
+    hunyuan3DClient = await Client.connect(HUNYUAN_3D_SPACE, connectOpts);
   }
   return hunyuan3DClient;
 }
 
-async function getHunyuanWorldClient() {
-  if (!hunyuanWorldClient) {
-    try {
-      console.log(`Connecting to HunyuanWorld ZeroGPU Engine at ${HUNYUAN_WORLD_SPACE}...`);
-      hunyuanWorldClient = await Client.connect(HUNYUAN_WORLD_SPACE, connectOpts);
-    } catch (e: any) {
-      console.warn(`Direct HunyuanWorld connect failed, falling back to repo ID: ${e.message}`);
-      hunyuanWorldClient = await Client.connect('dariushh/hunyuanworld-engine', connectOpts);
-    }
+async function getHunyuanWorldClient(forceFresh = false) {
+  if (!hunyuanWorldClient || forceFresh) {
+    console.log(`[ZeroGPU] Connecting to HunyuanWorld Engine at ${HUNYUAN_WORLD_SPACE}...`);
+    hunyuanWorldClient = await Client.connect(HUNYUAN_WORLD_SPACE, connectOpts);
   }
   return hunyuanWorldClient;
 }
 
-async function getKimodoClient() {
-  if (!kimodoClient) {
-    try {
-      kimodoClient = await Client.connect(KIMODO_SPACE, connectOpts);
-    } catch (e: any) {
-      kimodoClient = await Client.connect('dariushh/kimodo-virtual-stage', connectOpts);
-    }
+async function getKimodoClient(forceFresh = false) {
+  if (!kimodoClient || forceFresh) {
+    console.log(`[ZeroGPU] Connecting to Kimodo Stage at ${KIMODO_SPACE}...`);
+    kimodoClient = await Client.connect(KIMODO_SPACE, connectOpts);
   }
   return kimodoClient;
 }
 
-async function getPanoramaClient() {
-  if (!panoramaClient) {
-    try {
-      panoramaClient = await Client.connect(PANORAMA_360_SPACE, connectOpts);
-    } catch (e: any) {
-      panoramaClient = await Client.connect('hugging-apps/krea2-360-panorama-lora', connectOpts);
-    }
+async function getPanoramaClient(forceFresh = false) {
+  if (!panoramaClient || forceFresh) {
+    console.log(`[ZeroGPU] Connecting to 360 Panorama at ${PANORAMA_360_SPACE}...`);
+    panoramaClient = await Client.connect(PANORAMA_360_SPACE, connectOpts);
   }
   return panoramaClient;
 }
@@ -371,22 +350,43 @@ function apiMiddlewarePlugin(): Plugin {
 
               if (engine === 'hunyuan3d') {
                 if (!fileToPass) throw new Error('Hunyuan3D requires a reference image.');
-                const client = await getHunyuan3DClient();
-                const result = await client.predict('/generation_all', [
-                  params.prompt || null,
-                  fileToPass,
-                  null,
-                  null,
-                  null,
-                  null,
-                  params.steps || 20,
-                  7.5,
-                  params.seed || 1234,
-                  256,
-                  true,
-                  200000,
-                  true
-                ]);
+                let client = await getHunyuan3DClient();
+                let result: any;
+                try {
+                  result = await client.predict('/generation_all', [
+                    params.prompt || null,
+                    fileToPass,
+                    null,
+                    null,
+                    null,
+                    null,
+                    params.steps || 20,
+                    7.5,
+                    params.seed || 1234,
+                    256,
+                    true,
+                    200000,
+                    true
+                  ]);
+                } catch (predErr: any) {
+                  console.warn('[Hunyuan3D] Reconnecting and retrying prediction...', predErr.message);
+                  client = await getHunyuan3DClient(true);
+                  result = await client.predict('/generation_all', [
+                    params.prompt || null,
+                    fileToPass,
+                    null,
+                    null,
+                    null,
+                    null,
+                    params.steps || 20,
+                    7.5,
+                    params.seed || 1234,
+                    256,
+                    true,
+                    200000,
+                    true
+                  ]);
+                }
 
                 const data = result.data as any[];
                 let glbUrl = '';
@@ -405,20 +405,43 @@ function apiMiddlewarePlugin(): Plugin {
               }
 
               // Route 2: TRELLIS Neural Engine
-              const client = await getTrellisClient();
-              const result = await client.predict('/generate_and_extract_glb', [
-                fileToPass,
-                [],
-                false,
-                params.seed ?? Math.floor(Math.random() * 2147483647),
-                params.ssGuidance ?? 7.5,
-                params.ssSteps ?? 12,
-                params.slatGuidance ?? 3.0,
-                params.slatSteps ?? 12,
-                'stochastic',
-                params.simplify ?? 0.98,
-                params.textureSize ?? 1024,
-              ]);
+              if (!fileToPass) {
+                throw new Error('Please upload an image to generate a 3D model with TRELLIS.');
+              }
+
+              let client = await getTrellisClient();
+              let result: any;
+              try {
+                result = await client.predict('/generate_and_extract_glb', [
+                  fileToPass,
+                  [],
+                  false,
+                  params.seed ?? Math.floor(Math.random() * 2147483647),
+                  params.ssGuidance ?? 7.5,
+                  params.ssSteps ?? 12,
+                  params.slatGuidance ?? 3.0,
+                  params.slatSteps ?? 12,
+                  'stochastic',
+                  params.simplify ?? 0.98,
+                  params.textureSize ?? 1024,
+                ]);
+              } catch (predErr: any) {
+                console.warn('[TRELLIS] Reconnecting and retrying prediction...', predErr.message);
+                client = await getTrellisClient(true);
+                result = await client.predict('/generate_and_extract_glb', [
+                  fileToPass,
+                  [],
+                  false,
+                  params.seed ?? Math.floor(Math.random() * 2147483647),
+                  params.ssGuidance ?? 7.5,
+                  params.ssSteps ?? 12,
+                  params.slatGuidance ?? 3.0,
+                  params.slatSteps ?? 12,
+                  'stochastic',
+                  params.simplify ?? 0.98,
+                  params.textureSize ?? 1024,
+                ]);
+              }
 
               const data = result.data as any[];
               let videoData: any = null;
