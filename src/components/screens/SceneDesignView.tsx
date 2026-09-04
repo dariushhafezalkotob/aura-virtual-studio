@@ -101,8 +101,17 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const [splatUrl, setSplatUrl] = useState<string | null>(currentProject.splatUrl || null);
   const [showHfTokenModal, setShowHfTokenModal] = useState<boolean>(false);
   const [hfTokenInput, setHfTokenInput] = useState<string>(localStorage.getItem('hf_token') || '');
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(
+    localStorage.getItem('gemini_api_key') || localStorage.getItem('roombake_gemini_key') || ''
+  );
+  const [showGeminiKeyModal, setShowGeminiKeyModal] = useState<boolean>(false);
+  const [geminiKeyInput, setGeminiKeyInput] = useState<string>(
+    localStorage.getItem('gemini_api_key') || localStorage.getItem('roombake_gemini_key') || ''
+  );
   const [aiImagePrompt, setAiImagePrompt] = useState<string>('');
   const [isGeneratingAiImage, setIsGeneratingAiImage] = useState<boolean>(false);
+  const [generatedPreviewImage, setGeneratedPreviewImage] = useState<string | null>(null);
+  const [generatedPreviewPrompt, setGeneratedPreviewPrompt] = useState<string>('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const panoInputRef = useRef<HTMLInputElement>(null);
@@ -333,65 +342,48 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     }
   };
 
-  const handleGenerateImage = async () => {
-    if (!aiImagePrompt.trim()) {
-      alert('Please enter a description for the image you want to generate.');
-      return;
-    }
-    try {
-      setIsGeneratingAiImage(true);
-      const res = await fetch('/api/generate-image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: aiImagePrompt.trim() }),
-      });
-      const data = await res.json();
-      if (!data.success || !data.imageBase64) {
-        throw new Error(data.error || 'Failed to generate image');
-      }
-      setSelectedImageUrl(data.imageBase64);
-      setSelectedImageFile(null);
-      setPrompt(aiImagePrompt.trim());
-      setShowImagePicker(false);
-      setAiImagePrompt('');
-    } catch (err: any) {
-      console.error(err);
-      alert(`Image Generation Error: ${err.message || err}`);
-    } finally {
-      setIsGeneratingAiImage(false);
-    }
-  };
+  const executeGenerate3D = async (
+    customImage?: { file?: File | null; url?: string | null },
+    customEngine?: AI3DEngine,
+    customPrompt?: string
+  ) => {
+    const imgFile = customImage !== undefined ? customImage.file : selectedImageFile;
+    const imgUrl = customImage !== undefined ? customImage.url : selectedImageUrl;
+    const engineToUse = customEngine || selectedEngine;
+    const promptToUse = customPrompt !== undefined ? customPrompt : prompt;
 
-  const handleGenerate = async () => {
-    if (!selectedImageFile && !selectedImageUrl) {
+    if (!imgFile && !imgUrl) {
       setShowImagePicker(true);
       return;
     }
 
     try {
-      setProgress({ stageMessage: 'Initializing AI Generation...', status: 'connecting' });
+      setProgress({
+        stageMessage: `Initializing ${engineToUse === 'hunyuan3d' ? 'Hunyuan3D-2' : 'TRELLIS'} AI Generation...`,
+        status: 'connecting',
+      });
 
       const result = await TrellisService.generate3D(
         {
-          engine: selectedEngine,
+          engine: engineToUse,
           category: selectedCategory,
-          imageFile: selectedImageFile || undefined,
-          imageUrl: selectedImageUrl || undefined,
-          prompt,
+          imageFile: imgFile || undefined,
+          imageUrl: imgUrl || undefined,
+          prompt: promptToUse,
         },
         (p: GenerationProgress) => setProgress(p)
       );
 
       const newAsset: SceneAsset = {
         id: `asset_${Date.now()}`,
-        name: prompt.trim() || (selectedEngine === 'hunyuan3d' ? 'Hunyuan 3D (Textured)' : 'TRELLIS 3D Object'),
+        name: promptToUse.trim() || (engineToUse === 'hunyuan3d' ? 'Hunyuan 3D (Textured)' : 'TRELLIS 3D Object'),
         glbUrl: result.glbUrl,
         previewUrl: result.videoUrl,
         position: [assets.length * 1.5, 0, 0],
         rotation: [0, 0, 0],
         scale: [1, 1, 1],
-        prompt,
-        engine: selectedEngine,
+        prompt: promptToUse,
+        engine: engineToUse,
         category: selectedCategory,
         createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
@@ -409,6 +401,65 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       alert(`Generation error: ${err.message || err}`);
       setProgress(null);
     }
+  };
+
+  const handleGenerate = () => {
+    executeGenerate3D();
+  };
+
+  const handleGenerateImage = async () => {
+    if (!aiImagePrompt.trim()) {
+      alert('Please enter a description for the image you want to generate.');
+      return;
+    }
+    try {
+      setIsGeneratingAiImage(true);
+      const res = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(geminiApiKey ? { 'x-gemini-key': geminiApiKey } : {}),
+        },
+        body: JSON.stringify({
+          prompt: aiImagePrompt.trim(),
+          apiKey: geminiApiKey || undefined,
+          model: 'gemini-3.1-flash-lite-image',
+        }),
+      });
+      const data = await res.json();
+      if (!data.success || !data.imageBase64) {
+        throw new Error(data.error || 'Failed to generate image');
+      }
+      setGeneratedPreviewImage(data.imageBase64);
+      setGeneratedPreviewPrompt(aiImagePrompt.trim());
+    } catch (err: any) {
+      console.error(err);
+      alert(`Image Generation Error: ${err.message || err}`);
+    } finally {
+      setIsGeneratingAiImage(false);
+    }
+  };
+
+  const handleAcceptAndSendToTrellis = () => {
+    if (!generatedPreviewImage) return;
+    const imgUrl = generatedPreviewImage;
+    const pText = generatedPreviewPrompt || aiImagePrompt;
+    setSelectedEngine('trellis');
+    setSelectedImageUrl(imgUrl);
+    setSelectedImageFile(null);
+    setPrompt(pText);
+    setShowImagePicker(false);
+    setGeneratedPreviewImage(null);
+    executeGenerate3D({ url: imgUrl }, 'trellis', pText);
+  };
+
+  const handleAcceptReferenceOnly = () => {
+    if (!generatedPreviewImage) return;
+    setSelectedImageUrl(generatedPreviewImage);
+    setSelectedImageFile(null);
+    setPrompt(generatedPreviewPrompt || aiImagePrompt);
+    setShowImagePicker(false);
+    setGeneratedPreviewImage(null);
   };
 
   const handleAddRoomBakeAsset = (assetData: { name: string; glbUrl?: string; modelBlob?: Blob }) => {
@@ -576,6 +627,20 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           >
             <span className="material-symbols-outlined text-[16px]">key</span>
             {hfTokenInput ? 'HF TOKEN (SAVED)' : 'HF TOKEN'}
+          </button>
+
+          {/* Gemini API Key Auth Button */}
+          <button
+            onClick={() => setShowGeminiKeyModal(true)}
+            className={`flex items-center gap-xs px-sm py-[4px] rounded-lg text-[11px] font-label-caps font-semibold transition-all border cursor-pointer ${
+              geminiApiKey
+                ? 'bg-emerald-400/10 text-emerald-400 border-emerald-400/40 hover:bg-emerald-400/20'
+                : 'bg-surface-container-high/60 text-on-surface-variant border-outline-variant/40 hover:text-on-surface'
+            }`}
+            title="Google Gemini API Key for AI Image & Multimodal Generation"
+          >
+            <span className="material-symbols-outlined text-[16px]">psychology</span>
+            {geminiApiKey ? 'GEMINI API (ACTIVE)' : 'GEMINI API'}
           </button>
 
           {/* Lighting Mode Presets */}
@@ -1056,16 +1121,78 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             </button>
           </div>
 
+          {/* Generated Reference Image Preview & Accept Card */}
+          {generatedPreviewImage && (
+            <div className="bg-surface-container-high/90 border-2 border-primary/60 p-md rounded-2xl flex flex-col sm:flex-row gap-md items-center shadow-2xl animate-fade-in">
+              <div className="relative w-44 h-44 rounded-xl overflow-hidden border border-primary/50 shadow-lg shrink-0 bg-background/50 flex items-center justify-center">
+                <img
+                  src={generatedPreviewImage}
+                  alt="Generated Reference"
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute top-1.5 left-1.5 bg-primary text-background font-label-caps text-[9px] font-bold px-2 py-[2px] rounded-full shadow-md flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[12px]">auto_awesome</span>
+                  GEMINI 3.1 FLASH LITE
+                </div>
+              </div>
+              <div className="flex-1 flex flex-col justify-between h-full gap-sm w-full">
+                <div>
+                  <div className="flex items-center gap-xs text-primary font-label-caps text-xs font-bold">
+                    <span className="material-symbols-outlined text-[18px]">verified</span>
+                    AI REFERENCE IMAGE READY
+                  </div>
+                  <p className="text-xs text-on-surface-variant font-medium mt-1 line-clamp-3 italic bg-surface-container-low/60 p-xs rounded-lg border border-outline-variant/30">
+                    "{generatedPreviewPrompt}"
+                  </p>
+                </div>
+                <div className="flex flex-col gap-xs pt-xs border-t border-outline-variant/20">
+                  <button
+                    onClick={handleAcceptAndSendToTrellis}
+                    className="bg-primary hover:bg-primary/90 text-surface-container-lowest font-label-caps text-xs font-bold py-2.5 px-md rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow-lg hover:scale-[1.01]"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">rocket_launch</span>
+                    ✓ ACCEPT & SEND TO TRELLIS (GENERATE 3D)
+                  </button>
+                  <div className="flex gap-xs">
+                    <button
+                      onClick={handleAcceptReferenceOnly}
+                      className="flex-1 text-on-surface hover:text-primary bg-surface-container hover:bg-surface-container-high border border-outline-variant/50 font-label-caps text-[10px] font-semibold py-1.5 px-sm rounded-lg transition-colors cursor-pointer text-center"
+                    >
+                      Accept as Reference Only
+                    </button>
+                    <button
+                      onClick={() => setGeneratedPreviewImage(null)}
+                      className="text-on-surface-variant hover:text-error bg-surface-container hover:bg-surface-container-high border border-outline-variant/50 font-label-caps text-[10px] py-1.5 px-sm rounded-lg transition-colors cursor-pointer"
+                    >
+                      ↺ Regenerate
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* 1. AI Image Generator Input & Button (Spacious Multi-line Textarea) */}
           <div className="bg-surface-container-low p-md rounded-xl border border-outline-variant/40 flex flex-col gap-sm shadow-inner">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-xs text-[11px] font-label-caps text-primary font-bold">
                 <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
-                GENERATE REFERENCE IMAGE WITH AI
+                GENERATE REFERENCE IMAGE (GEMINI-3.1-FLASH-LITE)
               </div>
-              <span className="text-[10px] text-on-surface-variant font-mono">
-                Press Enter to generate · Shift+Enter for newline
-              </span>
+              <div className="flex items-center gap-xs">
+                <button
+                  type="button"
+                  onClick={() => setShowGeminiKeyModal(true)}
+                  className="text-[10px] font-label-caps text-emerald-400 hover:text-emerald-300 transition-colors flex items-center gap-[2px] cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[12px]">key</span>
+                  {geminiApiKey ? 'Gemini Key: Active' : 'Configure Gemini Key'}
+                </button>
+                <span className="text-on-surface-variant/40 text-[10px]">·</span>
+                <span className="text-[10px] text-on-surface-variant font-mono">
+                  Enter to generate
+                </span>
+              </div>
             </div>
 
             <textarea
@@ -1237,6 +1364,89 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                 className="px-md py-xs text-xs bg-primary text-surface-container-lowest font-bold rounded-lg hover:bg-primary/90 transition-colors font-label-caps cursor-pointer shadow"
               >
                 Save Token
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Gemini API Key Settings Modal */}
+      {showGeminiKeyModal && (
+        <div className="fixed inset-0 z-50 bg-surface-container-lowest/80 backdrop-blur-md flex items-center justify-center p-md animate-fade-in">
+          <div className="w-full max-w-md bg-surface-container-high border border-outline-variant/60 rounded-2xl p-lg shadow-2xl flex flex-col gap-md">
+            <div className="flex items-center justify-between pb-xs border-b border-outline-variant/30">
+              <div className="flex items-center gap-xs">
+                <span className="material-symbols-outlined text-primary text-[20px]">psychology</span>
+                <span className="font-headline-sm text-sm text-primary font-bold tracking-wide uppercase">
+                  Google Gemini API Key
+                </span>
+              </div>
+              <button
+                onClick={() => setShowGeminiKeyModal(false)}
+                className="text-on-surface-variant hover:text-on-surface cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-on-surface-variant leading-relaxed">
+              Used for <strong>Gemini-3.1-flash-lite-image</strong> reference generation and <strong>RoomBake</strong> 3D projective texture painting.
+            </p>
+
+            <div className="flex flex-col gap-xs">
+              <label className="text-[11px] font-label-caps text-on-surface-variant">
+                Gemini API Key (Google AI Studio)
+              </label>
+              <input
+                type="password"
+                value={geminiKeyInput}
+                onChange={(e) => setGeminiKeyInput(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full bg-surface-container-low border border-outline-variant px-sm py-xs rounded-lg text-xs text-on-surface font-mono outline-none focus:border-primary"
+              />
+              <span className="text-[10px] text-on-surface-variant/70">
+                Get your free key from{' '}
+                <a
+                  href="https://aistudio.google.com/app/apikey"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary underline hover:text-primary/80"
+                >
+                  aistudio.google.com/app/apikey
+                </a>
+              </span>
+            </div>
+
+            <div className="flex justify-end gap-sm pt-xs border-t border-outline-variant/30">
+              <button
+                onClick={() => {
+                  localStorage.removeItem('gemini_api_key');
+                  localStorage.removeItem('roombake_gemini_key');
+                  setGeminiKeyInput('');
+                  setGeminiApiKey('');
+                  setShowGeminiKeyModal(false);
+                }}
+                className="px-sm py-xs text-xs text-error hover:bg-error/10 rounded font-label-caps cursor-pointer"
+              >
+                Clear Key
+              </button>
+              <button
+                onClick={() => {
+                  const k = geminiKeyInput.trim();
+                  if (k) {
+                    localStorage.setItem('gemini_api_key', k);
+                    localStorage.setItem('roombake_gemini_key', k);
+                    setGeminiApiKey(k);
+                  } else {
+                    localStorage.removeItem('gemini_api_key');
+                    localStorage.removeItem('roombake_gemini_key');
+                    setGeminiApiKey('');
+                  }
+                  setShowGeminiKeyModal(false);
+                }}
+                className="px-md py-xs text-xs bg-primary text-surface-container-lowest font-bold rounded-lg hover:bg-primary/90 transition-colors font-label-caps cursor-pointer shadow"
+              >
+                Save Key
               </button>
             </div>
           </div>
