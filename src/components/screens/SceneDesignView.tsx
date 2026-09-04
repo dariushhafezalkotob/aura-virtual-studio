@@ -101,6 +101,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const [splatUrl, setSplatUrl] = useState<string | null>(currentProject.splatUrl || null);
   const [showHfTokenModal, setShowHfTokenModal] = useState<boolean>(false);
   const [hfTokenInput, setHfTokenInput] = useState<string>(localStorage.getItem('hf_token') || '');
+  const [aiImagePrompt, setAiImagePrompt] = useState<string>('');
+  const [isGeneratingAiImage, setIsGeneratingAiImage] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const panoInputRef = useRef<HTMLInputElement>(null);
@@ -331,9 +333,38 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     }
   };
 
+  const handleGenerateImage = async () => {
+    if (!aiImagePrompt.trim()) {
+      alert('Please enter a description for the image you want to generate.');
+      return;
+    }
+    try {
+      setIsGeneratingAiImage(true);
+      const res = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: aiImagePrompt.trim() }),
+      });
+      const data = await res.json();
+      if (!data.success || !data.imageBase64) {
+        throw new Error(data.error || 'Failed to generate image');
+      }
+      setSelectedImageUrl(data.imageBase64);
+      setSelectedImageFile(null);
+      setPrompt(aiImagePrompt.trim());
+      setShowImagePicker(false);
+      setAiImagePrompt('');
+    } catch (err: any) {
+      console.error(err);
+      alert(`Image Generation Error: ${err.message || err}`);
+    } finally {
+      setIsGeneratingAiImage(false);
+    }
+  };
+
   const handleGenerate = async () => {
-    if (!selectedImageFile && !selectedImageUrl && !prompt) {
-      alert('Please select a reference image or describe the scene asset.');
+    if (!selectedImageFile && !selectedImageUrl) {
+      setShowImagePicker(true);
       return;
     }
 
@@ -675,7 +706,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
         )}
 
         {/* Input Bar */}
-        <div className="w-full bg-surface-container-high/90 backdrop-blur-xl border border-outline-variant/60 p-xs rounded-xl shadow-2xl flex items-center gap-sm">
+        <div className="w-full bg-surface-container-high/90 backdrop-blur-xl border border-outline-variant/60 p-xs rounded-xl shadow-2xl flex items-center justify-between gap-sm">
           {/* Dual Engine Selector Switch */}
           <div className="flex items-center bg-surface-container/80 p-[2px] rounded-lg border border-outline-variant/30 shrink-0">
             <button
@@ -700,49 +731,44 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             </button>
           </div>
 
-          {/* Reference Image Thumbnail */}
-          {selectedImageUrl && (
-            <div className="relative group shrink-0">
-              <img
-                src={selectedImageUrl}
-                alt="Reference"
-                className="w-8 h-8 rounded object-cover border border-primary/50"
-              />
+          {/* Reference Image Button & Preview */}
+          <div className="flex-1 flex items-center justify-center px-xs">
+            {selectedImageUrl ? (
+              <div className="flex items-center gap-sm bg-surface-container-low/80 border border-outline-variant/40 px-sm py-[4px] rounded-lg">
+                <div className="relative group shrink-0">
+                  <img
+                    src={selectedImageUrl}
+                    alt="Reference"
+                    className="w-8 h-8 rounded object-cover border border-primary/60 shadow-sm"
+                  />
+                  <button
+                    onClick={() => {
+                      setSelectedImageUrl(null);
+                      setSelectedImageFile(null);
+                    }}
+                    className="absolute -top-1.5 -right-1.5 bg-surface-container-lowest text-error hover:bg-error hover:text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center border border-outline-variant cursor-pointer transition-colors shadow"
+                    title="Clear Image"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <button
+                  onClick={() => setShowImagePicker(true)}
+                  className="text-[11px] font-label-caps text-on-surface hover:text-primary transition-colors flex items-center gap-1 cursor-pointer font-semibold"
+                >
+                  <span className="material-symbols-outlined text-[15px]">change_circle</span>
+                  CHANGE IMAGE
+                </button>
+              </div>
+            ) : (
               <button
-                onClick={() => {
-                  setSelectedImageUrl(null);
-                  setSelectedImageFile(null);
-                }}
-                className="absolute -top-1 -right-1 bg-background text-error text-[10px] w-3 h-3 rounded-full flex items-center justify-center border border-outline-variant cursor-pointer"
+                onClick={() => setShowImagePicker(true)}
+                className="flex items-center justify-center gap-xs py-1.5 px-md rounded-lg text-[11px] font-label-caps font-semibold text-primary/90 hover:text-primary bg-primary/10 hover:bg-primary/20 border border-primary/30 transition-all cursor-pointer shadow-sm"
               >
-                ✕
+                <span className="material-symbols-outlined text-[16px]">add_photo_alternate</span>
+                SELECT / UPLOAD / GENERATE IMAGE
               </button>
-            </div>
-          )}
-
-          {/* Prompt Input */}
-          <div className="flex-1 relative flex items-center">
-            <input
-              type="text"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Describe a 3D prop (e.g., 'medieval treasure chest', 'sci-fi drone')..."
-              className="w-full bg-transparent text-on-surface placeholder:text-on-surface-variant/50 text-xs px-sm py-xs focus:outline-none font-sans"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleGenerate();
-                }
-              }}
-            />
-            <button
-              onClick={() => setShowImagePicker(!showImagePicker)}
-              aria-label="Upload Reference Image"
-              className="absolute right-xs text-on-surface-variant hover:text-primary transition-colors p-xs rounded-lg hover:bg-surface-variant/50 flex items-center justify-center cursor-pointer"
-              title="Select / Upload Prop Image"
-            >
-              <span className="material-symbols-outlined text-[18px]">add_photo_alternate</span>
-            </button>
+            )}
             <input
               ref={fileInputRef}
               type="file"
@@ -752,14 +778,14 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             />
           </div>
 
-          {/* Generate Button */}
+          {/* Generate 3D Model Button */}
           <button
             onClick={handleGenerate}
-            disabled={progress !== null && progress.status !== 'completed' && progress.status !== 'error'}
-            className="bg-primary text-background hover:bg-primary/90 font-label-caps text-[11px] px-md py-[10px] rounded-lg transition-all flex items-center gap-xs shrink-0 whitespace-nowrap cursor-pointer disabled:opacity-50 font-bold"
+            disabled={(!selectedImageUrl && !selectedImageFile) || (progress !== null && progress.status !== 'completed' && progress.status !== 'error')}
+            className="bg-primary text-background hover:bg-primary/90 font-label-caps text-[11px] px-md py-[10px] rounded-lg transition-all flex items-center gap-xs shrink-0 whitespace-nowrap cursor-pointer disabled:opacity-50 font-bold shadow"
           >
             <span className="material-symbols-outlined text-[14px]">auto_awesome</span>
-            GENERATE PROP
+            GENERATE 3D MODEL
           </button>
         </div>
 
@@ -1014,42 +1040,96 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
         </div>
       )}
 
-      {/* Preset Image Picker Modal */}
+      {/* Reference Image Picker & AI Generator Modal */}
       {showImagePicker && (
-        <div className="absolute bottom-[160px] left-1/2 -translate-x-1/2 w-full max-w-2xl bg-surface-container border border-outline-variant/50 p-lg shadow-2xl rounded-xl z-40 backdrop-blur-xl">
-          <div className="flex justify-between items-center mb-md">
-            <span className="font-label-caps text-[11px] text-primary tracking-widest uppercase font-semibold">
-              SELECT REFERENCE PROP IMAGE OR UPLOAD
+        <div className="absolute bottom-[130px] left-1/2 -translate-x-1/2 w-full max-w-2xl bg-surface-container border border-outline-variant/60 p-lg shadow-2xl rounded-2xl z-40 backdrop-blur-xl animate-fade-in flex flex-col gap-md max-h-[80vh] overflow-y-auto">
+          <div className="flex justify-between items-center pb-xs border-b border-outline-variant/30">
+            <span className="font-label-caps text-[11px] text-primary tracking-widest uppercase font-bold flex items-center gap-xs">
+              <span className="material-symbols-outlined text-[16px]">add_photo_alternate</span>
+              SELECT, UPLOAD OR GENERATE REFERENCE IMAGE
             </span>
             <button
               onClick={() => setShowImagePicker(false)}
-              className="text-on-surface-variant hover:text-primary cursor-pointer"
+              className="text-on-surface-variant hover:text-primary cursor-pointer text-sm font-bold"
             >
               ✕
             </button>
           </div>
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-sm mb-md">
-            {PROP_PRESETS.map((item, idx) => (
-              <div
-                key={idx}
-                onClick={() => {
-                  setSelectedImageUrl(item.url);
-                  setSelectedImageFile(null);
-                  setShowImagePicker(false);
+
+          {/* 1. AI Image Generator Input & Button */}
+          <div className="bg-surface-container-low p-sm rounded-xl border border-outline-variant/40 flex flex-col gap-xs shadow-inner">
+            <div className="flex items-center gap-xs text-[11px] font-label-caps text-primary font-bold">
+              <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+              GENERATE REFERENCE IMAGE WITH AI
+            </div>
+            <div className="flex items-center gap-xs">
+              <input
+                type="text"
+                value={aiImagePrompt}
+                onChange={(e) => setAiImagePrompt(e.target.value)}
+                placeholder="Describe prop to generate (e.g., 'medieval treasure chest', 'sci-fi robot drone', 'retro vintage chair')..."
+                className="flex-1 bg-surface-container border border-outline-variant/50 px-sm py-xs text-xs text-on-surface placeholder:text-on-surface-variant/50 rounded-lg focus:outline-none focus:border-primary font-sans"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleGenerateImage();
+                  }
                 }}
-                className="aspect-square rounded border border-outline-variant/30 overflow-hidden hover:border-primary cursor-pointer transition-colors relative group"
+              />
+              <button
+                onClick={handleGenerateImage}
+                disabled={isGeneratingAiImage || !aiImagePrompt.trim()}
+                className="bg-primary hover:bg-primary/90 text-surface-container-lowest font-label-caps text-[11px] font-bold px-md py-xs rounded-lg transition-all flex items-center gap-xs cursor-pointer disabled:opacity-50 shrink-0 shadow-sm"
               >
-                <img src={item.url} alt={item.name} className="w-full h-full object-cover" />
-                <div className="absolute inset-0 bg-background/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-xs text-center text-[10px] text-primary font-label-caps">
-                  {item.name}
-                </div>
-              </div>
-            ))}
+                {isGeneratingAiImage ? (
+                  <>
+                    <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
+                    GENERATING...
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-[14px]">brush</span>
+                    GENERATE IMAGE
+                  </>
+                )}
+              </button>
+            </div>
           </div>
-          <div className="flex justify-end">
+
+          {/* 2. Sample Presets */}
+          <div>
+            <span className="font-label-caps text-[10px] text-on-surface-variant tracking-wider block mb-xs">
+              OR CHOOSE SAMPLE PRESET
+            </span>
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-sm">
+              {PROP_PRESETS.map((item, idx) => (
+                <div
+                  key={idx}
+                  onClick={() => {
+                    setSelectedImageUrl(item.url);
+                    setSelectedImageFile(null);
+                    setPrompt(item.name);
+                    setShowImagePicker(false);
+                  }}
+                  className="aspect-square rounded-lg border border-outline-variant/30 overflow-hidden hover:border-primary cursor-pointer transition-colors relative group shadow-sm"
+                >
+                  <img src={item.url} alt={item.name} className="w-full h-full object-cover" />
+                  <div className="absolute inset-0 bg-background/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-xs text-center text-[10px] text-primary font-label-caps">
+                    {item.name}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 3. Upload from Computer */}
+          <div className="flex justify-between items-center pt-xs border-t border-outline-variant/30">
+            <span className="text-[11px] text-on-surface-variant">
+              Have your own photo or concept art?
+            </span>
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="font-label-caps text-[11px] text-primary border border-outline-variant px-md py-xs rounded hover:bg-surface-variant cursor-pointer flex items-center gap-xs font-semibold"
+              className="font-label-caps text-[11px] text-primary border border-outline-variant px-md py-xs rounded-lg hover:bg-surface-variant cursor-pointer flex items-center gap-xs font-semibold"
             >
               <span className="material-symbols-outlined text-[16px]">upload_file</span>
               UPLOAD FROM COMPUTER

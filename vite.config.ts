@@ -345,6 +345,70 @@ function apiMiddlewarePlugin(): Plugin {
           return;
         }
 
+        // 3.5 AI Reference Image Generation (for 3D Prop Generation)
+        if (req.url?.startsWith('/api/generate-image') && req.method === 'POST') {
+          let body = '';
+          req.on('data', (chunk) => { body += chunk; });
+          req.on('end', async () => {
+            try {
+              const params = JSON.parse(body);
+              const prompt = (params.prompt || '').trim();
+              if (!prompt) throw new Error('Please enter a description for the image.');
+
+              const geminiKey = params.apiKey || process.env.GEMINI_API_KEY || '';
+              console.log(`[API /api/generate-image] Synthesizing reference image: "${prompt}"...`);
+
+              let imageBase64: string | null = null;
+
+              // 1. Try Gemini Imagen if API key is present
+              if (geminiKey) {
+                try {
+                  const imgPayload = {
+                    instances: [{ prompt: `${prompt}, photorealistic 3D prop asset isolated on neutral studio white background, high detail, 8k resolution, sharp focus` }],
+                    parameters: { sampleCount: 1, aspectRatio: '1:1', outputMimeType: 'image/png' },
+                  };
+                  const resG = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${geminiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(imgPayload),
+                  });
+                  if (resG.ok) {
+                    const j = await resG.json();
+                    const b64 = j.predictions?.[0]?.bytesBase64Encoded;
+                    if (b64) {
+                      imageBase64 = `data:image/png;base64,${b64}`;
+                    }
+                  }
+                } catch (gErr) {
+                  console.warn('[Gemini Imagen failed, fallback to fast engine]:', gErr);
+                }
+              }
+
+              // 2. High-speed, high-quality Pollinations Flux / Turbo engine
+              if (!imageBase64) {
+                const encodedPrompt = encodeURIComponent(`${prompt}, single isolated 3d asset, neutral light grey background, photorealistic, octane render, sharp product photograph`);
+                const seed = Math.floor(Math.random() * 1000000);
+                const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}`;
+                const fetchRes = await fetch(pollinationsUrl);
+                if (!fetchRes.ok) throw new Error(`Image generator returned ${fetchRes.status}`);
+                const arrayBuf = await fetchRes.arrayBuffer();
+                const b64 = Buffer.from(arrayBuf).toString('base64');
+                imageBase64 = `data:image/png;base64,${b64}`;
+              }
+
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ success: true, imageBase64, prompt }));
+            } catch (err: any) {
+              const errMsg = extractErrorMessage(err);
+              console.error('[API /api/generate-image] Error:', errMsg);
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ success: false, error: errMsg }));
+            }
+          });
+          return;
+        }
+
         // 4. 3D Model & Prop Generation (TRELLIS & Hunyuan3D-2.0)
         if (req.url?.startsWith('/api/generate-3d') && req.method === 'POST') {
           let body = '';
