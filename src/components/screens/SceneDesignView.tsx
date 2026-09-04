@@ -90,7 +90,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   // Viewport Settings
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
-  const [lightIntensity] = useState<number>(2.4);
+  const [lightIntensity, setLightIntensity] = useState<number>(1.0);
   const [environmentPreset, setEnvironmentPreset] = useState<LightingEnvironmentPreset>('studio');
   const [showGrid, setShowGrid] = useState<boolean>(true);
 
@@ -673,6 +673,26 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                 </button>
               )
             )}
+          </div>
+
+          {/* Stage Light Intensity Slider */}
+          <div
+            className="flex items-center gap-xs bg-surface-container-high/60 px-2 py-[3px] rounded-lg border border-outline-variant/30"
+            title="Stage Ambient & Key Light Intensity"
+          >
+            <span className="material-symbols-outlined text-[15px] text-amber-400">light_mode</span>
+            <input
+              type="range"
+              min={0.1}
+              max={3.0}
+              step={0.05}
+              value={lightIntensity}
+              onChange={(e) => setLightIntensity(parseFloat(e.target.value))}
+              className="w-16 h-1 bg-surface-variant rounded-lg appearance-none cursor-pointer accent-amber-400"
+            />
+            <span className="text-[10px] font-mono font-medium text-on-surface-variant w-7 text-right">
+              {lightIntensity.toFixed(1)}x
+            </span>
           </div>
 
           {/* Grid Toggle */}

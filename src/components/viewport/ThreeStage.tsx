@@ -454,7 +454,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   assets,
   selectedAssetId,
   transformMode = 'translate',
-  lightIntensity = 2.4,
+  lightIntensity = 1.0,
   environmentPreset = 'studio',
   panoramaUrl,
   panoramaRotation = 0,
@@ -474,7 +474,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           antialias: true,
           alpha: true,
           toneMapping: THREE.ACESFilmicToneMapping,
-          toneMappingExposure: panoramaUrl && showPanorama ? 1.25 : 1.5,
+          toneMappingExposure: 1.0,
           outputColorSpace: THREE.SRGBColorSpace,
         }}
         onPointerMissed={() => {
@@ -496,19 +496,19 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         )}
 
         {/* Realistic Image-Based Environment Lighting (IBL) */}
-        <Environment preset={environmentPreset} environmentIntensity={lightIntensity * 0.7} />
+        <Environment preset={environmentPreset} environmentIntensity={lightIntensity * 0.6} />
 
-        {/* High-Power Ambient & Studio Lighting */}
-        <ambientLight intensity={lightIntensity * 1.1} color="#ffffff" />
+        {/* Balanced Ambient & Studio Lighting */}
+        <ambientLight intensity={lightIntensity * 0.4} color="#ffffff" />
         <hemisphereLight
-          args={['#ffffff', '#7a7a80', lightIntensity * 0.9]}
+          args={['#ffffff', '#444448', lightIntensity * 0.35]}
           position={[0, 50, 0]}
         />
         
         {/* Main Directional Sun / Key Light */}
         <directionalLight
           position={[8, 14, 8]}
-          intensity={lightIntensity * 1.3}
+          intensity={lightIntensity * 1.0}
           color="#ffffff"
           castShadow
           shadow-mapSize-width={2048}
@@ -518,19 +518,19 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         {/* Front Direct Camera Fill Light */}
         <directionalLight
           position={[0, 5, 8]}
-          intensity={lightIntensity * 1.0}
+          intensity={lightIntensity * 0.45}
           color="#ffffff"
         />
 
         {/* Soft Secondary Fill Light */}
         <directionalLight
           position={[-8, 6, -6]}
-          intensity={lightIntensity * 0.7}
+          intensity={lightIntensity * 0.35}
           color="#e0e8f0"
         />
 
         {/* Center Stage Point Light */}
-        <pointLight position={[0, 6, 0]} intensity={lightIntensity * 0.8} distance={25} />
+        <pointLight position={[0, 6, 0]} intensity={lightIntensity * 0.25} distance={25} />
 
         {/* Realistic Ground Contact Shadows */}
         <ContactShadows
