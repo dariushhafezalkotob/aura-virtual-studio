@@ -1,7 +1,6 @@
 import React, { useRef, useState, useEffect, Suspense, Component, ReactNode } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
-  OrbitControls,
   useGLTF,
   Center,
   Html,
@@ -285,15 +284,86 @@ const FallbackLoader = () => (
   </Html>
 );
 
-// 60 FPS Continuous Unreal Engine Flight & Navigation Controller
+// 60 FPS Unreal Engine First-Person Flight & Camera Navigation Controller (Identical to RoomBake)
 const UnrealCameraNavigation: React.FC<{
-  controlsRef: React.RefObject<any>;
   enabled: boolean;
-}> = ({ controlsRef, enabled }) => {
+}> = ({ enabled }) => {
   const { camera, gl } = useThree();
   const keysDown = useRef<Set<string>>(new Set());
+  const orbitRef = useRef({
+    yaw: Math.PI,
+    pitch: -0.15,
+    dist: 0.01,
+    target: new THREE.Vector3(0, 2.2, 6.5),
+  });
 
+  // Track pointer dragging for exact Unreal Look / Pan
   useEffect(() => {
+    const canvas = gl.domElement;
+    let dragging = false;
+    let dragButton = 0;
+    let lx = 0, ly = 0;
+
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (!enabled) return;
+      dragging = true;
+      dragButton = e.button;
+      lx = e.clientX;
+      ly = e.clientY;
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      dragging = false;
+      try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!dragging || !enabled) return;
+      const dx = e.clientX - lx;
+      const dy = e.clientY - ly;
+      lx = e.clientX;
+      ly = e.clientY;
+
+      const orbit = orbitRef.current;
+      const cp = Math.cos(orbit.pitch);
+      const fwd = new THREE.Vector3(
+        Math.sin(orbit.yaw) * cp,
+        Math.sin(orbit.pitch),
+        Math.cos(orbit.yaw) * cp
+      ).normalize();
+      const rgt = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+
+      // Middle click (1) or Alt/Shift+Left Click = Unreal Pan
+      if (dragButton === 1 || (dragButton === 0 && (e.altKey || e.shiftKey))) {
+        const panSpeed = 0.005 * Math.max(0.5, orbit.dist);
+        orbit.target.addScaledVector(rgt, -dx * panSpeed);
+        orbit.target.y += dy * panSpeed;
+      } else {
+        // Left Click (0) or Right Click (2) = Unreal Free Fly Look (Rotates around camera's own eye!)
+        orbit.yaw -= dx * 0.004;
+        orbit.pitch -= dy * 0.004;
+        orbit.pitch = Math.max(-1.55, Math.min(1.55, orbit.pitch));
+      }
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      if (!enabled) return;
+      e.preventDefault();
+      const orbit = orbitRef.current;
+      const cp = Math.cos(orbit.pitch);
+      const fwd = new THREE.Vector3(
+        Math.sin(orbit.yaw) * cp,
+        Math.sin(orbit.pitch),
+        Math.cos(orbit.yaw) * cp
+      ).normalize();
+      orbit.target.addScaledVector(fwd, -Math.sign(e.deltaY) * 0.45);
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (!enabled) return;
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return;
@@ -310,63 +380,65 @@ const UnrealCameraNavigation: React.FC<{
 
     const onBlur = () => {
       keysDown.current.clear();
+      dragging = false;
     };
 
+    canvas.addEventListener('contextmenu', onContextMenu);
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointerup', onPointerUp);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
 
     return () => {
+      canvas.removeEventListener('contextmenu', onContextMenu);
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointerup', onPointerUp);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('wheel', onWheel);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
       keysDown.current.clear();
     };
-  }, [enabled]);
-
-  // Prevent browser context menu on right click inside viewport
-  useEffect(() => {
-    const dom = gl.domElement;
-    const preventContext = (e: MouseEvent) => e.preventDefault();
-    dom.addEventListener('contextmenu', preventContext);
-    return () => {
-      dom.removeEventListener('contextmenu', preventContext);
-    };
-  }, [gl]);
+  }, [enabled, gl]);
 
   useFrame((_, delta) => {
-    if (!enabled || keysDown.current.size === 0) return;
+    const orbit = orbitRef.current;
 
-    const isShift = keysDown.current.has('shift');
-    const moveSpeed = (isShift ? 14.0 : 5.5) * delta;
+    if (enabled && keysDown.current.size > 0) {
+      const isShift = keysDown.current.has('shift');
+      const moveSpeed = (isShift ? 9.0 : 3.8) * delta;
 
-    // Camera 3D Forward look direction
-    const fwd = new THREE.Vector3();
-    camera.getWorldDirection(fwd);
+      const cp = Math.cos(orbit.pitch);
+      const fwd = new THREE.Vector3(
+        Math.sin(orbit.yaw) * cp,
+        Math.sin(orbit.pitch),
+        Math.cos(orbit.yaw) * cp
+      ).normalize();
+      const rgt = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+      const up = new THREE.Vector3(0, 1, 0);
 
-    // Camera Right direction on horizontal plane
-    const rgt = new THREE.Vector3();
-    rgt.crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
-
-    // World Up direction
-    const up = new THREE.Vector3(0, 1, 0);
-
-    const moveDelta = new THREE.Vector3();
-
-    if (keysDown.current.has('w')) moveDelta.addScaledVector(fwd, moveSpeed);
-    if (keysDown.current.has('s')) moveDelta.addScaledVector(fwd, -moveSpeed);
-    if (keysDown.current.has('d')) moveDelta.addScaledVector(rgt, moveSpeed);
-    if (keysDown.current.has('a')) moveDelta.addScaledVector(rgt, -moveSpeed);
-    if (keysDown.current.has('e')) moveDelta.addScaledVector(up, moveSpeed);
-    if (keysDown.current.has('q')) moveDelta.addScaledVector(up, -moveSpeed);
-
-    if (moveDelta.lengthSq() > 0) {
-      camera.position.add(moveDelta);
-      if (controlsRef.current && controlsRef.current.target) {
-        controlsRef.current.target.add(moveDelta);
-        controlsRef.current.update();
-      }
+      if (keysDown.current.has('w')) orbit.target.addScaledVector(fwd, moveSpeed);
+      if (keysDown.current.has('s')) orbit.target.addScaledVector(fwd, -moveSpeed);
+      if (keysDown.current.has('d')) orbit.target.addScaledVector(rgt, moveSpeed);
+      if (keysDown.current.has('a')) orbit.target.addScaledVector(rgt, -moveSpeed);
+      if (keysDown.current.has('e')) orbit.target.addScaledVector(up, moveSpeed);
+      if (keysDown.current.has('q')) orbit.target.addScaledVector(up, -moveSpeed);
     }
+
+    // Apply exact camera position and orientation around eye
+    const cp = Math.cos(orbit.pitch);
+    const dir = new THREE.Vector3(
+      Math.sin(orbit.yaw) * cp,
+      Math.sin(orbit.pitch),
+      Math.cos(orbit.yaw) * cp
+    );
+    camera.position.copy(orbit.target).addScaledVector(dir, orbit.dist);
+    camera.lookAt(orbit.target.clone().addScaledVector(dir, orbit.dist + 1));
+    camera.updateMatrixWorld(true);
   });
 
   return null;
@@ -386,7 +458,6 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   onUpdateAssetTransform,
   showGrid = true,
 }) => {
-  const controlsRef = useRef<any>(null);
   const [isTransformDragging, setIsTransformDragging] = useState(false);
 
   return (
@@ -500,19 +571,8 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           )}
         </Suspense>
 
-        {/* 60 FPS Continuous Unreal Engine Keyboard & Mouse Flight Controller */}
-        <UnrealCameraNavigation controlsRef={controlsRef} enabled={!isTransformDragging} />
-
-        <OrbitControls
-          ref={controlsRef}
-          makeDefault
-          enabled={!isTransformDragging}
-          enableDamping
-          dampingFactor={0.06}
-          maxPolarAngle={Math.PI / 2 + 0.15}
-          minDistance={0.1}
-          maxDistance={300}
-        />
+        {/* 60 FPS Continuous Unreal Engine Keyboard & Mouse Flight Controller (Exact RoomBake Camera) */}
+        <UnrealCameraNavigation enabled={!isTransformDragging} />
       </Canvas>
     </div>
   );
