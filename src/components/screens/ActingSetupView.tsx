@@ -67,6 +67,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   const [speedMultiplier, setSpeedMultiplier] = useState<number>(1.0);
   const [trajectoryMode, setTrajectoryMode] = useState<'straight' | 'arc' | 'circle' | 'inplace'>('straight');
   const [showTrajectories, setShowTrajectories] = useState<boolean>(true);
+  const [renderMode, setRenderMode] = useState<'mesh' | 'skeleton' | 'hybrid'>('mesh');
   const [showViserEmbed, setShowViserEmbed] = useState<boolean>(false);
 
   // Timeline playback state
@@ -285,7 +286,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
           <ThreeStage
             assets={assets}
             selectedAssetId={null}
-            characters={characters}
+            characters={characters.map((c) => ({ ...c, renderMode }))}
             selectedActorId={selectedActorId}
             transformMode={transformMode}
             onSelectActor={(id) => setSelectedActorId(id || '')}
@@ -379,6 +380,39 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
               >
                 <span className="material-symbols-outlined text-[18px]">aspect_ratio</span>
               </button>
+
+              <div className="h-4 w-[1px] bg-outline-variant/40 mx-xs" />
+
+              {/* SOMA Display Mode Switcher (Mesh / Skeleton / Hybrid) */}
+              <div className="flex items-center gap-[2px] bg-surface-container-low p-[2px] rounded-lg">
+                <button
+                  onClick={() => setRenderMode('mesh')}
+                  title="SOMA Anatomical Human Body Mesh"
+                  className={`px-xs py-[2px] text-[10px] font-label-caps rounded cursor-pointer ${
+                    renderMode === 'mesh' ? 'bg-primary text-background font-semibold' : 'text-on-surface-variant hover:text-primary'
+                  }`}
+                >
+                  MESH
+                </button>
+                <button
+                  onClick={() => setRenderMode('skeleton')}
+                  title="SOMA 24-Joint Biomechanical Skeleton Rig"
+                  className={`px-xs py-[2px] text-[10px] font-label-caps rounded cursor-pointer ${
+                    renderMode === 'skeleton' ? 'bg-primary text-background font-semibold' : 'text-on-surface-variant hover:text-primary'
+                  }`}
+                >
+                  SKEL
+                </button>
+                <button
+                  onClick={() => setRenderMode('hybrid')}
+                  title="SOMA X-Ray Translucent Mesh + Skeleton"
+                  className={`px-xs py-[2px] text-[10px] font-label-caps rounded cursor-pointer ${
+                    renderMode === 'hybrid' ? 'bg-primary text-background font-semibold' : 'text-on-surface-variant hover:text-primary'
+                  }`}
+                >
+                  HYBRID
+                </button>
+              </div>
 
               <div className="h-4 w-[1px] bg-outline-variant/40 mx-xs" />
 

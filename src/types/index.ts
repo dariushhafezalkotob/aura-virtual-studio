@@ -47,6 +47,7 @@ export interface CharacterActor {
   duration?: number;
   trajectory?: [number, number, number][];
   color?: string;
+  renderMode?: 'mesh' | 'skeleton' | 'hybrid';
   visible?: boolean;
 }
 
