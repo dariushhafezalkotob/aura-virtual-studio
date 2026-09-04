@@ -293,14 +293,38 @@ function apiMiddlewarePlugin(): Plugin {
                 ]);
 
                 const data = hyResult.data as any[];
-                for (let i = data.length - 1; i >= 0; i--) {
-                  const resolved = resolveMediaUrl(data[i]);
-                  if (resolved && !resolved.endsWith('.mp4') && (resolved.endsWith('.glb') || resolved.includes('.glb'))) {
-                    glbUrl = resolved;
-                    break;
+                try {
+                  const exportRes = await hyClient.predict('/on_export_click', [
+                    data[0],
+                    data[1],
+                    'glb',
+                    false,
+                    true,
+                    50000
+                  ]);
+                  const exportData = exportRes.data as any[];
+                  for (let i = exportData.length - 1; i >= 0; i--) {
+                    const resolved = resolveMediaUrl(exportData[i]);
+                    if (resolved && (resolved.endsWith('.glb') || resolved.includes('.glb'))) {
+                      glbUrl = resolved;
+                      break;
+                    }
                   }
+                  if (!glbUrl) glbUrl = resolveMediaUrl(exportData[1]) || resolveMediaUrl(exportData[0]);
+                } catch (expErr) {
+                  console.warn('[Pipeline Step 2] on_export_click texture baking error:', expErr);
                 }
-                if (!glbUrl) glbUrl = resolveMediaUrl(data[1]) || resolveMediaUrl(data[0]);
+
+                if (!glbUrl) {
+                  for (let i = data.length - 1; i >= 0; i--) {
+                    const resolved = resolveMediaUrl(data[i]);
+                    if (resolved && !resolved.endsWith('.mp4') && (resolved.endsWith('.glb') || resolved.includes('.glb'))) {
+                      glbUrl = resolved;
+                      break;
+                    }
+                  }
+                  if (!glbUrl) glbUrl = resolveMediaUrl(data[1]) || resolveMediaUrl(data[0]);
+                }
               } catch (hyErr) {
                 console.warn('[Pipeline Step 2] Hunyuan3D multi-view fallback to TRELLIS:', hyErr);
                 const trellis = await getTrellisClient();
@@ -538,15 +562,44 @@ function apiMiddlewarePlugin(): Plugin {
 
                 const data = result.data as any[];
                 let glbUrl = '';
-                for (let i = data.length - 1; i >= 0; i--) {
-                  const resolved = resolveMediaUrl(data[i]);
-                  if (resolved && !resolved.endsWith('.mp4') && (resolved.endsWith('.glb') || resolved.includes('.glb'))) {
-                    glbUrl = resolved;
-                    break;
-                  }
-                }
-                if (!glbUrl) glbUrl = resolveMediaUrl(data[1]) || resolveMediaUrl(data[0]);
 
+                // Step 2 for Hunyuan3D: Call /on_export_click with export_texture: true to bake textures into GLB
+                try {
+                  console.log('[Hunyuan3D] Calling /on_export_click with export_texture: true to generate fully textured GLB...');
+                  const exportRes = await client.predict('/on_export_click', [
+                    data[0], // file_out (geometry)
+                    data[1], // file_out2 (texture data)
+                    'glb',   // file_type
+                    false,   // reduce_face
+                    true,    // export_texture: TRUE
+                    50000    // target_face_num
+                  ]);
+                  const exportData = exportRes.data as any[];
+                  console.log('[Hunyuan3D] Export result data:', exportData);
+                  for (let i = exportData.length - 1; i >= 0; i--) {
+                    const resolved = resolveMediaUrl(exportData[i]);
+                    if (resolved && (resolved.endsWith('.glb') || resolved.includes('.glb'))) {
+                      glbUrl = resolved;
+                      break;
+                    }
+                  }
+                  if (!glbUrl) glbUrl = resolveMediaUrl(exportData[1]) || resolveMediaUrl(exportData[0]);
+                } catch (exportErr) {
+                  console.warn('[Hunyuan3D] on_export_click texture baking error, falling back:', exportErr);
+                }
+
+                if (!glbUrl) {
+                  for (let i = data.length - 1; i >= 0; i--) {
+                    const resolved = resolveMediaUrl(data[i]);
+                    if (resolved && !resolved.endsWith('.mp4') && (resolved.endsWith('.glb') || resolved.includes('.glb'))) {
+                      glbUrl = resolved;
+                      break;
+                    }
+                  }
+                  if (!glbUrl) glbUrl = resolveMediaUrl(data[1]) || resolveMediaUrl(data[0]);
+                }
+
+                console.log('[Hunyuan3D] Final Textured Model URL:', glbUrl);
                 res.setHeader('Content-Type', 'application/json');
                 res.end(JSON.stringify({ success: true, glbUrl, engine: 'hunyuan3d' }));
                 return;
