@@ -1042,7 +1042,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
 
       {/* Reference Image Picker & AI Generator Modal */}
       {showImagePicker && (
-        <div className="absolute bottom-[130px] left-1/2 -translate-x-1/2 w-full max-w-2xl bg-surface-container border border-outline-variant/60 p-lg shadow-2xl rounded-2xl z-40 backdrop-blur-xl animate-fade-in flex flex-col gap-md max-h-[80vh] overflow-y-auto">
+        <div className="absolute bottom-[120px] left-1/2 -translate-x-1/2 w-full max-w-3xl bg-surface-container border border-outline-variant/60 p-lg shadow-2xl rounded-2xl z-40 backdrop-blur-xl animate-fade-in flex flex-col gap-md max-h-[85vh] overflow-y-auto">
           <div className="flex justify-between items-center pb-xs border-b border-outline-variant/30">
             <span className="font-label-caps text-[11px] text-primary tracking-widest uppercase font-bold flex items-center gap-xs">
               <span className="material-symbols-outlined text-[16px]">add_photo_alternate</span>
@@ -1056,39 +1056,68 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             </button>
           </div>
 
-          {/* 1. AI Image Generator Input & Button */}
-          <div className="bg-surface-container-low p-sm rounded-xl border border-outline-variant/40 flex flex-col gap-xs shadow-inner">
-            <div className="flex items-center gap-xs text-[11px] font-label-caps text-primary font-bold">
-              <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
-              GENERATE REFERENCE IMAGE WITH AI
+          {/* 1. AI Image Generator Input & Button (Spacious Multi-line Textarea) */}
+          <div className="bg-surface-container-low p-md rounded-xl border border-outline-variant/40 flex flex-col gap-sm shadow-inner">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-xs text-[11px] font-label-caps text-primary font-bold">
+                <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
+                GENERATE REFERENCE IMAGE WITH AI
+              </div>
+              <span className="text-[10px] text-on-surface-variant font-mono">
+                Press Enter to generate · Shift+Enter for newline
+              </span>
             </div>
-            <div className="flex items-center gap-xs">
-              <input
-                type="text"
-                value={aiImagePrompt}
-                onChange={(e) => setAiImagePrompt(e.target.value)}
-                placeholder="Describe prop to generate (e.g., 'medieval treasure chest', 'sci-fi robot drone', 'retro vintage chair')..."
-                className="flex-1 bg-surface-container border border-outline-variant/50 px-sm py-xs text-xs text-on-surface placeholder:text-on-surface-variant/50 rounded-lg focus:outline-none focus:border-primary font-sans"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    handleGenerateImage();
-                  }
-                }}
-              />
+
+            <textarea
+              value={aiImagePrompt}
+              onChange={(e) => setAiImagePrompt(e.target.value)}
+              placeholder="Describe your desired 3D prop in detail (e.g. 'An ornate medieval treasure chest with bronze engravings, heavy iron padlock, weathered dark oak wood, isolated on neutral studio white background, photorealistic 8k octane render')..."
+              rows={3}
+              className="w-full bg-surface-container border border-outline-variant/50 p-sm text-xs text-on-surface placeholder:text-on-surface-variant/40 rounded-xl focus:outline-none focus:border-primary font-sans resize-none leading-relaxed shadow-sm transition-colors"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleGenerateImage();
+                }
+              }}
+            />
+
+            <div className="flex flex-wrap items-center justify-between gap-sm pt-xs">
+              {/* Quick style inspiration tags */}
+              <div className="flex items-center gap-xs flex-wrap">
+                <span className="text-[10px] font-label-caps text-on-surface-variant/70 mr-1">Quick Ideas:</span>
+                {[
+                  'Vintage Wooden Chair',
+                  'Sci-Fi Robot Drone',
+                  'Medieval Chest',
+                  'Cyberpunk Terminal',
+                  'Crystal Lantern',
+                  'Ancient Stone Idol'
+                ].map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => setAiImagePrompt(tag)}
+                    className="text-[10px] font-label-caps bg-surface-container hover:bg-surface-container-high text-on-surface-variant hover:text-primary px-sm py-[2px] rounded-full border border-outline-variant/30 transition-colors cursor-pointer"
+                  >
+                    + {tag}
+                  </button>
+                ))}
+              </div>
+
               <button
                 onClick={handleGenerateImage}
                 disabled={isGeneratingAiImage || !aiImagePrompt.trim()}
-                className="bg-primary hover:bg-primary/90 text-surface-container-lowest font-label-caps text-[11px] font-bold px-md py-xs rounded-lg transition-all flex items-center gap-xs cursor-pointer disabled:opacity-50 shrink-0 shadow-sm"
+                className="bg-primary hover:bg-primary/90 text-surface-container-lowest font-label-caps text-[12px] font-bold px-lg py-sm rounded-xl transition-all flex items-center gap-xs cursor-pointer disabled:opacity-50 shrink-0 shadow-md ml-auto"
               >
                 {isGeneratingAiImage ? (
                   <>
-                    <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
-                    GENERATING...
+                    <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+                    GENERATING REFERENCE IMAGE...
                   </>
                 ) : (
                   <>
-                    <span className="material-symbols-outlined text-[14px]">brush</span>
+                    <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
                     GENERATE IMAGE
                   </>
                 )}
