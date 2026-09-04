@@ -695,20 +695,65 @@ function apiMiddlewarePlugin(): Plugin {
           return;
         }
 
-        // 5. Character Animation Generation (Kimodo / SOMA-X)
+        // 5. Character Animation Generation (NVIDIA Kimodo / SOMA Neural Motion Diffusion)
         if (req.url?.startsWith('/api/generate-motion') && req.method === 'POST') {
           let body = '';
           req.on('data', (chunk) => { body += chunk; });
           req.on('end', async () => {
             try {
               const params = JSON.parse(body);
-              const client = await getKimodoClient();
-              const result = await client.predict('/predict', [params.prompt]);
-              const data = result.data as any[];
-              const bvhUrl = typeof data[0] === 'string' ? data[0] : data[0]?.url;
+              const prompt = (params.prompt || '').trim();
+              if (!prompt) throw new Error('Prompt is required for Kimodo motion generation.');
+
+              const token = (req.headers['x-hf-token'] as string) || params.hfToken || HF_TOKEN;
+              const headers: Record<string, string> = {
+                'Content-Type': 'application/json',
+              };
+              if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+              }
+
+              console.log(`[API /api/generate-motion] Calling Kimodo Stage on ZeroGPU (${KIMODO_SPACE}/api/generate-motion) for prompt: "${prompt}"...`);
+
+              // Call Kimodo FastAPI endpoint on Hugging Face Spaces
+              let resp = await fetch(`${KIMODO_SPACE}/api/generate-motion`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  prompt,
+                  duration: params.duration || params.durationSeconds || 4.0,
+                  seed: params.seed,
+                  diffusion_steps: params.diffusion_steps || 50,
+                  bvh_standard_tpose: true,
+                }),
+              });
+
+              // Fallback to /generate_motion if /api/generate-motion returns 404
+              if (!resp.ok && resp.status === 404) {
+                console.log('[API /api/generate-motion] Retrying with /generate_motion fallback...');
+                resp = await fetch(`${KIMODO_SPACE}/generate_motion`, {
+                  method: 'POST',
+                  headers,
+                  body: JSON.stringify({
+                    prompt,
+                    duration: params.duration || params.durationSeconds || 4.0,
+                    seed: params.seed,
+                    diffusion_steps: params.diffusion_steps || 50,
+                    bvh_standard_tpose: true,
+                  }),
+                });
+              }
+
+              if (!resp.ok) {
+                const errText = await resp.text();
+                throw new Error(`Kimodo Space HTTP ${resp.status}: ${errText || resp.statusText}`);
+              }
+
+              const result = await resp.json();
+              console.log(`[API /api/generate-motion] Kimodo generated ${result.num_frames || 0} frames at ${result.fps || 30} FPS!`);
 
               res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ success: true, bvhUrl, animationName: params.prompt }));
+              res.end(JSON.stringify(result));
             } catch (err: any) {
               console.error('[API /api/generate-motion] Error:', err);
               res.statusCode = 500;

@@ -1,3 +1,5 @@
+import { MotionData } from '../types';
+
 export interface MotionGenerationParams {
   prompt: string;
   durationSeconds?: number;
@@ -181,10 +183,12 @@ export class KimodoService {
     onStatus?: (statusText: string) => void
   ): Promise<{
     bvhUrl?: string;
+    bvhString?: string;
     animationName: string;
     duration: number;
     trajectory: [number, number, number][];
     trajectoryMode: 'straight' | 'arc' | 'circle' | 'inplace';
+    motionData?: MotionData;
   }> {
     const prompt = params.prompt.trim();
     const duration = params.durationSeconds || 4.0;
@@ -206,7 +210,7 @@ export class KimodoService {
     const trajectory = this.generateTrajectory(trajectoryMode, duration, startPos, params.speed || 1.0);
 
     try {
-      if (onStatus) onStatus('Synthesizing motion with NVIDIA Kimodo Stage...');
+      if (onStatus) onStatus('Synthesizing neural motion diffusion with NVIDIA Kimodo Stage...');
 
       const response = await fetch('/api/generate-motion', {
         method: 'POST',
@@ -218,31 +222,63 @@ export class KimodoService {
           duration: duration,
           actorId: params.actorId,
           seed: params.seed,
+          diffusion_steps: 50,
           trajectoryMode,
         }),
       });
 
       if (response.ok) {
         const result = await response.json();
-        if (onStatus) onStatus('Kimodo motion generated successfully');
+        let bvhUrl = result.bvhUrl;
+        if (!bvhUrl && result.bvh) {
+          const blob = new Blob([result.bvh], { type: 'text/plain' });
+          bvhUrl = URL.createObjectURL(blob);
+        }
+
+        let motionData: MotionData | undefined = undefined;
+        let finalTrajectory = trajectory;
+
+        // Check if real Kimodo frame data is present
+        if (result.rotations && Array.isArray(result.rotations) && result.rotations.length > 0) {
+          const rootPts: [number, number, number][] = (result.root || []).map((r: number[]) => [
+            (r[0] || 0) + startPos[0],
+            (r[1] || 0) + startPos[1],
+            (r[2] || 0) + startPos[2],
+          ]);
+
+          motionData = {
+            fps: result.fps || 30,
+            duration: result.duration || duration,
+            num_frames: result.num_frames || result.rotations.length,
+            root: result.root || [],
+            rotations: result.rotations,
+            trajectory: rootPts.length > 0 ? rootPts : trajectory,
+            bvh: result.bvh,
+            prompt,
+          };
+
+          if (rootPts.length >= 2) {
+            finalTrajectory = rootPts;
+          }
+        }
+
+        if (onStatus) onStatus('✓ NVIDIA Kimodo neural motion diffusion received successfully!');
         return {
-          bvhUrl: result.bvhUrl,
+          bvhUrl,
+          bvhString: result.bvh,
           animationName: result.animationName || prompt,
-          duration,
-          trajectory,
+          duration: result.duration || duration,
+          trajectory: finalTrajectory,
           trajectoryMode,
+          motionData,
         };
+      } else {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.error || errJson.detail || `Kimodo server returned ${response.status}`);
       }
     } catch (err: any) {
-      console.warn('Kimodo remote call note:', err);
+      console.warn('Kimodo generation error:', err);
+      throw err;
     }
-
-    if (onStatus) onStatus('Animation motion synthesized successfully');
-    return {
-      animationName: prompt,
-      duration,
-      trajectory,
-      trajectoryMode,
-    };
   }
 }

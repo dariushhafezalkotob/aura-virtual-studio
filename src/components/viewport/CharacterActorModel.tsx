@@ -250,177 +250,87 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     }
   }, [position[0], position[1], position[2], rotation[0], rotation[1], rotation[2], scale[0], scale[1], scale[2]]);
 
-  // Trajectory Spline Curve
-  const trajectoryCurve = useMemo(() => {
-    if (trajectory.length < 2) return null;
-    const pts = trajectory.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
-    return new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.2);
-  }, [trajectory]);
-
   // Real-time Kinematic Animation Engine driving the SOMA 77-Bone Skeleton
   useFrame(() => {
-    const tTotal = Math.max(0.1, duration);
-    const progress = (currentTimelineTime % tTotal) / tTotal;
-    const animName = (actor.currentAnimation || actor.motionPrompt || '').toLowerCase();
     const bones = bonesRef.current;
     const restQuats = restQuatsRef.current;
+    if (bones.length < 77 || restQuats.length < 77) return;
 
-    // 1. Root Trajectory Translation & Heading
-    if (bodyGroupRef.current && trajectoryCurve && trajectory.length >= 2) {
-      const posOnCurve = trajectoryCurve.getPointAt(progress);
-      const tangent = trajectoryCurve.getTangentAt(progress).normalize();
+    // =========================================================================
+    // 1. TRUE NVIDIA KIMODO NEURAL DIFFUSION MOTION PLAYBACK
+    // =========================================================================
+    if (actor.motionData && actor.motionData.rotations && actor.motionData.rotations.length > 0) {
+      const mData = actor.motionData;
+      const tTotal = Math.max(0.1, mData.duration || duration || 4.0);
+      const progress = (currentTimelineTime % tTotal) / tTotal;
+      const numFrames = mData.num_frames || mData.rotations.length;
 
-      bodyGroupRef.current.position.set(
-        posOnCurve.x - position[0],
-        posOnCurve.y - position[1],
-        posOnCurve.z - position[2]
-      );
+      const exactFrame = progress * (numFrames - 1);
+      const frame0 = Math.floor(exactFrame);
+      const frame1 = Math.min(numFrames - 1, frame0 + 1);
+      const alpha = exactFrame - frame0;
 
-      if (tangent.lengthSq() > 0.001) {
-        const targetAngle = Math.atan2(-tangent.x, -tangent.z);
-        bodyGroupRef.current.rotation.y = targetAngle - rotation[1];
+      // A. Drive Root 3D Translation
+      if (mData.root && mData.root.length > 0 && bodyGroupRef.current) {
+        const r0 = mData.root[frame0] || [0, 0, 0];
+        const r1 = mData.root[frame1] || r0;
+
+        const rx = THREE.MathUtils.lerp(r0[0], r1[0], alpha);
+        const ry = THREE.MathUtils.lerp(r0[1], r1[1], alpha);
+        const rz = THREE.MathUtils.lerp(r0[2], r1[2], alpha);
+
+        bodyGroupRef.current.position.set(rx, ry, rz);
+        bodyGroupRef.current.rotation.set(0, 0, 0);
+      } else if (bodyGroupRef.current) {
+        bodyGroupRef.current.position.set(0, 0, 0);
+        bodyGroupRef.current.rotation.set(0, 0, 0);
       }
-    } else if (bodyGroupRef.current) {
+
+      // B. Drive 77 SOMA Bone Rotations with SLERP
+      const rots0 = mData.rotations[frame0];
+      const rots1 = mData.rotations[frame1];
+
+      const q0 = new THREE.Quaternion();
+      const q1 = new THREE.Quaternion();
+
+      if (rots0) {
+        for (let b = 0; b < Math.min(bones.length, rots0.length); b++) {
+          const raw0 = rots0[b];
+          const raw1 = rots1 ? rots1[b] : raw0;
+
+          if (raw0 && raw1) {
+            q0.set(raw0[0], raw0[1], raw0[2], raw0[3]);
+            q1.set(raw1[0], raw1[1], raw1[2], raw1[3]);
+            bones[b].quaternion.copy(q0).slerp(q1, alpha);
+          }
+        }
+      }
+      return;
+    }
+
+    // =========================================================================
+    // 2. DEFAULT NEUTRAL REST POSE WITH SUBTLE IDLE BREATHING (PRE-GENERATION)
+    // =========================================================================
+    if (bodyGroupRef.current) {
       bodyGroupRef.current.position.set(0, 0, 0);
       bodyGroupRef.current.rotation.set(0, 0, 0);
     }
-
-    if (bones.length < 77 || restQuats.length < 77) return;
-
-    // SOMA Key Bone Indices:
-    // 0: Hips, 1: Spine1, 2: Spine2, 3: Chest, 4: Neck1, 6: Head
-    // 11: LeftShoulder, 12: LeftArm, 13: LeftForeArm, 14: LeftHand
-    // 39: RightShoulder, 40: RightArm, 41: RightForeArm, 42: RightHand
-    // 67: LeftLeg (Thigh), 68: LeftShin (Knee), 69: LeftFoot (Ankle), 70: LeftToeBase
-    // 72: RightLeg (Thigh), 73: RightShin (Knee), 74: RightFoot (Ankle), 75: RightToeBase
-
-    const isWalking =
-      animName.includes('walk') ||
-      animName.includes('jog') ||
-      animName.includes('run') ||
-      animName.includes('patrol') ||
-      animName.includes('step');
-    const isWaving = animName.includes('wave') || animName.includes('greet');
-    const isLooking = animName.includes('look') || animName.includes('scan') || animName.includes('around');
-    const isMartial = animName.includes('martial') || animName.includes('kick') || animName.includes('punch');
-    const isDancing = animName.includes('dance') || animName.includes('groove');
-    const isTalking = animName.includes('talk') || animName.includes('explain') || animName.includes('gesture');
-
-    const strideRate = animName.includes('run') || animName.includes('jog') ? 8.5 : 5.0;
-    const stridePhase = currentTimelineTime * strideRate;
 
     // Reset bones to rest pose
     for (let i = 0; i < bones.length; i++) {
       bones[i].quaternion.copy(restQuats[i]);
     }
 
+    // Natural subtle chest breathing
+    const breath = Math.sin(currentTimelineTime * 2.0) * 0.015;
     const qDelta = new THREE.Quaternion();
+    qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), breath);
+    bones[3].quaternion.multiply(qDelta); // Chest
 
-    // A. Locomotion / Walking Stride
-    if (isWalking) {
-      const legSwing = Math.sin(stridePhase) * 0.65;
-      const hipBob = Math.abs(Math.sin(stridePhase * 2)) * 0.04;
-
-      // LeftLeg / RightLeg Thighs
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), legSwing);
-      bones[67].quaternion.multiply(qDelta);
-
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -legSwing);
-      bones[72].quaternion.multiply(qDelta);
-
-      // LeftShin / RightShin Knees
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.max(0, -legSwing * 1.0));
-      bones[68].quaternion.multiply(qDelta);
-
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.max(0, legSwing * 1.0));
-      bones[73].quaternion.multiply(qDelta);
-
-      // LeftFoot / RightFoot Ankles
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -legSwing * 0.35);
-      bones[69].quaternion.multiply(qDelta);
-
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), legSwing * 0.35);
-      bones[74].quaternion.multiply(qDelta);
-
-      // Arm Counter-Swings
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -legSwing * 0.7);
-      bones[12].quaternion.multiply(qDelta);
-
-      if (!isWaving) {
-        qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), legSwing * 0.7);
-        bones[40].quaternion.multiply(qDelta);
-      }
-
-      // Hips vertical bob and subtle spine twist
-      bones[0].position.y = (cachedSOMARigData?.localTransforms[0].pos.y || 1.0) + hipBob;
-      qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.sin(stridePhase) * 0.08);
-      bones[0].quaternion.multiply(qDelta);
-
-      qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.sin(stridePhase) * 0.05);
-      bones[3].quaternion.multiply(qDelta); // Chest
-    } else if (isDancing) {
-      const beat = currentTimelineTime * 5.0;
-      qDelta.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.sin(beat) * 0.15);
-      bones[0].quaternion.multiply(qDelta); // Hips sway
-
-      qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.cos(beat * 0.5) * 0.2);
-      bones[2].quaternion.multiply(qDelta); // Spine twist
-
-      qDelta.setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.5 + Math.sin(beat) * 0.35);
-      bones[12].quaternion.multiply(qDelta); // LeftArm
-
-      qDelta.setFromAxisAngle(new THREE.Vector3(0, 0, -1), 0.5 + Math.cos(beat) * 0.35);
-      bones[40].quaternion.multiply(qDelta); // RightArm
-
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.sin(beat) * 0.25);
-      bones[67].quaternion.multiply(qDelta);
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.sin(beat) * 0.25);
-      bones[72].quaternion.multiply(qDelta);
-    } else if (isMartial) {
-      const phase = (currentTimelineTime % 3.0) / 3.0;
-      if (phase < 0.4) {
-        const k = phase / 0.4;
-        qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI * 0.55 * Math.sin(k * Math.PI));
-        bones[72].quaternion.multiply(qDelta); // Right Leg Kick
-
-        qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.25);
-        bones[73].quaternion.multiply(qDelta); // Knee bend
-
-        qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.7);
-        bones[12].quaternion.multiply(qDelta);
-        bones[40].quaternion.multiply(qDelta);
-      }
-    } else {
-      // Natural Idle Breathing
-      const breath = Math.sin(currentTimelineTime * 2.2) * 0.02;
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), breath * 0.5);
-      bones[3].quaternion.multiply(qDelta); // Chest breath
-    }
-
-    // Gestures: Waving with Right Arm
-    if (isWaving) {
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -2.2);
-      bones[40].quaternion.multiply(qDelta); // RightArm high
-
-      qDelta.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.5 + Math.sin(currentTimelineTime * 8.5) * 0.4);
-      bones[41].quaternion.multiply(qDelta); // RightForeArm wave
-    } else if (isTalking) {
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.7 + Math.sin(currentTimelineTime * 3.5) * 0.2);
-      bones[12].quaternion.multiply(qDelta);
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.7 + Math.cos(currentTimelineTime * 3.5) * 0.2);
-      bones[40].quaternion.multiply(qDelta);
-    }
-
-    // Head Gaze & Look Around
-    if (isLooking) {
-      qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.sin(currentTimelineTime * 1.6) * 0.55);
-      bones[6].quaternion.multiply(qDelta);
-      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.sin(currentTimelineTime * 0.8) * 0.1);
-      bones[6].quaternion.multiply(qDelta);
-    } else {
-      qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.sin(currentTimelineTime * 0.8) * 0.08);
-      bones[6].quaternion.multiply(qDelta);
-    }
+    // Micro head shift
+    const headShift = Math.sin(currentTimelineTime * 0.8) * 0.03;
+    qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), headShift);
+    bones[6].quaternion.multiply(qDelta); // Head
   });
 
   const handleTransformEnd = () => {

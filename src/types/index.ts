@@ -33,6 +33,17 @@ export interface SceneAsset {
   createdAt: string;
 }
 
+export interface MotionData {
+  fps: number;
+  duration: number;
+  num_frames: number;
+  root: [number, number, number][];
+  rotations: [number, number, number, number][][]; // [frame][77_bones][qx, qy, qz, qw]
+  trajectory: [number, number, number][];
+  bvh?: string;
+  prompt?: string;
+}
+
 export interface CharacterActor {
   id: string;
   name: string;
@@ -46,6 +57,8 @@ export interface CharacterActor {
   motionPrompt?: string;
   duration?: number;
   trajectory?: [number, number, number][];
+  motionData?: MotionData;
+  bvhUrl?: string;
   color?: string;
   renderMode?: 'mesh' | 'skeleton' | 'hybrid';
   visible?: boolean;

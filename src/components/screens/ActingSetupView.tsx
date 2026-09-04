@@ -187,6 +187,8 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             currentAnimation: res.animationName,
             duration: res.duration,
             trajectory: res.trajectory,
+            motionData: res.motionData,
+            bvhUrl: res.bvhUrl,
           };
         }
         return c;
@@ -195,7 +197,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
       onUpdateProject({ ...currentProject, characters: updated });
       setIsPlaying(true);
       setTimelineSec(0);
-      setStatusText(`✓ Kimodo Motion applied to ${selectedActor.name}`);
+      setStatusText(`✓ True Kimodo Neural Motion applied to ${selectedActor.name}`);
       setTimeout(() => setStatusText(null), 4000);
     } catch (e: any) {
       alert(`Kimodo generation failed: ${e.message}`);
@@ -205,37 +207,56 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   };
 
   // Apply Quick Preset Motion
-  const handleApplyPreset = (preset: MotionPreset) => {
+  const handleApplyPreset = async (preset: MotionPreset) => {
     if (!selectedActor) return;
     setMotionPrompt(preset.prompt);
     setDurationSec(preset.defaultDuration);
     setTrajectoryMode(preset.trajectoryMode);
 
-    const traj = KimodoService.generateTrajectory(
-      preset.trajectoryMode,
-      preset.defaultDuration,
-      selectedActor.position,
-      speedMultiplier
-    );
+    setIsGenerating(true);
+    setStatusText(`Synthesizing real Kimodo neural motion for: "${preset.name}"...`);
 
-    const updated = characters.map((c) => {
-      if (c.id === selectedActor.id) {
-        return {
-          ...c,
-          motionPrompt: preset.prompt,
-          currentAnimation: preset.name,
-          duration: preset.defaultDuration,
-          trajectory: traj,
-        };
-      }
-      return c;
-    });
+    try {
+      const res = await KimodoService.generateMotion(
+        {
+          prompt: preset.prompt,
+          durationSeconds: preset.defaultDuration,
+          actorId: selectedActor.id,
+          trajectoryMode: preset.trajectoryMode,
+          speed: speedMultiplier,
+          startPosition: selectedActor.position,
+        },
+        (s) => setStatusText(s)
+      );
 
-    onUpdateProject({ ...currentProject, characters: updated });
-    setIsPlaying(true);
-    setTimelineSec(0);
-    setStatusText(`Applied preset: ${preset.name}`);
-    setTimeout(() => setStatusText(null), 3000);
+      const updated = characters.map((c) => {
+        if (c.id === selectedActor.id) {
+          return {
+            ...c,
+            motionPrompt: preset.prompt,
+            currentAnimation: preset.name,
+            duration: res.duration,
+            trajectory: res.trajectory,
+            motionData: res.motionData,
+            bvhUrl: res.bvhUrl,
+          };
+        }
+        return c;
+      });
+
+      onUpdateProject({ ...currentProject, characters: updated });
+      setIsPlaying(true);
+      setTimelineSec(0);
+      setStatusText(`✓ True Kimodo Neural Motion "${preset.name}" applied to ${selectedActor.name}`);
+      setTimeout(() => setStatusText(null), 3000);
+    } catch (e: any) {
+      console.warn('Kimodo preset generation note:', e);
+      // Even if remote generation encounters an issue, update prompt & duration
+      setStatusText(`Prompt set to: ${preset.name}`);
+      setTimeout(() => setStatusText(null), 3000);
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   // Add New Actor to Scene
@@ -427,6 +448,13 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
                 PATH
               </button>
 
+              {selectedActor?.motionData && (
+                <div className="flex items-center gap-1 bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 px-sm py-[2px] rounded-lg text-[10px] font-label-caps tracking-wider font-semibold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  KIMODO DIFFUSION ({selectedActor.motionData.num_frames}F @ {selectedActor.motionData.fps}FPS)
+                </div>
+              )}
+
               {characters.length > 1 && (
                 <button
                   onClick={() => handleDeleteActor(selectedActorId)}
@@ -559,6 +587,19 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             </span>
             {isGenerating ? 'KIMODO GENERATING...' : 'GENERATE MOTION'}
           </button>
+
+          {/* BVH Motion Capture Download Button */}
+          {selectedActor?.bvhUrl && (
+            <a
+              href={selectedActor.bvhUrl}
+              download={`${selectedActor.name.replace(/\s+/g, '_')}_motion.bvh`}
+              title="Download BVH Motion Capture"
+              className="bg-surface-container border border-primary/40 hover:bg-primary hover:text-background text-primary px-md py-sm rounded-xl font-label-caps text-xs tracking-wider transition-all flex items-center gap-xs cursor-pointer shadow-md"
+            >
+              <span className="material-symbols-outlined text-[16px]">download</span>
+              BVH EXPORT
+            </a>
+          )}
         </div>
 
         {/* Row 2: Inspiration Prompt Pills */}
