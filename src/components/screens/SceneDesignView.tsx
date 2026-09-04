@@ -440,6 +440,19 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     }
   };
 
+  const handleAcceptAndSendToHunyuan = () => {
+    if (!generatedPreviewImage) return;
+    const imgUrl = generatedPreviewImage;
+    const pText = generatedPreviewPrompt || aiImagePrompt;
+    setSelectedEngine('hunyuan3d');
+    setSelectedImageUrl(imgUrl);
+    setSelectedImageFile(null);
+    setPrompt(pText);
+    setShowImagePicker(false);
+    setGeneratedPreviewImage(null);
+    executeGenerate3D({ url: imgUrl }, 'hunyuan3d', pText);
+  };
+
   const handleAcceptAndSendToTrellis = () => {
     if (!generatedPreviewImage) return;
     const imgUrl = generatedPreviewImage;
@@ -1146,14 +1159,25 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                   </p>
                 </div>
                 <div className="flex flex-col gap-xs pt-xs border-t border-outline-variant/20">
-                  <button
-                    onClick={handleAcceptAndSendToTrellis}
-                    className="bg-primary hover:bg-primary/90 text-surface-container-lowest font-label-caps text-xs font-bold py-2.5 px-md rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow-lg hover:scale-[1.01]"
-                  >
-                    <span className="material-symbols-outlined text-[18px]">rocket_launch</span>
-                    ✓ ACCEPT & SEND TO TRELLIS (GENERATE 3D)
-                  </button>
-                  <div className="flex gap-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-xs">
+                    <button
+                      onClick={handleAcceptAndSendToHunyuan}
+                      className="bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-label-caps text-xs font-bold py-2.5 px-sm rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow-lg hover:scale-[1.01]"
+                      title="Generate high-resolution 3D Model with full PBR textures and colors"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">palette</span>
+                      ✓ SEND TO HUNYUAN (TEXTURED)
+                    </button>
+                    <button
+                      onClick={handleAcceptAndSendToTrellis}
+                      className="bg-primary hover:bg-primary/90 text-surface-container-lowest font-label-caps text-xs font-bold py-2.5 px-sm rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow-lg hover:scale-[1.01]"
+                      title="Generate fast structural 3D geometry mesh with Trellis"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">rocket_launch</span>
+                      ✓ SEND TO TRELLIS (FAST)
+                    </button>
+                  </div>
+                  <div className="flex gap-xs mt-1">
                     <button
                       onClick={handleAcceptReferenceOnly}
                       className="flex-1 text-on-surface hover:text-primary bg-surface-container hover:bg-surface-container-high border border-outline-variant/50 font-label-caps text-[10px] font-semibold py-1.5 px-sm rounded-lg transition-colors cursor-pointer text-center"
