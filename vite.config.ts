@@ -89,6 +89,23 @@ async function getPanoramaClient(forceFresh = false, token?: string) {
   return panoramaClient;
 }
 
+function normalizeGradioFileData(item: any): any {
+  if (!item) return null;
+  const path = item.path || item.value?.path || (typeof item === 'string' ? item : null);
+  const url = item.url || item.value?.url || null;
+  const orig_name = item.orig_name || item.value?.orig_name || (path ? path.split('/').pop() : 'mesh.glb');
+  const mime_type = item.mime_type || item.value?.mime_type || 'model/gltf-binary';
+  return {
+    path: path,
+    url: url,
+    orig_name: orig_name,
+    mime_type: mime_type,
+    meta: {
+      _type: 'gradio.FileData',
+    },
+  };
+}
+
 function resolveMediaUrl(item: any): string {
   if (!item) return '';
   if (typeof item === 'string') return item;
@@ -294,9 +311,11 @@ function apiMiddlewarePlugin(): Plugin {
 
                 const data = hyResult.data as any[];
                 try {
+                  const file1 = normalizeGradioFileData(data[0]);
+                  const file2 = normalizeGradioFileData(data[1]);
                   const exportRes = await hyClient.predict('/on_export_click', [
-                    data[0],
-                    data[1],
+                    file1,
+                    file2,
                     'glb',
                     false,
                     true,
@@ -565,14 +584,16 @@ function apiMiddlewarePlugin(): Plugin {
 
                 // Step 2 for Hunyuan3D: Call /on_export_click with export_texture: true to bake textures into GLB
                 try {
-                  console.log('[Hunyuan3D] Calling /on_export_click with export_texture: true to generate fully textured GLB...');
+                  console.log('[Hunyuan3D] Calling /on_export_click with normalized FileData & export_texture: true to generate fully textured GLB...');
+                  const file1 = normalizeGradioFileData(data[0]);
+                  const file2 = normalizeGradioFileData(data[1]);
                   const exportRes = await client.predict('/on_export_click', [
-                    data[0], // file_out (geometry)
-                    data[1], // file_out2 (texture data)
-                    'glb',   // file_type
-                    false,   // reduce_face
-                    true,    // export_texture: TRUE
-                    50000    // target_face_num
+                    file1, // file_out (geometry FileData)
+                    file2, // file_out2 (texture data FileData)
+                    'glb', // file_type
+                    false, // reduce_face
+                    true,  // export_texture: TRUE
+                    50000  // target_face_num
                   ]);
                   const exportData = exportRes.data as any[];
                   console.log('[Hunyuan3D] Export result data:', exportData);
