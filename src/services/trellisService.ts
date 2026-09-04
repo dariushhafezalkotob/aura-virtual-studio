@@ -43,8 +43,23 @@ export class TrellisService {
 
       if (params.imageFile) {
         imageBase64 = await this.fileToBase64(params.imageFile);
-      } else if (params.imageUrl && (params.imageUrl.startsWith('http://') || params.imageUrl.startsWith('https://'))) {
-        validRemoteUrl = params.imageUrl;
+      } else if (params.imageUrl) {
+        if (params.imageUrl.startsWith('data:')) {
+          imageBase64 = params.imageUrl;
+        } else if (params.imageUrl.startsWith('blob:')) {
+          try {
+            const blobRes = await fetch(params.imageUrl);
+            const blob = await blobRes.blob();
+            imageBase64 = await this.fileToBase64(blob);
+          } catch (bErr) {
+            console.warn('Failed to convert blob URL to base64:', bErr);
+            validRemoteUrl = params.imageUrl;
+          }
+        } else if (params.imageUrl.startsWith('http://') || params.imageUrl.startsWith('https://')) {
+          validRemoteUrl = params.imageUrl;
+        } else {
+          imageBase64 = params.imageUrl.includes('base64,') ? params.imageUrl : `data:image/png;base64,${params.imageUrl}`;
+        }
       }
 
       if (onProgress) {

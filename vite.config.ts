@@ -478,10 +478,11 @@ function apiMiddlewarePlugin(): Plugin {
               let fileToPass: any = null;
               const tmpDir = os.tmpdir();
 
-              if (params.imageBase64) {
-                const base64Data = params.imageBase64.includes(',')
-                  ? params.imageBase64.split(',')[1]
-                  : params.imageBase64;
+              if (params.imageBase64 || (params.imageUrl && params.imageUrl.startsWith('data:'))) {
+                const rawBase64 = params.imageBase64 || params.imageUrl;
+                const base64Data = rawBase64.includes(',')
+                  ? rawBase64.split(',')[1]
+                  : rawBase64;
                 const buf = Buffer.from(base64Data, 'base64');
                 const tmpPath = path.join(tmpDir, `3d_upload_${Date.now()}.png`);
                 fs.writeFileSync(tmpPath, buf);
