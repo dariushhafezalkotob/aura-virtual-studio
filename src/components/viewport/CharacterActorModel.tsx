@@ -2,7 +2,6 @@ import React, { useRef, useMemo, useEffect, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { TransformControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { CharacterActor } from '../../types';
 import { TransformMode } from './ThreeStage';
 
@@ -23,85 +22,73 @@ interface CharacterActorModelProps {
   ) => void;
 }
 
-// ---------------------------------------------------------------------------
-// SOMA / SMPL Humanoid Skeleton Definition (24 Anatomical Biomechanical Joints)
-// ---------------------------------------------------------------------------
-interface SOMAJointDef {
-  name: string;
-  pos: THREE.Vector3;
-  radius: number;
-  parent: number;
-  isEndEffector?: boolean;
+interface SOMARigCache {
+  geometry: THREE.BufferGeometry;
+  jointNames: string[];
+  jointConnections: [number, number][];
+  localTransforms: { pos: THREE.Vector3; quat: THREE.Quaternion; scl: THREE.Vector3 }[];
 }
 
-// SOMA Joint T-Pose Coordinates in Mesh Space (centered at pelvis root)
-const SOMA_JOINTS_DEF: SOMAJointDef[] = [
-  { name: 'Pelvis', pos: new THREE.Vector3(0, 0, 0), radius: 0.18, parent: -1 },
-  { name: 'Spine1', pos: new THREE.Vector3(0, 0.13, -0.01), radius: 0.16, parent: 0 },
-  { name: 'Spine2', pos: new THREE.Vector3(0, 0.27, 0), radius: 0.18, parent: 1 },
-  { name: 'Spine3', pos: new THREE.Vector3(0, 0.41, 0.02), radius: 0.20, parent: 2 },
-  { name: 'Neck', pos: new THREE.Vector3(0, 0.53, 0.01), radius: 0.10, parent: 3 },
-  { name: 'Head', pos: new THREE.Vector3(0, 0.65, 0.04), radius: 0.15, parent: 4, isEndEffector: true },
-  
-  { name: 'L_Collar', pos: new THREE.Vector3(-0.08, 0.43, 0.01), radius: 0.12, parent: 3 },
-  { name: 'L_Shoulder', pos: new THREE.Vector3(-0.20, 0.41, 0), radius: 0.14, parent: 6 },
-  { name: 'L_Elbow', pos: new THREE.Vector3(-0.46, 0.41, 0), radius: 0.12, parent: 7 },
-  { name: 'L_Wrist', pos: new THREE.Vector3(-0.70, 0.41, 0), radius: 0.09, parent: 8 },
-  { name: 'L_Hand', pos: new THREE.Vector3(-0.80, 0.41, 0), radius: 0.08, parent: 9, isEndEffector: true },
+let cachedSOMARigData: SOMARigCache | null = null;
+let rigLoadPromise: Promise<SOMARigCache> | null = null;
 
-  { name: 'R_Collar', pos: new THREE.Vector3(0.08, 0.43, 0.01), radius: 0.12, parent: 3 },
-  { name: 'R_Shoulder', pos: new THREE.Vector3(0.20, 0.41, 0), radius: 0.14, parent: 11 },
-  { name: 'R_Elbow', pos: new THREE.Vector3(0.46, 0.41, 0), radius: 0.12, parent: 12 },
-  { name: 'R_Wrist', pos: new THREE.Vector3(0.70, 0.41, 0), radius: 0.09, parent: 13 },
-  { name: 'R_Hand', pos: new THREE.Vector3(0.80, 0.41, 0), radius: 0.08, parent: 14, isEndEffector: true },
+async function loadOfficialSOMARig(): Promise<SOMARigCache> {
+  if (cachedSOMARigData) return cachedSOMARigData;
+  if (rigLoadPromise) return rigLoadPromise;
 
-  { name: 'L_Hip', pos: new THREE.Vector3(-0.10, -0.07, 0), radius: 0.16, parent: 0 },
-  { name: 'L_Knee', pos: new THREE.Vector3(-0.10, -0.49, 0.01), radius: 0.14, parent: 16 },
-  { name: 'L_Ankle', pos: new THREE.Vector3(-0.10, -0.87, -0.02), radius: 0.10, parent: 17 },
-  { name: 'L_Toe', pos: new THREE.Vector3(-0.10, -0.95, 0.08), radius: 0.10, parent: 18, isEndEffector: true },
+  rigLoadPromise = (async () => {
+    const res = await fetch('/models/soma_official_rigged.json');
+    if (!res.ok) throw new Error('Failed to load /models/soma_official_rigged.json');
+    const data = await res.json();
 
-  { name: 'R_Hip', pos: new THREE.Vector3(0.10, -0.07, 0), radius: 0.16, parent: 0 },
-  { name: 'R_Knee', pos: new THREE.Vector3(0.10, -0.49, 0.01), radius: 0.14, parent: 20 },
-  { name: 'R_Ankle', pos: new THREE.Vector3(0.10, -0.87, -0.02), radius: 0.10, parent: 21 },
-  { name: 'R_Toe', pos: new THREE.Vector3(0.10, -0.95, 0.08), radius: 0.10, parent: 22, isEndEffector: true },
-];
+    const parentMap: Record<number, number> = {};
+    data.joint_connections.forEach(([p, c]: [number, number]) => { parentMap[c] = p; });
 
-// Helper to calculate Linear Blend Skinning (LBS) weights on SOMA mesh geometry
-function applySOMALBSSkinning(geometry: THREE.BufferGeometry) {
-  const posAttr = geometry.attributes.position;
-  const count = posAttr.count;
-  const skinIndices: number[] = [];
-  const skinWeights: number[] = [];
-  const v = new THREE.Vector3();
+    const worldMats = data.joint_transforms.map((t: number[][]) => {
+      const m = new THREE.Matrix4();
+      m.set(
+        t[0][0], t[0][1], t[0][2], t[0][3],
+        t[1][0], t[1][1], t[1][2], t[1][3],
+        t[2][0], t[2][1], t[2][2], t[2][3],
+        t[3][0], t[3][1], t[3][2], t[3][3]
+      );
+      return m;
+    });
 
-  for (let i = 0; i < count; i++) {
-    v.fromBufferAttribute(posAttr, i);
-
-    const dists: { index: number; weight: number }[] = [];
-    for (let j = 0; j < SOMA_JOINTS_DEF.length; j++) {
-      const joint = SOMA_JOINTS_DEF[j];
-      const d = v.distanceTo(joint.pos);
-      const sigma = joint.radius * 1.5;
-      const weight = Math.exp(-(d * d) / (2 * sigma * sigma));
-      dists.push({ index: j, weight });
+    const localTransforms: { pos: THREE.Vector3; quat: THREE.Quaternion; scl: THREE.Vector3 }[] = [];
+    for (let i = 0; i < data.joint_names.length; i++) {
+      const pIdx = parentMap[i];
+      let localM: THREE.Matrix4;
+      if (pIdx === undefined) {
+        localM = worldMats[i].clone();
+      } else {
+        const invParent = worldMats[pIdx].clone().invert();
+        localM = invParent.multiply(worldMats[i]);
+      }
+      const pos = new THREE.Vector3();
+      const quat = new THREE.Quaternion();
+      const scl = new THREE.Vector3();
+      localM.decompose(pos, quat, scl);
+      localTransforms.push({ pos, quat, scl });
     }
 
-    dists.sort((a, b) => b.weight - a.weight);
-    let totalW = dists[0].weight + dists[1].weight + dists[2].weight + dists[3].weight;
-    if (totalW < 1e-6) totalW = 1.0;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.vertices, 3));
+    geometry.setIndex(data.faces);
+    geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(data.skin_indices, 4));
+    geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(data.skin_weights, 4));
+    geometry.computeVertexNormals();
 
-    skinIndices.push(dists[0].index, dists[1].index, dists[2].index, dists[3].index);
-    skinWeights.push(
-      dists[0].weight / totalW,
-      dists[1].weight / totalW,
-      dists[2].weight / totalW,
-      dists[3].weight / totalW
-    );
-  }
+    cachedSOMARigData = {
+      geometry,
+      jointNames: data.joint_names,
+      jointConnections: data.joint_connections,
+      localTransforms,
+    };
+    return cachedSOMARigData;
+  })();
 
-  geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndices, 4));
-  geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeights, 4));
-  geometry.computeVertexNormals();
+  return rigLoadPromise;
 }
 
 // 3D Motion Trajectory Floor Spline
@@ -158,8 +145,9 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
   const bodyGroupRef = useRef<THREE.Group>(null);
   const skinnedMeshRef = useRef<THREE.SkinnedMesh | null>(null);
 
-  // Store Bone Tree array
+  // SOMA 77 Bones array and rest orientations
   const bonesRef = useRef<THREE.Bone[]>([]);
+  const restQuatsRef = useRef<THREE.Quaternion[]>([]);
   const [isRigReady, setIsRigReady] = useState<boolean>(false);
 
   const {
@@ -172,76 +160,70 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     renderMode = 'mesh', // 'mesh' | 'skeleton' | 'hybrid'
   } = actor;
 
-  // Build SOMA Bone Hierarchy & Rigged SkinnedMesh on Mount
+  // Build SOMA 77-Bone Skeleton & SkinnedMesh on mount
   useEffect(() => {
     let isMounted = true;
 
-    // 1. Build SOMA Bone Nodes
-    const bones = SOMA_JOINTS_DEF.map((j) => {
-      const b = new THREE.Bone();
-      b.name = j.name;
-      b.position.copy(j.pos);
-      return b;
-    });
-
-    // Structure parent-child relative hierarchy
-    for (let i = 0; i < SOMA_JOINTS_DEF.length; i++) {
-      const pIdx = SOMA_JOINTS_DEF[i].parent;
-      if (pIdx >= 0) {
-        const parentPos = SOMA_JOINTS_DEF[pIdx].pos;
-        bones[i].position.sub(parentPos);
-        bones[pIdx].add(bones[i]);
-      }
-    }
-
-    bonesRef.current = bones;
-
-    // 2. Load Official SOMA SMPL Human Body Mesh OBJ & Apply Linear Blend Skinning
-    const loader = new OBJLoader();
-    loader.load(
-      '/models/soma_smpl_body.obj',
-      (obj) => {
+    loadOfficialSOMARig()
+      .then((rigData) => {
         if (!isMounted) return;
 
-        let geom: THREE.BufferGeometry | null = null;
-        obj.traverse((child) => {
-          if ((child as THREE.Mesh).isMesh && !geom) {
-            geom = (child as THREE.Mesh).geometry.clone();
-          }
+        // 1. Create 77 SOMA Bones
+        const bones: THREE.Bone[] = [];
+        const restQuats: THREE.Quaternion[] = [];
+
+        for (let i = 0; i < rigData.jointNames.length; i++) {
+          const b = new THREE.Bone();
+          b.name = rigData.jointNames[i];
+          const tr = rigData.localTransforms[i];
+          b.position.copy(tr.pos);
+          b.quaternion.copy(tr.quat);
+          b.scale.copy(tr.scl);
+          bones.push(b);
+          restQuats.push(tr.quat.clone());
+        }
+
+        // Build bone hierarchy tree
+        for (const [p, c] of rigData.jointConnections) {
+          bones[p].add(bones[c]);
+        }
+
+        const rootBone = bones[0];
+        rootBone.updateMatrixWorld(true);
+
+        bonesRef.current = bones;
+        restQuatsRef.current = restQuats;
+
+        // 2. Instantiate SkinnedMesh with Official SOMA Geometry
+        const geom = rigData.geometry.clone();
+        const skeleton = new THREE.Skeleton(bones);
+
+        const material = new THREE.MeshStandardMaterial({
+          color: actor.characterType === 'g1' ? '#e5e5ea' : '#32363d',
+          roughness: 0.35,
+          metalness: 0.45,
+          side: THREE.DoubleSide,
         });
 
-        if (geom) {
-          applySOMALBSSkinning(geom);
+        const sm = new THREE.SkinnedMesh(geom, material);
+        sm.castShadow = true;
+        sm.receiveShadow = true;
+        sm.add(rootBone);
+        sm.bind(skeleton);
 
-          const skeleton = new THREE.Skeleton(bones);
-          const material = new THREE.MeshStandardMaterial({
-            color: actor.characterType === 'g1' ? '#e5e5ea' : '#32363d',
-            roughness: 0.35,
-            metalness: 0.45,
-            side: THREE.DoubleSide,
-          });
-
-          const sm = new THREE.SkinnedMesh(geom, material);
-          sm.castShadow = true;
-          sm.receiveShadow = true;
-          sm.add(bones[0]); // Add root bone (Pelvis)
-          sm.bind(skeleton);
-          sm.position.set(0, 0.95, 0); // Ground alignment
-
-          skinnedMeshRef.current = sm;
-          setIsRigReady(true);
-        }
-      },
-      undefined,
-      (err) => console.warn('SOMA Mesh load note:', err)
-    );
+        skinnedMeshRef.current = sm;
+        setIsRigReady(true);
+      })
+      .catch((err) => {
+        console.warn('Official SOMA Rig load error:', err);
+      });
 
     return () => {
       isMounted = false;
     };
   }, [actor.characterType]);
 
-  // Update material appearance when renderMode or selection changes
+  // Update material on renderMode / characterType change
   useEffect(() => {
     if (skinnedMeshRef.current) {
       const isHybrid = renderMode === 'hybrid';
@@ -275,12 +257,13 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     return new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.2);
   }, [trajectory]);
 
-  // Real-time SOMA Kinematic Animation Engine driving the Skinned Skeleton
+  // Real-time Kinematic Animation Engine driving the SOMA 77-Bone Skeleton
   useFrame(() => {
     const tTotal = Math.max(0.1, duration);
     const progress = (currentTimelineTime % tTotal) / tTotal;
     const animName = (actor.currentAnimation || actor.motionPrompt || '').toLowerCase();
     const bones = bonesRef.current;
+    const restQuats = restQuatsRef.current;
 
     // 1. Root Trajectory Translation & Heading
     if (bodyGroupRef.current && trajectoryCurve && trajectory.length >= 2) {
@@ -302,14 +285,14 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
       bodyGroupRef.current.rotation.set(0, 0, 0);
     }
 
-    if (bones.length < 24) return;
+    if (bones.length < 77 || restQuats.length < 77) return;
 
-    // Bone index references:
-    // 0: Pelvis, 1: Spine1, 2: Spine2, 3: Spine3, 4: Neck, 5: Head
-    // 6: L_Collar, 7: L_Shoulder, 8: L_Elbow, 9: L_Wrist, 10: L_Hand
-    // 11: R_Collar, 12: R_Shoulder, 13: R_Elbow, 14: R_Wrist, 15: R_Hand
-    // 16: L_Hip, 17: L_Knee, 18: L_Ankle, 19: L_Toe
-    // 20: R_Hip, 21: R_Knee, 22: R_Ankle, 23: R_Toe
+    // SOMA Key Bone Indices:
+    // 0: Hips, 1: Spine1, 2: Spine2, 3: Chest, 4: Neck1, 6: Head
+    // 11: LeftShoulder, 12: LeftArm, 13: LeftForeArm, 14: LeftHand
+    // 39: RightShoulder, 40: RightArm, 41: RightForeArm, 42: RightHand
+    // 67: LeftLeg (Thigh), 68: LeftShin (Knee), 69: LeftFoot (Ankle), 70: LeftToeBase
+    // 72: RightLeg (Thigh), 73: RightShin (Knee), 74: RightFoot (Ankle), 75: RightToeBase
 
     const isWalking =
       animName.includes('walk') ||
@@ -326,85 +309,117 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     const strideRate = animName.includes('run') || animName.includes('jog') ? 8.5 : 5.0;
     const stridePhase = currentTimelineTime * strideRate;
 
-    // Reset default rest pose
+    // Reset bones to rest pose
     for (let i = 0; i < bones.length; i++) {
-      bones[i].rotation.set(0, 0, 0);
+      bones[i].quaternion.copy(restQuats[i]);
     }
 
-    // A. Locomotion / Leg Kinematics (LBS mesh deform)
+    const qDelta = new THREE.Quaternion();
+
+    // A. Locomotion / Walking Stride
     if (isWalking) {
-      const legSwing = Math.sin(stridePhase) * 0.7;
-      const hipBob = Math.abs(Math.sin(stridePhase * 2)) * 0.045;
+      const legSwing = Math.sin(stridePhase) * 0.65;
+      const hipBob = Math.abs(Math.sin(stridePhase * 2)) * 0.04;
 
-      bones[16].rotation.x = legSwing; // L_Hip
-      bones[20].rotation.x = -legSwing; // R_Hip
+      // LeftLeg / RightLeg Thighs
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), legSwing);
+      bones[67].quaternion.multiply(qDelta);
 
-      bones[17].rotation.x = Math.max(0, -legSwing * 1.1); // L_Knee
-      bones[21].rotation.x = Math.max(0, legSwing * 1.1); // R_Knee
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -legSwing);
+      bones[72].quaternion.multiply(qDelta);
 
-      bones[18].rotation.x = -legSwing * 0.4; // L_Ankle
-      bones[22].rotation.x = legSwing * 0.4; // R_Ankle
+      // LeftShin / RightShin Knees
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.max(0, -legSwing * 1.0));
+      bones[68].quaternion.multiply(qDelta);
 
-      bones[7].rotation.x = -legSwing * 0.8; // L_Shoulder
-      if (!isWaving) bones[12].rotation.x = legSwing * 0.8; // R_Shoulder
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.max(0, legSwing * 1.0));
+      bones[73].quaternion.multiply(qDelta);
 
-      bones[8].rotation.x = Math.max(0.1, -legSwing * 0.4); // L_Elbow
-      if (!isWaving) bones[13].rotation.x = Math.max(0.1, legSwing * 0.4); // R_Elbow
+      // LeftFoot / RightFoot Ankles
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -legSwing * 0.35);
+      bones[69].quaternion.multiply(qDelta);
 
-      bones[0].position.y = hipBob; // Pelvis
-      bones[0].rotation.y = Math.sin(stridePhase) * 0.08;
-      bones[1].rotation.y = -Math.sin(stridePhase) * 0.05; // Spine1
-      bones[3].rotation.y = -Math.sin(stridePhase) * 0.05; // Spine3
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), legSwing * 0.35);
+      bones[74].quaternion.multiply(qDelta);
+
+      // Arm Counter-Swings
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -legSwing * 0.7);
+      bones[12].quaternion.multiply(qDelta);
+
+      if (!isWaving) {
+        qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), legSwing * 0.7);
+        bones[40].quaternion.multiply(qDelta);
+      }
+
+      // Hips vertical bob and subtle spine twist
+      bones[0].position.y = (cachedSOMARigData?.localTransforms[0].pos.y || 1.0) + hipBob;
+      qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.sin(stridePhase) * 0.08);
+      bones[0].quaternion.multiply(qDelta);
+
+      qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.sin(stridePhase) * 0.05);
+      bones[3].quaternion.multiply(qDelta); // Chest
     } else if (isDancing) {
       const beat = currentTimelineTime * 5.0;
-      bones[0].position.y = Math.abs(Math.sin(beat)) * 0.05;
-      bones[0].rotation.z = Math.sin(beat) * 0.18;
-      bones[2].rotation.y = Math.cos(beat * 0.5) * 0.25; // Spine2
+      qDelta.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.sin(beat) * 0.15);
+      bones[0].quaternion.multiply(qDelta); // Hips sway
 
-      bones[7].rotation.z = 0.6 + Math.sin(beat) * 0.4; // L_Shoulder
-      bones[7].rotation.x = Math.cos(beat) * 0.3;
-      bones[12].rotation.z = -0.6 - Math.cos(beat) * 0.4; // R_Shoulder
-      bones[12].rotation.x = -Math.sin(beat) * 0.3;
+      qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.cos(beat * 0.5) * 0.2);
+      bones[2].quaternion.multiply(qDelta); // Spine twist
 
-      bones[16].rotation.x = Math.sin(beat) * 0.3; // L_Hip
-      bones[20].rotation.x = -Math.sin(beat) * 0.3; // R_Hip
+      qDelta.setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.5 + Math.sin(beat) * 0.35);
+      bones[12].quaternion.multiply(qDelta); // LeftArm
+
+      qDelta.setFromAxisAngle(new THREE.Vector3(0, 0, -1), 0.5 + Math.cos(beat) * 0.35);
+      bones[40].quaternion.multiply(qDelta); // RightArm
+
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.sin(beat) * 0.25);
+      bones[67].quaternion.multiply(qDelta);
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.sin(beat) * 0.25);
+      bones[72].quaternion.multiply(qDelta);
     } else if (isMartial) {
       const phase = (currentTimelineTime % 3.0) / 3.0;
       if (phase < 0.4) {
         const k = phase / 0.4;
-        bones[20].rotation.x = -Math.PI * 0.6 * Math.sin(k * Math.PI); // R_Hip kick
-        bones[21].rotation.x = 0.3; // R_Knee
-        bones[7].rotation.x = -0.9; // L_Shoulder
-        bones[12].rotation.x = -0.6; // R_Shoulder
-        bones[2].rotation.y = -0.4 * Math.sin(k * Math.PI);
-      } else {
-        bones[20].rotation.x = 0;
-        bones[7].rotation.x = -0.4;
-        bones[12].rotation.x = -0.4;
+        qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI * 0.55 * Math.sin(k * Math.PI));
+        bones[72].quaternion.multiply(qDelta); // Right Leg Kick
+
+        qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.25);
+        bones[73].quaternion.multiply(qDelta); // Knee bend
+
+        qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.7);
+        bones[12].quaternion.multiply(qDelta);
+        bones[40].quaternion.multiply(qDelta);
       }
     } else {
-      // Idle Breathing
+      // Natural Idle Breathing
       const breath = Math.sin(currentTimelineTime * 2.2) * 0.02;
-      bones[0].position.y = breath * 0.4;
-      bones[2].rotation.x = breath * 0.6;
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), breath * 0.5);
+      bones[3].quaternion.multiply(qDelta); // Chest breath
     }
 
-    // Gestures: Waving
+    // Gestures: Waving with Right Arm
     if (isWaving) {
-      bones[12].rotation.x = -2.3; // R_Shoulder
-      bones[12].rotation.z = -0.35;
-      bones[13].rotation.z = -0.7 + Math.sin(currentTimelineTime * 8.5) * 0.5; // R_Elbow
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -2.2);
+      bones[40].quaternion.multiply(qDelta); // RightArm high
+
+      qDelta.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.5 + Math.sin(currentTimelineTime * 8.5) * 0.4);
+      bones[41].quaternion.multiply(qDelta); // RightForeArm wave
     } else if (isTalking) {
-      bones[7].rotation.x = -0.8 + Math.sin(currentTimelineTime * 3.5) * 0.25;
-      bones[12].rotation.x = -0.8 + Math.cos(currentTimelineTime * 3.5) * 0.25;
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.7 + Math.sin(currentTimelineTime * 3.5) * 0.2);
+      bones[12].quaternion.multiply(qDelta);
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.7 + Math.cos(currentTimelineTime * 3.5) * 0.2);
+      bones[40].quaternion.multiply(qDelta);
     }
 
-    // Head Scanning & Gaze
+    // Head Gaze & Look Around
     if (isLooking) {
-      bones[5].rotation.y = Math.sin(currentTimelineTime * 1.6) * 0.6; // Head
-      bones[5].rotation.x = Math.sin(currentTimelineTime * 0.8) * 0.12;
+      qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.sin(currentTimelineTime * 1.6) * 0.55);
+      bones[6].quaternion.multiply(qDelta);
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.sin(currentTimelineTime * 0.8) * 0.1);
+      bones[6].quaternion.multiply(qDelta);
     } else {
-      bones[5].rotation.y = Math.sin(currentTimelineTime * 0.8) * 0.08;
+      qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.sin(currentTimelineTime * 0.8) * 0.08);
+      bones[6].quaternion.multiply(qDelta);
     }
   });
 
@@ -453,15 +468,15 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
       >
         {/* Animated Rigged SOMA Multi-Body Skinned Mesh */}
         <group ref={bodyGroupRef}>
-          {/* Rigged Skinned Mesh Primitive */}
+          {/* Official SOMA Skinned Mesh Primitive */}
           {isRigReady && skinnedMeshRef.current && (
             <primitive object={skinnedMeshRef.current} />
           )}
 
           {/* SOMA Glowing Optical Visor Attached to Head */}
-          <group position={[0, 1.60, 0.08]}>
+          <group position={[0, 1.62, 0.06]}>
             <mesh position={[0, 0, 0.04]}>
-              <boxGeometry args={[0.16, 0.04, 0.03]} />
+              <boxGeometry args={[0.15, 0.04, 0.03]} />
               <meshStandardMaterial
                 color={jointColor}
                 emissive={jointColor}
@@ -481,7 +496,7 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
             </mesh>
             <Html position={[0, 1.95, 0]} center distanceFactor={8}>
               <div className="bg-surface-container/95 border border-primary/50 text-primary px-sm py-[2px] rounded font-label-caps text-[10px] tracking-wider whitespace-nowrap shadow-xl">
-                {actor.name} (SOMA Rigged)
+                {actor.name} (SOMA 77-Bone Rigged)
               </div>
             </Html>
           </group>
