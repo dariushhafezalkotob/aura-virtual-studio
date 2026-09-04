@@ -379,7 +379,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
         name: promptToUse.trim() || (engineToUse === 'hunyuan3d' ? 'Hunyuan 3D (Textured)' : 'TRELLIS 3D Object'),
         glbUrl: result.glbUrl,
         previewUrl: result.videoUrl,
-        position: [assets.length * 1.5, 0, 0],
+        position: [0, 0, 0],
         rotation: [0, 0, 0],
         scale: [1, 1, 1],
         prompt: promptToUse,
