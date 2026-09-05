@@ -725,6 +725,7 @@ function apiMiddlewarePlugin(): Plugin {
                   seed: params.seed,
                   diffusion_steps: params.diffusion_steps || 50,
                   bvh_standard_tpose: true,
+                  constraints: params.constraints || undefined,
                 }),
               });
 
@@ -740,6 +741,7 @@ function apiMiddlewarePlugin(): Plugin {
                     seed: params.seed,
                     diffusion_steps: params.diffusion_steps || 50,
                     bvh_standard_tpose: true,
+                    constraints: params.constraints || undefined,
                   }),
                 });
               }

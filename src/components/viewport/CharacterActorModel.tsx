@@ -1,12 +1,13 @@
 import React, { useRef, useMemo, useEffect, useState } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { TransformControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
-import { CharacterActor } from '../../types';
+import { CharacterActor, ActorConstraint, UpperBodyPosePreset } from '../../types';
 import { TransformMode } from './ThreeStage';
 
 interface CharacterActorModelProps {
   actor: CharacterActor;
+  allActors?: CharacterActor[];
   isSelected: boolean;
   transformMode: TransformMode;
   currentTimelineTime: number;
@@ -91,36 +92,38 @@ async function loadOfficialSOMARig(): Promise<SOMARigCache> {
   return rigLoadPromise;
 }
 
-// 3D Motion Trajectory Floor Spline
+// 3D Motion Trajectory Floor Spline (Strictly grounded on stage plane)
 const TrajectoryPath: React.FC<{
   trajectory: [number, number, number][];
   color: string;
-}> = ({ trajectory, color }) => {
+  groundY?: number;
+}> = ({ trajectory, color, groundY = 0 }) => {
   const linePoints = useMemo(() => {
     if (trajectory.length < 2) return [];
-    const pts = trajectory.map((p) => new THREE.Vector3(p[0], p[1] + 0.02, p[2]));
+    // Ensure all trajectory spline points strictly follow the floor plane
+    const pts = trajectory.map((p) => new THREE.Vector3(p[0], groundY + 0.02, p[2]));
     const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.2);
     return curve.getPoints(Math.max(30, trajectory.length * 8));
-  }, [trajectory]);
+  }, [trajectory, groundY]);
 
   const lineGeometry = useMemo(() => {
     if (linePoints.length < 2) return null;
     return new THREE.BufferGeometry().setFromPoints(linePoints);
   }, [linePoints]);
 
-  if (!lineGeometry || trajectory.length < 2) return null;
+  if (!lineGeometry || linePoints.length < 2) return null;
 
-  const startPt = trajectory[0];
-  const endPt = trajectory[trajectory.length - 1];
+  const startPt = linePoints[0];
+  const endPt = linePoints[linePoints.length - 1];
 
   return (
     <group>
       <primitive object={new THREE.Line(lineGeometry, new THREE.LineBasicMaterial({ color: color || '#00ffcc', linewidth: 3 }))} />
-      <mesh position={[startPt[0], startPt[1] + 0.03, startPt[2]]} rotation={[-Math.PI / 2, 0, 0]}>
+      <mesh position={[startPt.x, groundY + 0.03, startPt.z]} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[0.2, 0.26, 24]} />
         <meshBasicMaterial color={color || '#00ffcc'} side={THREE.DoubleSide} />
       </mesh>
-      <group position={[endPt[0], endPt[1] + 0.03, endPt[2]]}>
+      <group position={[endPt.x, groundY + 0.03, endPt.z]}>
         <mesh rotation={[-Math.PI / 2, 0, 0]}>
           <circleGeometry args={[0.22, 24]} />
           <meshBasicMaterial color="#ff3b30" side={THREE.DoubleSide} />
@@ -130,8 +133,84 @@ const TrajectoryPath: React.FC<{
   );
 };
 
+
+const UPPER_BODY_POSE_PRESETS: Record<
+  UpperBodyPosePreset,
+  { index: number; euler: [number, number, number] }[]
+> = {
+  crossed_arms: [
+    { index: 11, euler: [0.1, 0.2, -0.2] },  // LeftShoulder
+    { index: 12, euler: [0.6, 0.4, -0.6] },  // LeftArm
+    { index: 13, euler: [0.2, 1.4, -0.4] },  // LeftForeArm
+    { index: 14, euler: [0.0, 0.3, 0.0] },   // LeftHand
+    { index: 39, euler: [0.1, -0.2, 0.2] },  // RightShoulder
+    { index: 40, euler: [0.7, -0.4, 0.6] },  // RightArm
+    { index: 41, euler: [-0.2, -1.4, 0.4] }, // RightForeArm
+    { index: 42, euler: [0.0, -0.3, 0.0] },  // RightHand
+    { index: 3, euler: [0.05, 0.0, 0.0] },   // Chest
+  ],
+  hands_on_hips: [
+    { index: 11, euler: [0.0, -0.1, -0.2] }, // LeftShoulder
+    { index: 12, euler: [-0.3, -0.2, -0.8] },// LeftArm
+    { index: 13, euler: [0.1, 1.3, -0.5] },  // LeftForeArm
+    { index: 14, euler: [0.2, 0.4, -0.2] },  // LeftHand
+    { index: 39, euler: [0.0, 0.1, 0.2] },   // RightShoulder
+    { index: 40, euler: [-0.3, 0.2, 0.8] },  // RightArm
+    { index: 41, euler: [-0.1, -1.3, 0.5] }, // RightForeArm
+    { index: 42, euler: [-0.2, -0.4, 0.2] }, // RightHand
+    { index: 3, euler: [0.03, 0.0, 0.0] },   // Chest
+  ],
+  holding_prop: [
+    { index: 11, euler: [0.1, 0.1, -0.1] },  // LeftShoulder
+    { index: 12, euler: [0.8, 0.2, -0.3] },  // LeftArm
+    { index: 13, euler: [0.0, 1.0, 0.0] },   // LeftForeArm
+    { index: 14, euler: [0.2, 0.0, 0.0] },   // LeftHand
+    { index: 39, euler: [0.1, -0.1, 0.1] },  // RightShoulder
+    { index: 40, euler: [0.8, -0.2, 0.3] },  // RightArm
+    { index: 41, euler: [0.0, -1.0, 0.0] },  // RightForeArm
+    { index: 42, euler: [-0.2, 0.0, 0.0] },  // RightHand
+    { index: 3, euler: [0.04, 0.0, 0.0] },   // Chest
+  ],
+  hands_in_pockets: [
+    { index: 12, euler: [-0.1, 0.0, -0.2] }, // LeftArm
+    { index: 13, euler: [0.2, 0.4, -0.2] },  // LeftForeArm
+    { index: 14, euler: [0.2, 0.3, 0.0] },   // LeftHand
+    { index: 40, euler: [-0.1, 0.0, 0.2] },  // RightArm
+    { index: 41, euler: [-0.2, -0.4, 0.2] }, // RightForeArm
+    { index: 42, euler: [-0.2, -0.3, 0.0] }, // RightHand
+    { index: 3, euler: [0.02, 0.0, 0.0] },   // Chest
+  ],
+  defensive: [
+    { index: 11, euler: [0.2, 0.2, -0.1] },  // LeftShoulder
+    { index: 12, euler: [1.1, 0.3, -0.5] },  // LeftArm
+    { index: 13, euler: [0.3, 1.8, -0.2] },  // LeftForeArm
+    { index: 14, euler: [0.4, 0.0, 0.0] },   // LeftHand
+    { index: 39, euler: [0.2, -0.2, 0.1] },  // RightShoulder
+    { index: 40, euler: [1.1, -0.3, 0.5] },  // RightArm
+    { index: 41, euler: [-0.3, -1.8, 0.2] }, // RightForeArm
+    { index: 42, euler: [-0.4, 0.0, 0.0] },  // RightHand
+    { index: 3, euler: [0.06, 0.0, 0.0] },   // Chest
+  ],
+};
+
+function getConstraintWeight(c: ActorConstraint, t: number): number {
+  if (!c.enabled || t < c.startTime || t > c.endTime) return 0;
+  const fadeInDur = 0.25;
+  const fadeOutDur = 0.25;
+  const tSinceStart = t - c.startTime;
+  const tUntilEnd = c.endTime - t;
+  let envelope = 1.0;
+  if (tSinceStart < fadeInDur) {
+    envelope = 0.5 * (1 - Math.cos((tSinceStart / fadeInDur) * Math.PI));
+  } else if (tUntilEnd < fadeOutDur) {
+    envelope = 0.5 * (1 - Math.cos((tUntilEnd / fadeOutDur) * Math.PI));
+  }
+  return (c.weight ?? 1.0) * envelope;
+}
+
 export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
   actor,
+  allActors = [],
   isSelected,
   transformMode,
   currentTimelineTime,
@@ -141,6 +220,7 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
   onDraggingChange,
   onTransformChange,
 }) => {
+  const { camera } = useThree();
   const rootGroupRef = useRef<THREE.Group>(null);
   const bodyGroupRef = useRef<THREE.Group>(null);
   const skinnedMeshRef = useRef<THREE.SkinnedMesh | null>(null);
@@ -199,7 +279,7 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
         const skeleton = new THREE.Skeleton(bones);
 
         const material = new THREE.MeshStandardMaterial({
-          color: actor.characterType === 'g1' ? '#e5e5ea' : '#32363d',
+          color: actor.color || (actor.characterType === 'g1' ? '#e5e5ea' : '#32363d'),
           roughness: 0.35,
           metalness: 0.45,
           side: THREE.DoubleSide,
@@ -223,7 +303,7 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     };
   }, [actor.characterType]);
 
-  // Update material on renderMode / characterType change
+  // Update material on renderMode / characterType / color change
   useEffect(() => {
     if (skinnedMeshRef.current) {
       const isHybrid = renderMode === 'hybrid';
@@ -234,11 +314,11 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
       if (mat) {
         mat.transparent = isHybrid;
         mat.opacity = isHybrid ? 0.45 : 1.0;
-        mat.color.set(actor.characterType === 'g1' ? '#e5e5ea' : '#32363d');
+        mat.color.set(actor.color || (actor.characterType === 'g1' ? '#e5e5ea' : '#32363d'));
         mat.needsUpdate = true;
       }
     }
-  }, [renderMode, actor.characterType]);
+  }, [renderMode, actor.characterType, actor.color]);
 
   // Sync initial root transform
   useEffect(() => {
@@ -257,7 +337,7 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     if (bones.length < 77 || restQuats.length < 77) return;
 
     // =========================================================================
-    // 1. TRUE NVIDIA KIMODO NEURAL DIFFUSION MOTION PLAYBACK
+    // 1. BASE POSE: TRUE NVIDIA KIMODO DIFFUSION MOTION OR IDLE BREATHING
     // =========================================================================
     if (actor.motionData && actor.motionData.rotations && actor.motionData.rotations.length > 0) {
       const mData = actor.motionData;
@@ -270,16 +350,21 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
       const frame1 = Math.min(numFrames - 1, frame0 + 1);
       const alpha = exactFrame - frame0;
 
-      // A. Drive Root 3D Translation
+      // A. Drive Root 3D Translation (Relative to Frame 0 to preserve ground contact and placement)
       if (mData.root && mData.root.length > 0 && bodyGroupRef.current) {
-        const r0 = mData.root[frame0] || [0, 0, 0];
+        const initRoot = mData.root[0] || [0, 0, 0];
+        const r0 = mData.root[frame0] || initRoot;
         const r1 = mData.root[frame1] || r0;
 
         const rx = THREE.MathUtils.lerp(r0[0], r1[0], alpha);
         const ry = THREE.MathUtils.lerp(r0[1], r1[1], alpha);
         const rz = THREE.MathUtils.lerp(r0[2], r1[2], alpha);
 
-        bodyGroupRef.current.position.set(rx, ry, rz);
+        const dx = rx - initRoot[0];
+        const dy = ry - initRoot[1];
+        const dz = rz - initRoot[2];
+
+        bodyGroupRef.current.position.set(dx, dy, dz);
         bodyGroupRef.current.rotation.set(0, 0, 0);
       } else if (bodyGroupRef.current) {
         bodyGroupRef.current.position.set(0, 0, 0);
@@ -305,32 +390,201 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
           }
         }
       }
-      return;
+    } else {
+      // Default Neutral Rest Pose with Subtle Idle Breathing
+      if (bodyGroupRef.current) {
+        bodyGroupRef.current.position.set(0, 0, 0);
+        bodyGroupRef.current.rotation.set(0, 0, 0);
+      }
+
+      // Reset bones to rest pose
+      for (let i = 0; i < bones.length; i++) {
+        bones[i].quaternion.copy(restQuats[i]);
+      }
+
+      // Natural subtle chest breathing
+      const breath = Math.sin(currentTimelineTime * 2.0) * 0.015;
+      const qDelta = new THREE.Quaternion();
+      qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), breath);
+      bones[3].quaternion.multiply(qDelta); // Chest
+
+      // Micro head shift
+      const headShift = Math.sin(currentTimelineTime * 0.8) * 0.03;
+      qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), headShift);
+      bones[6].quaternion.multiply(qDelta); // Head
     }
 
     // =========================================================================
-    // 2. DEFAULT NEUTRAL REST POSE WITH SUBTLE IDLE BREATHING (PRE-GENERATION)
+    // 2. REAL-TIME KINEMATIC CONSTRAINT BLENDING PIPELINE
     // =========================================================================
-    if (bodyGroupRef.current) {
-      bodyGroupRef.current.position.set(0, 0, 0);
-      bodyGroupRef.current.rotation.set(0, 0, 0);
+    if (actor.constraints && actor.constraints.length > 0) {
+      // A. Destination Steering (only active during kinematic preview when neural motionData is not present)
+      if (!actor.motionData) {
+        const destConstraints = actor.constraints.filter((c) => c.type === 'destination');
+        for (const c of destConstraints) {
+          const w = getConstraintWeight(c, currentTimelineTime);
+          if (w > 0.001 && c.destination && bodyGroupRef.current) {
+            const totalDur = Math.max(0.1, c.endTime - c.startTime);
+            const progress = THREE.MathUtils.clamp((currentTimelineTime - c.startTime) / totalDur, 0, 1);
+            const easeProgress = progress * progress * (3 - 2 * progress);
+            const targetX = c.destination.position[0] - position[0];
+            const targetZ = c.destination.position[2] - position[2];
+            bodyGroupRef.current.position.x = THREE.MathUtils.lerp(
+              bodyGroupRef.current.position.x,
+              targetX,
+              easeProgress * w
+            );
+            bodyGroupRef.current.position.z = THREE.MathUtils.lerp(
+              bodyGroupRef.current.position.z,
+              targetZ,
+              easeProgress * w
+            );
+          }
+        }
+      }
+
+      // B. Facing Direction / Heading Lock
+      const faceConstraints = actor.constraints.filter((c) => c.type === 'facing_direction');
+      for (const c of faceConstraints) {
+        const w = getConstraintWeight(c, currentTimelineTime);
+        if (w > 0.001 && c.facing && bodyGroupRef.current) {
+          let targetYaw = 0;
+          if (c.facing.targetType === 'camera') {
+            const rootWorld = new THREE.Vector3();
+            rootGroupRef.current?.getWorldPosition(rootWorld);
+            targetYaw = Math.atan2(camera.position.x - rootWorld.x, camera.position.z - rootWorld.z);
+          } else if (c.facing.targetType === 'actor' && c.facing.targetActorId && allActors) {
+            const targetAct = allActors.find((a) => a.id === c.facing?.targetActorId);
+            if (targetAct && rootGroupRef.current) {
+              const rootWorld = new THREE.Vector3();
+              rootGroupRef.current.getWorldPosition(rootWorld);
+              targetYaw = Math.atan2(targetAct.position[0] - rootWorld.x, targetAct.position[2] - rootWorld.z);
+            }
+          } else if (c.facing.targetType === 'angle') {
+            targetYaw = (c.facing.angleDegrees || 0) * (Math.PI / 180);
+          }
+          const curY = bodyGroupRef.current.rotation.y;
+          let diff = (targetYaw - curY) % (Math.PI * 2);
+          if (diff > Math.PI) diff -= Math.PI * 2;
+          if (diff < -Math.PI) diff += Math.PI * 2;
+          bodyGroupRef.current.rotation.y = curY + diff * w;
+        }
+      }
+
+      // C. Stance & Height Clamping
+      const stanceConstraints = actor.constraints.filter((c) => c.type === 'stance_height');
+      for (const c of stanceConstraints) {
+        const w = getConstraintWeight(c, currentTimelineTime);
+        if (w > 0.001 && c.stance && bodyGroupRef.current) {
+          const heightOffset = c.stance.heightOffset * w;
+          bodyGroupRef.current.position.y += heightOffset;
+
+          if (c.stance.heightOffset < -0.15) {
+            const crouchFactor = Math.min(1.0, Math.abs(c.stance.heightOffset) / 0.4) * w;
+            const qKnee = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.5 * crouchFactor);
+            bones[67]?.quaternion.multiply(qKnee);
+            bones[72]?.quaternion.multiply(qKnee);
+            const qShin = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.9 * crouchFactor);
+            bones[68]?.quaternion.multiply(qShin);
+            bones[73]?.quaternion.multiply(qShin);
+            const qSpine = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.2 * crouchFactor);
+            bones[1]?.quaternion.multiply(qSpine);
+            bones[2]?.quaternion.multiply(qSpine);
+          }
+        }
+      }
+
+      // D. Foot Grounding Lock
+      const groundConstraints = actor.constraints.filter((c) => c.type === 'foot_grounding');
+      for (const c of groundConstraints) {
+        const w = getConstraintWeight(c, currentTimelineTime);
+        if (w > 0.001 && c.footGrounding && bodyGroupRef.current) {
+          if (bodyGroupRef.current.position.y < 0) {
+            bodyGroupRef.current.position.y = THREE.MathUtils.lerp(bodyGroupRef.current.position.y, 0, w);
+          }
+          if ((c.footGrounding.mode === 'both' || c.footGrounding.mode === 'left') && bones[69]) {
+            bones[69].quaternion.slerp(restQuats[69], 0.6 * w);
+          }
+          if ((c.footGrounding.mode === 'both' || c.footGrounding.mode === 'right') && bones[74]) {
+            bones[74].quaternion.slerp(restQuats[74], 0.6 * w);
+          }
+        }
+      }
+
+      // E. Upper-Body Pose Lock / Isolation
+      const upperBodyConstraints = actor.constraints.filter((c) => c.type === 'upper_body_lock');
+      for (const c of upperBodyConstraints) {
+        const w = getConstraintWeight(c, currentTimelineTime);
+        if (w > 0.001 && c.upperBody) {
+          const presetCfg = UPPER_BODY_POSE_PRESETS[c.upperBody.preset];
+          if (presetCfg) {
+            for (const bCfg of presetCfg) {
+              if (bones[bCfg.index] && restQuats[bCfg.index]) {
+                const qOffset = new THREE.Quaternion().setFromEuler(
+                  new THREE.Euler(bCfg.euler[0], bCfg.euler[1], bCfg.euler[2], 'YXZ')
+                );
+                const targetQ = restQuats[bCfg.index].clone().multiply(qOffset);
+                bones[bCfg.index].quaternion.slerp(targetQ, w);
+              }
+            }
+          }
+        }
+      }
+
+      // F. Look-At Target (Camera / Actor / Point)
+      const lookConstraints = actor.constraints.filter((c) => c.type === 'look_at');
+      for (const c of lookConstraints) {
+        const w = getConstraintWeight(c, currentTimelineTime);
+        if (w > 0.001 && c.lookAt && rootGroupRef.current && bones[6]) {
+          let targetWorld = new THREE.Vector3();
+          if (c.lookAt.targetType === 'camera') {
+            targetWorld.copy(camera.position);
+          } else if (c.lookAt.targetType === 'actor' && c.lookAt.targetActorId && allActors) {
+            const targetAct = allActors.find((a) => a.id === c.lookAt?.targetActorId);
+            if (targetAct) {
+              targetWorld.set(targetAct.position[0], targetAct.position[1] + 1.6, targetAct.position[2]);
+            } else {
+              targetWorld.copy(camera.position);
+            }
+          } else if (c.lookAt.targetType === 'point' && c.lookAt.targetPoint) {
+            targetWorld.set(c.lookAt.targetPoint[0], c.lookAt.targetPoint[1], c.lookAt.targetPoint[2]);
+          } else {
+            targetWorld.copy(camera.position);
+          }
+
+          const headPos = new THREE.Vector3();
+          bones[6].getWorldPosition(headPos);
+          const dirWorld = new THREE.Vector3().subVectors(targetWorld, headPos);
+          if (dirWorld.lengthSq() > 0.001) {
+            dirWorld.normalize();
+            const rootWorldQuat = new THREE.Quaternion();
+            rootGroupRef.current.getWorldQuaternion(rootWorldQuat);
+            const invRootQuat = rootWorldQuat.clone().invert();
+            const dirLocal = dirWorld.clone().applyQuaternion(invRootQuat);
+
+            let targetYaw = Math.atan2(dirLocal.x, dirLocal.z);
+            const xzDist = Math.sqrt(dirLocal.x * dirLocal.x + dirLocal.z * dirLocal.z);
+            let targetPitch = -Math.atan2(dirLocal.y, xzDist);
+
+            targetYaw = THREE.MathUtils.clamp(targetYaw, -1.2, 1.2);
+            targetPitch = THREE.MathUtils.clamp(targetPitch, -0.7, 0.7);
+
+            const qNeckDelta = new THREE.Quaternion().setFromEuler(
+              new THREE.Euler(targetPitch * 0.35, targetYaw * 0.35, 0, 'YXZ')
+            );
+            const qHeadDelta = new THREE.Quaternion().setFromEuler(
+              new THREE.Euler(targetPitch * 0.65, targetYaw * 0.65, 0, 'YXZ')
+            );
+
+            const targetNeckQuat = restQuats[4].clone().multiply(qNeckDelta);
+            const targetHeadQuat = restQuats[6].clone().multiply(qHeadDelta);
+
+            bones[4]?.quaternion.slerp(targetNeckQuat, w);
+            bones[6]?.quaternion.slerp(targetHeadQuat, w);
+          }
+        }
+      }
     }
-
-    // Reset bones to rest pose
-    for (let i = 0; i < bones.length; i++) {
-      bones[i].quaternion.copy(restQuats[i]);
-    }
-
-    // Natural subtle chest breathing
-    const breath = Math.sin(currentTimelineTime * 2.0) * 0.015;
-    const qDelta = new THREE.Quaternion();
-    qDelta.setFromAxisAngle(new THREE.Vector3(1, 0, 0), breath);
-    bones[3].quaternion.multiply(qDelta); // Chest
-
-    // Micro head shift
-    const headShift = Math.sin(currentTimelineTime * 0.8) * 0.03;
-    qDelta.setFromAxisAngle(new THREE.Vector3(0, 1, 0), headShift);
-    bones[6].quaternion.multiply(qDelta); // Head
   });
 
   const handleTransformEnd = () => {
@@ -362,7 +616,7 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     <>
       {/* 3D Motion Trajectory Spline */}
       {showTrajectory && trajectory.length >= 2 && (
-        <TrajectoryPath trajectory={trajectory} color={jointColor} />
+        <TrajectoryPath trajectory={trajectory} color={jointColor} groundY={position[1]} />
       )}
 
       {/* Main Root Transform Group */}
@@ -382,19 +636,6 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
           {isRigReady && skinnedMeshRef.current && (
             <primitive object={skinnedMeshRef.current} />
           )}
-
-          {/* SOMA Glowing Optical Visor Attached to Head */}
-          <group position={[0, 1.62, 0.06]}>
-            <mesh position={[0, 0, 0.04]}>
-              <boxGeometry args={[0.15, 0.04, 0.03]} />
-              <meshStandardMaterial
-                color={jointColor}
-                emissive={jointColor}
-                emissiveIntensity={1.8}
-                roughness={0.1}
-              />
-            </mesh>
-          </group>
         </group>
 
         {/* Selection Ring & Name Tag */}

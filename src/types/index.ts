@@ -44,6 +44,55 @@ export interface MotionData {
   prompt?: string;
 }
 
+export type ConstraintType =
+  | 'look_at'
+  | 'upper_body_lock'
+  | 'destination'
+  | 'facing_direction'
+  | 'foot_grounding'
+  | 'stance_height';
+
+export type LookAtTargetType = 'camera' | 'actor' | 'point';
+export type UpperBodyPosePreset = 'crossed_arms' | 'hands_on_hips' | 'holding_prop' | 'hands_in_pockets' | 'defensive';
+export type FacingTargetType = 'camera' | 'actor' | 'angle';
+export type FootGroundingMode = 'both' | 'left' | 'right';
+
+export interface ActorConstraint {
+  id: string;
+  name: string;
+  type: ConstraintType;
+  enabled: boolean;
+  startTime: number;
+  endTime: number;
+  weight: number; // 0.0 to 1.0
+  lookAt?: {
+    targetType: LookAtTargetType;
+    targetActorId?: string;
+    targetPoint?: [number, number, number];
+  };
+  upperBody?: {
+    preset: UpperBodyPosePreset;
+    blendFactor?: number;
+  };
+  destination?: {
+    position: [number, number, number];
+    arrivalRadius?: number;
+    prompt?: string;
+  };
+  facing?: {
+    targetType: FacingTargetType;
+    targetActorId?: string;
+    angleDegrees?: number;
+  };
+  footGrounding?: {
+    mode: FootGroundingMode;
+    plantThreshold?: number;
+  };
+  stance?: {
+    heightOffset: number; // e.g. -0.3 for crouch, +0.1 for tall
+  };
+}
+
 export interface CharacterActor {
   id: string;
   name: string;
@@ -62,6 +111,7 @@ export interface CharacterActor {
   color?: string;
   renderMode?: 'mesh' | 'skeleton' | 'hybrid';
   visible?: boolean;
+  constraints?: ActorConstraint[];
 }
 
 export interface TrellisGenerateParams {

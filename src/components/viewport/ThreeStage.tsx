@@ -605,6 +605,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
             <CharacterActorModel
               key={actor.id}
               actor={actor}
+              allActors={characters}
               isSelected={actor.id === selectedActorId}
               transformMode={transformMode}
               currentTimelineTime={currentTimelineTime}
@@ -618,6 +619,68 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
               onTransformChange={onUpdateActorTransform}
             />
           ))}
+
+          {/* 3D Visualizers for Active Constraints (Waypoints & Look-At Targets) */}
+          {characters.map((actor) => {
+            if (!actor.constraints) return null;
+            return actor.constraints.map((c) => {
+              if (!c.enabled) return null;
+              const isActive = currentTimelineTime >= c.startTime && currentTimelineTime <= c.endTime;
+
+              return (
+                <group key={`${actor.id}_${c.id}`}>
+                  {/* Destination Waypoint Ring on Floor */}
+                  {c.type === 'destination' && c.destination && (
+                    <group position={[c.destination.position[0], 0.02, c.destination.position[2]]}>
+                      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+                        <ringGeometry args={[0.35, 0.42, 32]} />
+                        <meshBasicMaterial
+                          color={isActive ? '#af52de' : '#6b3096'}
+                          transparent
+                          opacity={isActive ? 0.9 : 0.4}
+                          side={THREE.DoubleSide}
+                        />
+                      </mesh>
+                      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+                        <circleGeometry args={[0.15, 24]} />
+                        <meshBasicMaterial
+                          color={isActive ? '#af52de' : '#6b3096'}
+                          transparent
+                          opacity={isActive ? 0.7 : 0.25}
+                          side={THREE.DoubleSide}
+                        />
+                      </mesh>
+                      {isActive && (
+                        <Html center position={[0, 0.4, 0]} distanceFactor={10}>
+                          <div className="bg-purple-900/80 border border-purple-400 text-purple-200 text-[9px] font-mono px-1.5 py-0.5 rounded-full whitespace-nowrap shadow-lg flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping" />
+                            WAYPOINT: {actor.name}
+                          </div>
+                        </Html>
+                      )}
+                    </group>
+                  )}
+
+                  {/* Look-At Target 3D Point */}
+                  {c.type === 'look_at' && c.lookAt?.targetType === 'point' && c.lookAt.targetPoint && (
+                    <group position={c.lookAt.targetPoint}>
+                      <mesh>
+                        <sphereGeometry args={[0.08, 16, 16]} />
+                        <meshBasicMaterial color={isActive ? '#00ffcc' : '#007a66'} wireframe={!isActive} />
+                      </mesh>
+                      {isActive && (
+                        <Html center position={[0, 0.2, 0]} distanceFactor={10}>
+                          <div className="bg-cyan-950/80 border border-cyan-400 text-cyan-300 text-[9px] font-mono px-1.5 py-0.5 rounded-full whitespace-nowrap shadow-lg">
+                            LOOK TARGET
+                          </div>
+                        </Html>
+                      )}
+                    </group>
+                  )}
+                </group>
+              );
+            });
+          })}
 
           {/* Default Demo Pedestal if empty */}
           {assets.length === 0 && characters.length === 0 && (

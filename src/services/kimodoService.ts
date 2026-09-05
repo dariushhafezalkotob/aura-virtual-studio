@@ -1,4 +1,4 @@
-import { MotionData } from '../types';
+import { MotionData, ActorConstraint } from '../types';
 
 export interface MotionGenerationParams {
   prompt: string;
@@ -8,6 +8,7 @@ export interface MotionGenerationParams {
   speed?: number;
   seed?: number;
   startPosition?: [number, number, number];
+  constraints?: any[];
 }
 
 export interface MotionPreset {
@@ -224,6 +225,7 @@ export class KimodoService {
           seed: params.seed,
           diffusion_steps: 50,
           trajectoryMode,
+          constraints: params.constraints || undefined,
         }),
       });
 
@@ -240,10 +242,12 @@ export class KimodoService {
 
         // Check if real Kimodo frame data is present
         if (result.rotations && Array.isArray(result.rotations) && result.rotations.length > 0) {
+          // Normalize trajectory root points relative to initial frame so path begins directly at startPos on the floor
+          const initR = (result.root && result.root.length > 0) ? result.root[0] : [0, 0, 0];
           const rootPts: [number, number, number][] = (result.root || []).map((r: number[]) => [
-            (r[0] || 0) + startPos[0],
-            (r[1] || 0) + startPos[1],
-            (r[2] || 0) + startPos[2],
+            ((r[0] ?? initR[0]) - initR[0]) + startPos[0],
+            startPos[1], // Floor level
+            ((r[2] ?? initR[2]) - initR[2]) + startPos[2],
           ]);
 
           motionData = {
@@ -289,5 +293,53 @@ export class KimodoService {
       console.warn('Kimodo generation error:', err);
       throw err;
     }
+  }
+
+  /**
+   * Compiles actor waypoint / destination constraints into official Kimodo root2d constraint dictionaries
+   */
+  static compileKimodoConstraints(
+    constraints: ActorConstraint[],
+    durationSeconds: number,
+    startPosition: [number, number, number] = [0, 0, 0],
+    fps: number = 30
+  ): any[] {
+    const totalFrames = Math.max(15, Math.round(durationSeconds * fps));
+    const destConstraints = (constraints || []).filter(
+      (c) => c.enabled && c.type === 'destination' && c.destination
+    );
+
+    if (destConstraints.length === 0) return [];
+
+    const frameIndices: number[] = [0];
+    const smoothRoot2D: [number, number][] = [[0.0, 0.0]];
+
+    for (const c of destConstraints) {
+      if (!c.destination) continue;
+      // Compute arrival frame index
+      const arrivalTime = Math.min(durationSeconds, Math.max(0.2, c.endTime));
+      const frameIdx = Math.min(totalFrames - 1, Math.max(1, Math.round(arrivalTime * fps)));
+
+      // Coordinates in meters relative to actor's starting position (Kimodo canonical origin is 0,0 at frame 0)
+      const relX = c.destination.position[0] - startPosition[0];
+      const relZ = c.destination.position[2] - startPosition[2];
+
+      if (!frameIndices.includes(frameIdx)) {
+        frameIndices.push(frameIdx);
+        smoothRoot2D.push([parseFloat(relX.toFixed(3)), parseFloat(relZ.toFixed(3))]);
+      }
+    }
+
+    // Sort by frame index
+    const paired = frameIndices.map((fi, i) => ({ fi, pt: smoothRoot2D[i] }));
+    paired.sort((a, b) => a.fi - b.fi);
+
+    return [
+      {
+        type: 'root2d',
+        frame_indices: paired.map((p) => p.fi),
+        smooth_root_2d: paired.map((p) => p.pt),
+      },
+    ];
   }
 }

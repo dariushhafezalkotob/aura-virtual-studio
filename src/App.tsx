@@ -6,6 +6,11 @@ import { WorkflowSequenceView } from './components/screens/WorkflowSequenceView'
 import { SceneDesignView } from './components/screens/SceneDesignView';
 import { ActingSetupView } from './components/screens/ActingSetupView';
 import { CameraRecordView } from './components/screens/CameraRecordView';
+import {
+  getInitialProjectsFromLocalStorage,
+  loadProjectsFromIndexedDB,
+  persistProjectsSafely,
+} from './services/storageService';
 
 const INITIAL_PROJECTS: Project[] = [
   {
@@ -35,31 +40,29 @@ const INITIAL_PROJECTS: Project[] = [
 ];
 
 export function App() {
-  const [projects, setProjects] = useState<Project[]>(() => {
-    const saved = localStorage.getItem('aura_projects');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        // Cleanse any invalid non-glb scene assets from initial test
-        const cleansed = parsed.map((p: Project) => ({
-          ...p,
-          scenes: (p.scenes || []).filter(
-            (s) => s.glbUrl && (s.glbUrl.includes('.glb') || s.glbUrl.includes('.gltf') || s.glbUrl.startsWith('blob:'))
-          ),
-        }));
-        return cleansed;
-      } catch {
-        return INITIAL_PROJECTS;
-      }
-    }
-    return INITIAL_PROJECTS;
-  });
+  const [projects, setProjects] = useState<Project[]>(() =>
+    getInitialProjectsFromLocalStorage(INITIAL_PROJECTS)
+  );
 
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [currentStage, setCurrentStage] = useState<WorkflowStage>('projects');
 
+  // Hydrate high-capacity neural motion data from IndexedDB on mount
   useEffect(() => {
-    localStorage.setItem('aura_projects', JSON.stringify(projects));
+    let active = true;
+    loadProjectsFromIndexedDB().then((dbProjects) => {
+      if (active && dbProjects && dbProjects.length > 0) {
+        setProjects(dbProjects);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Persist project changes safely to IndexedDB (full data) + LocalStorage (lightweight)
+  useEffect(() => {
+    persistProjectsSafely(projects);
   }, [projects]);
 
   const currentProject = projects.find((p) => p.id === currentProjectId) || null;
