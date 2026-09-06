@@ -930,46 +930,78 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
               <div className="grid grid-cols-4 gap-2 mt-2">
                 <div
                   onClick={() => saveCondMap('depth')}
-                  className="flex flex-col gap-1 cursor-pointer group"
+                  className="flex flex-col items-center gap-1 cursor-pointer group"
                   title="Click to Save Depth Map"
                 >
-                  <span className="font-mono text-[9px] text-center text-on-surface-variant font-medium">DEPTH</span>
-                  <div className="h-14 bg-surface-container-lowest border border-outline-variant/50 rounded overflow-hidden flex items-center justify-center group-hover:border-primary transition-colors">
-                    {depthThumb && <img src={depthThumb} alt="Depth" className="w-full h-full object-cover" />}
+                  <span className="font-mono text-[9px] text-center text-on-surface-variant font-medium tracking-wider">DEPTH</span>
+                  <div className="w-full max-w-[78px] aspect-square bg-surface-container-lowest border border-outline-variant/50 rounded-md overflow-hidden flex items-center justify-center group-hover:border-primary transition-colors relative">
+                    {depthThumb ? (
+                      <>
+                        <img src={depthThumb} alt="Depth" className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-primary">
+                          <span className="material-symbols-outlined text-[16px]">download</span>
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-[9px] font-mono text-on-surface-variant/40">—</span>
+                    )}
                   </div>
                 </div>
 
                 <div
                   onClick={() => saveCondMap('normal')}
-                  className="flex flex-col gap-1 cursor-pointer group"
+                  className="flex flex-col items-center gap-1 cursor-pointer group"
                   title="Click to Save Normal Map"
                 >
-                  <span className="font-mono text-[9px] text-center text-on-surface-variant font-medium">NORMAL</span>
-                  <div className="h-14 bg-surface-container-lowest border border-outline-variant/50 rounded overflow-hidden flex items-center justify-center group-hover:border-primary transition-colors">
-                    {normalThumb && <img src={normalThumb} alt="Normal" className="w-full h-full object-cover" />}
+                  <span className="font-mono text-[9px] text-center text-on-surface-variant font-medium tracking-wider">NORMAL</span>
+                  <div className="w-full max-w-[78px] aspect-square bg-surface-container-lowest border border-outline-variant/50 rounded-md overflow-hidden flex items-center justify-center group-hover:border-primary transition-colors relative">
+                    {normalThumb ? (
+                      <>
+                        <img src={normalThumb} alt="Normal" className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-primary">
+                          <span className="material-symbols-outlined text-[16px]">download</span>
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-[9px] font-mono text-on-surface-variant/40">—</span>
+                    )}
                   </div>
                 </div>
 
                 <div
                   onClick={() => saveCondMap('mask')}
-                  className="flex flex-col gap-1 cursor-pointer group"
+                  className="flex flex-col items-center gap-1 cursor-pointer group"
                   title="Click to Save Inpaint Mask"
                 >
-                  <span className="font-mono text-[9px] text-center text-on-surface-variant font-medium">INPAINT</span>
-                  <div className="h-14 bg-surface-container-lowest border border-outline-variant/50 rounded overflow-hidden flex items-center justify-center group-hover:border-primary transition-colors">
-                    {maskThumb && <img src={maskThumb} alt="Mask" className="w-full h-full object-cover" />}
+                  <span className="font-mono text-[9px] text-center text-on-surface-variant font-medium tracking-wider">INPAINT</span>
+                  <div className="w-full max-w-[78px] aspect-square bg-surface-container-lowest border border-outline-variant/50 rounded-md overflow-hidden flex items-center justify-center group-hover:border-primary transition-colors relative">
+                    {maskThumb ? (
+                      <>
+                        <img src={maskThumb} alt="Mask" className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-primary">
+                          <span className="material-symbols-outlined text-[16px]">download</span>
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-[9px] font-mono text-on-surface-variant/40">—</span>
+                    )}
                   </div>
                 </div>
 
                 <div
                   onClick={() => genThumb && setShowGenModal(true)}
-                  className={`flex flex-col gap-1 ${genThumb ? 'cursor-pointer group' : 'opacity-40'}`}
+                  className={`flex flex-col items-center gap-1 ${genThumb ? 'cursor-pointer group' : 'opacity-40'}`}
                   title={genThumb ? 'Click to view full-size Generated Image' : 'No image generated yet'}
                 >
-                  <span className="font-mono text-[9px] text-center text-primary font-medium">GENERATED</span>
-                  <div className={`h-14 bg-surface-container-lowest border rounded overflow-hidden flex items-center justify-center transition-colors relative ${genThumb ? 'border-primary/60 group-hover:border-primary' : 'border-outline-variant/30'}`}>
+                  <span className="font-mono text-[9px] text-center text-primary font-medium tracking-wider">GENERATED</span>
+                  <div className={`w-full max-w-[78px] aspect-square bg-surface-container-lowest border rounded-md overflow-hidden flex items-center justify-center transition-colors relative ${genThumb ? 'border-primary/60 group-hover:border-primary' : 'border-outline-variant/30'}`}>
                     {genThumb ? (
-                      <img src={genThumb} alt="Generated" className="w-full h-full object-cover" />
+                      <>
+                        <img src={genThumb} alt="Generated" className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-primary">
+                          <span className="material-symbols-outlined text-[16px]">fullscreen</span>
+                        </div>
+                      </>
                     ) : (
                       <span className="text-[9px] font-mono text-on-surface-variant/40">—</span>
                     )}
