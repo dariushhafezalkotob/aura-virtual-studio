@@ -2015,11 +2015,16 @@ export class RoomBakeEngine {
     const atlasCanvas = this.getAtlasCanvas();
     const bakedTexture = new THREE.CanvasTexture(atlasCanvas);
     bakedTexture.colorSpace = THREE.SRGBColorSpace;
-    bakedTexture.flipY = false;
+    bakedTexture.flipY = true;
     bakedTexture.needsUpdate = true;
 
-    const exportMat = new THREE.MeshBasicMaterial({
+    const exportMat = new THREE.MeshStandardMaterial({
       map: bakedTexture,
+      emissive: new THREE.Color(0xffffff),
+      emissiveMap: bakedTexture,
+      emissiveIntensity: 1.0,
+      roughness: 0.9,
+      metalness: 0.0,
       side: THREE.DoubleSide,
     });
 

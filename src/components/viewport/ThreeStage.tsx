@@ -363,48 +363,41 @@ const GLTFModel: React.FC<{
 
           if (mesh.material) {
             const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-            if (isUnlit) {
-              const unlitMats = mats.map((m) => {
-                const anyM = m as any;
-                if (anyM.isMeshBasicMaterial) {
-                  anyM.side = THREE.DoubleSide;
-                  if (anyM.map) {
-                    anyM.map.colorSpace = THREE.SRGBColorSpace;
-                    anyM.map.needsUpdate = true;
-                  }
-                  return anyM;
-                }
-                const basic = new THREE.MeshBasicMaterial({
-                  map: anyM.map || null,
-                  color: anyM.map ? 0xffffff : (anyM.color || 0xffffff),
-                  side: THREE.DoubleSide,
-                });
-                if (basic.map) {
-                  basic.map.colorSpace = THREE.SRGBColorSpace;
-                  basic.map.needsUpdate = true;
-                }
-                return basic;
-              });
-              mesh.material = Array.isArray(mesh.material) ? unlitMats : unlitMats[0];
-              mesh.castShadow = false;
-              mesh.receiveShadow = false;
-            } else {
-              mesh.castShadow = true;
-              mesh.receiveShadow = true;
-              for (const m of mats) {
-                const mat = m as THREE.MeshStandardMaterial;
+            for (const m of mats) {
+              const mat = m as THREE.MeshStandardMaterial;
+              if (mat.map) {
+                mat.map.colorSpace = THREE.SRGBColorSpace;
+                mat.map.needsUpdate = true;
+              }
+              if (mesh.geometry?.attributes?.color) {
+                mat.vertexColors = true;
+              }
+
+              if (isUnlit) {
+                // Light-independent display: make texture emit at 100% full brightness
                 if (mat.map) {
-                  mat.map.colorSpace = THREE.SRGBColorSpace;
-                  mat.map.needsUpdate = true;
+                  mat.emissiveMap = mat.map;
+                  mat.emissive = new THREE.Color(0xffffff);
+                  mat.emissiveIntensity = 1.0;
+                } else if (mat.color) {
+                  mat.emissive = mat.color.clone();
+                  mat.emissiveIntensity = 1.0;
                 }
-                if (mesh.geometry?.attributes?.color) {
-                  mat.vertexColors = true;
-                }
+                mat.roughness = 1.0;
+                mat.metalness = 0.0;
+                mesh.castShadow = false;
+                mesh.receiveShadow = false;
+              } else {
+                mat.emissive = new THREE.Color(0x000000);
+                mat.emissiveIntensity = 0.0;
                 if (mat.metalness !== undefined) mat.metalness = Math.min(mat.metalness, 0.25);
                 if (mat.roughness !== undefined) mat.roughness = Math.max(0.3, Math.min(mat.roughness, 0.85));
-                mat.side = THREE.DoubleSide;
-                mat.needsUpdate = true;
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
               }
+
+              mat.side = THREE.DoubleSide;
+              mat.needsUpdate = true;
             }
           }
         }
