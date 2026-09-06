@@ -197,6 +197,7 @@ export class RoomBakeEngine {
   public maskMat: THREE.ShaderMaterial;
   public bakeMat: THREE.ShaderMaterial;
   public blitMat: THREE.ShaderMaterial;
+  public importTexMat: THREE.ShaderMaterial;
   public resolveMat: THREE.ShaderMaterial;
   public dilateMat: THREE.ShaderMaterial;
   public reduceMat: THREE.ShaderMaterial;
@@ -469,6 +470,26 @@ export class RoomBakeEngine {
       fragmentShader: `
         uniform sampler2D uTex; varying vec2 vUv;
         void main() { gl_FragColor = texture2D(uTex, vUv); }`,
+      depthTest: false,
+      depthWrite: false,
+    });
+
+    this.importTexMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTex: { value: null },
+        uForceAlpha: { value: 1.0 },
+      },
+      vertexShader: FS_VERT,
+      fragmentShader: `
+        uniform sampler2D uTex;
+        uniform float uForceAlpha;
+        varying vec2 vUv;
+        void main() {
+          vec4 c = texture2D(uTex, vUv);
+          float hasPixel = step(0.002, max(max(c.r, c.g), max(c.b, c.a)));
+          float a = (uForceAlpha > 0.5) ? 1.0 : max(c.a, hasPixel);
+          gl_FragColor = vec4(c.rgb, a);
+        }`,
       depthTest: false,
       depthWrite: false,
     });
@@ -1480,7 +1501,7 @@ export class RoomBakeEngine {
     }
 
     // Default to Smart Coplanar Island Unwrapping, but preserve UVs if model already has texture
-    const effectiveUvMode = (existingTexture && hasAnyUv && uvMode !== 'smart' && uvMode !== 'box') ? 'model' : uvMode;
+    const effectiveUvMode = (existingTexture && hasAnyUv) ? 'model' : uvMode;
 
     if (effectiveUvMode === 'smart' || !hasAnyUv || (effectiveUvMode === 'auto' && !hasAnyUv)) {
       this.smartUnwrapGeometry(mergedGeom);
@@ -1519,7 +1540,7 @@ export class RoomBakeEngine {
     this.generatePresetViews();
     this.clearBake();
 
-    // If model has an existing texture, blit it into the baking atlas so it renders immediately!
+    // If model has an existing texture, blit it into the baking atlas with full alpha so it renders immediately!
     if (existingTexture) {
       existingTexture.needsUpdate = true;
       const applyTex = () => {
@@ -1527,8 +1548,11 @@ export class RoomBakeEngine {
         this.renderer.setRenderTarget(this.RTs.bakeA);
         this.renderer.setClearColor(0x000000, 0);
         this.renderer.clear(true, true, true);
-        this.blit(existingTexture, this.RTs.bakeA);
+        this.blitImportTexture(existingTexture, this.RTs.bakeA, true);
         this.refreshDisplay(this.dilationPasses);
+        this.roomMat.uniforms.uShowGaps.value = 0.0;
+        this.state.bakes = Math.max(this.state.bakes, 1);
+        this.state.coverage = this.computeCoverage();
       };
 
       if (
@@ -1655,10 +1679,24 @@ export class RoomBakeEngine {
       for (let y = 0; y < h; y++) {
         const src = (h - 1 - y) * w * 4;
         const dst = y * w * 4;
-        img.data.set(px.subarray(src, src + w * 4), dst);
+        for (let x = 0; x < w; x++) {
+          const iSrc = src + x * 4;
+          const iDst = dst + x * 4;
+          img.data[iDst]     = px[iSrc];
+          img.data[iDst + 1] = px[iSrc + 1];
+          img.data[iDst + 2] = px[iSrc + 2];
+          const hasColor = px[iSrc] > 2 || px[iSrc + 1] > 2 || px[iSrc + 2] > 2;
+          img.data[iDst + 3] = (px[iSrc + 3] > 10 || hasColor) ? 255 : px[iSrc + 3];
+        }
       }
     } else {
-      img.data.set(px);
+      for (let i = 0; i < px.length; i += 4) {
+        img.data[i]     = px[i];
+        img.data[i + 1] = px[i + 1];
+        img.data[i + 2] = px[i + 2];
+        const hasColor = px[i] > 2 || px[i + 1] > 2 || px[i + 2] > 2;
+        img.data[i + 3] = (px[i + 3] > 10 || hasColor) ? 255 : px[i + 3];
+      }
     }
     ctx.putImageData(img, 0, 0);
     return cv;
@@ -1758,6 +1796,12 @@ export class RoomBakeEngine {
   public blit(srcTex: THREE.Texture, dst: THREE.WebGLRenderTarget) {
     this.blitMat.uniforms.uTex.value = srcTex;
     this.fsPass(this.blitMat, dst);
+  }
+
+  public blitImportTexture(srcTex: THREE.Texture, dst: THREE.WebGLRenderTarget, forceAlpha = true) {
+    this.importTexMat.uniforms.uTex.value = srcTex;
+    this.importTexMat.uniforms.uForceAlpha.value = forceAlpha ? 1.0 : 0.0;
+    this.fsPass(this.importTexMat, dst);
   }
 
   public bake(view: ViewPoint, genTexture: THREE.Texture, opts: BakeOptions = {}) {

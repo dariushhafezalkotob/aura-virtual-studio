@@ -159,7 +159,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   const isOpenRef = useRef(isOpen);
   isOpenRef.current = isOpen;
   const keysDownRef = useRef<Set<string>>(new Set());
-  const lastLoadedTargetIdRef = useRef<string | null>(null);
+  const lastLoadedTargetKeyRef = useRef<string | null>(null);
 
   // Initialize Engine & Viewport (Persistent Session with Unreal Navigation)
   useEffect(() => {
@@ -179,31 +179,6 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
         refreshViewInfo(v);
         updateStats();
       }
-    }
-
-    // Auto-load active scene model (e.g. baked room or selected asset) with its textures into RoomBake
-    if (targetAsset && targetAsset.glbUrl && targetAsset.id !== lastLoadedTargetIdRef.current) {
-      lastLoadedTargetIdRef.current = targetAsset.id;
-      addLog(`Loading target scene model: "${targetAsset.name}" with its textures into RoomBake...`, 'info');
-
-      engineRef.current.loadCustomModel(targetAsset.glbUrl, 'model')
-        .then(() => {
-          if (!engineRef.current) return;
-          setViews([...engineRef.current.views]);
-          setModelStatus(targetAsset.name);
-          setSelectedViewIdx(1);
-          const v = engineRef.current.views[1] || engineRef.current.views[0];
-          if (v) {
-            engineRef.current.renderConditioning(v, autoRange, depthInvert, maskFeather);
-            refreshViewInfo(v);
-          }
-          updateStats();
-          addLog(`✓ Loaded "${targetAsset.name}" with its textures into RoomBake!`, 'ok');
-        })
-        .catch((err) => {
-          console.warn('Failed to load targetAsset in RoomBake:', err);
-          addLog(`Could not load target model (${err.message}). Using default room.`, 'err');
-        });
     }
 
     let dragging = false;
@@ -363,6 +338,64 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     };
   }, [isOpen, selectedViewIdx, updateStats, refreshViewInfo]);
 
+  // Auto-load target scene model (e.g. baked room or selected asset) with its textures whenever RoomBake opens
+  useEffect(() => {
+    if (!isOpen) return;
+    const engine = engineRef.current;
+    if (!engine) return;
+
+    if (!targetAsset || !targetAsset.glbUrl) return;
+
+    const targetKey = `${targetAsset.id}_${targetAsset.glbUrl}`;
+    const needsLoad =
+      targetKey !== lastLoadedTargetKeyRef.current ||
+      engine.state.modelName.toLowerCase().includes('default');
+
+    if (needsLoad) {
+      lastLoadedTargetKeyRef.current = targetKey;
+      addLog(`Loading scene model: "${targetAsset.name}" with its textures into RoomBake...`, 'info');
+
+      // Resolve expired blob URLs or fallbacks to permanent asset storage
+      const resolvedUrl =
+        targetAsset.glbUrl.startsWith('blob:') &&
+        (targetAsset.id.startsWith('roombake_') ||
+          targetAsset.category === 'environment' ||
+          targetAsset.name.toLowerCase().includes('room'))
+          ? '/api/assets/baked_room_studio.glb'
+          : targetAsset.glbUrl;
+
+      engine
+        .loadCustomModel(resolvedUrl, 'model')
+        .then(() => {
+          if (!engineRef.current) return;
+          setViews([...engineRef.current.views]);
+          setModelStatus(targetAsset.name);
+          setSelectedViewIdx(1);
+          const v = engineRef.current.views[1] || engineRef.current.views[0];
+          if (v) {
+            engineRef.current.renderConditioning(v, autoRange, depthInvert, maskFeather);
+            refreshViewInfo(v);
+          }
+          setShowGaps(false);
+          updateStats();
+          addLog(`✓ Loaded "${targetAsset.name}" with its textures into RoomBake!`, 'ok');
+        })
+        .catch((err) => {
+          console.warn('Failed to load targetAsset in RoomBake:', err);
+          addLog(`Could not load target model (${err.message}). Using default room.`, 'err');
+        });
+    }
+  }, [
+    isOpen,
+    targetAsset,
+    autoRange,
+    depthInvert,
+    maskFeather,
+    refreshViewInfo,
+    updateStats,
+    addLog,
+  ]);
+
   // Section 00: Geometry Handlers
   const handleImport3DModel = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -380,6 +413,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
         engine.renderConditioning(v, autoRange, depthInvert, maskFeather);
         refreshViewInfo(v);
       }
+      setShowGaps(false);
       updateStats();
       addLog(`Model "${file.name}" imported with ${uvMode.toUpperCase()} UV layout!`, 'ok');
     } catch (err: any) {
@@ -390,7 +424,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   const handleResetBox = () => {
     const engine = engineRef.current;
     if (!engine) return;
-    lastLoadedTargetIdRef.current = null;
+    lastLoadedTargetKeyRef.current = null;
     engine.buildDefaultRoom();
     setViews([...engine.views]);
     setModelStatus(engine.state.modelName);
