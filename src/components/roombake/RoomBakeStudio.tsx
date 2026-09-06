@@ -31,6 +31,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   const [hasSnapshot, setHasSnapshot] = useState(false);
   const [modelStatus, setModelStatus] = useState('Model: Default room (6.0m × 3.0m × 8.0m)');
   const [showUVModal, setShowUVModal] = useState(false);
+  const [showGenModal, setShowGenModal] = useState(false);
 
   // 00 Geometry
   const [uvMode, setUvMode] = useState<'smart' | 'auto' | 'box' | 'model'>('smart');
@@ -926,7 +927,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
               </div>
 
               {/* Conditioning Cells */}
-              <div className="grid grid-cols-3 gap-2 mt-2">
+              <div className="grid grid-cols-4 gap-2 mt-2">
                 <div
                   onClick={() => saveCondMap('depth')}
                   className="flex flex-col gap-1 cursor-pointer group"
@@ -957,6 +958,21 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                   <span className="font-mono text-[9px] text-center text-on-surface-variant font-medium">INPAINT</span>
                   <div className="h-14 bg-surface-container-lowest border border-outline-variant/50 rounded overflow-hidden flex items-center justify-center group-hover:border-primary transition-colors">
                     {maskThumb && <img src={maskThumb} alt="Mask" className="w-full h-full object-cover" />}
+                  </div>
+                </div>
+
+                <div
+                  onClick={() => genThumb && setShowGenModal(true)}
+                  className={`flex flex-col gap-1 ${genThumb ? 'cursor-pointer group' : 'opacity-40'}`}
+                  title={genThumb ? 'Click to view full-size Generated Image' : 'No image generated yet'}
+                >
+                  <span className="font-mono text-[9px] text-center text-primary font-medium">GENERATED</span>
+                  <div className={`h-14 bg-surface-container-lowest border rounded overflow-hidden flex items-center justify-center transition-colors relative ${genThumb ? 'border-primary/60 group-hover:border-primary' : 'border-outline-variant/30'}`}>
+                    {genThumb ? (
+                      <img src={genThumb} alt="Generated" className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-[9px] font-mono text-on-surface-variant/40">—</span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1314,13 +1330,55 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                   {busy ? 'Generating Image...' : 'Generate image'}
                 </button>
 
-                {/* Generated Image Thumbnail Preview */}
+                {/* Generated Image Preview Card (Enlarged) */}
                 {genThumb && (
-                  <div className="flex items-center gap-3 p-2 bg-surface-container rounded border border-outline-variant/40">
-                    <img src={genThumb} alt="Generated" className="w-14 h-14 rounded object-cover border border-primary/50" />
-                    <div className="flex flex-col">
-                      <span className="text-[11px] font-medium text-primary font-mono">Generated Image</span>
-                      <span className="text-[10px] text-on-surface-variant font-mono">Ready for projection baking</span>
+                  <div className="flex flex-col gap-2 p-3 bg-surface-container rounded-lg border border-outline-variant/60 shadow-sm mt-1">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 text-primary font-mono text-xs font-semibold uppercase tracking-wider">
+                        <span className="material-symbols-outlined text-[15px]">image</span>
+                        Generated Image
+                      </div>
+                      {currentGenCanvas && (
+                        <span className="text-[10px] font-mono text-on-surface-variant bg-surface-container-high px-1.5 py-0.5 rounded border border-outline-variant/30">
+                          {currentGenCanvas.width} × {currentGenCanvas.height} px
+                        </span>
+                      )}
+                    </div>
+
+                    <div
+                      onClick={() => setShowGenModal(true)}
+                      className="relative group cursor-pointer overflow-hidden rounded-md border border-outline-variant/50 bg-black/40 w-full flex items-center justify-center transition-all hover:border-primary"
+                      style={{ maxHeight: '280px', minHeight: '180px' }}
+                      title="Click to view full size"
+                    >
+                      <img
+                        src={genThumb}
+                        alt="Generated AI Texture"
+                        className="w-full h-auto max-h-[280px] object-contain rounded transition-transform duration-200 group-hover:scale-[1.02]"
+                      />
+                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1.5 text-white">
+                        <span className="material-symbols-outlined text-[28px]">fullscreen</span>
+                        <span className="text-[11px] font-mono tracking-wide">Click to view full size</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[10.5px] font-mono pt-0.5">
+                      <span className="text-emerald-400 font-medium flex items-center gap-1">
+                        <span className="material-symbols-outlined text-[14px]">check_circle</span>
+                        Ready to bake
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          downloadCanvas(currentGenCanvas, `roombake-generated-${Date.now()}.png`);
+                        }}
+                        className="px-2 py-0.5 bg-surface-container hover:bg-surface-container-high border border-outline-variant rounded text-on-surface hover:text-primary transition-colors flex items-center gap-1"
+                        title="Download image"
+                      >
+                        <span className="material-symbols-outlined text-[13px]">download</span>
+                        Save PNG
+                      </button>
                     </div>
                   </div>
                 )}
@@ -1592,6 +1650,59 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
         isOpen={showUVModal}
         onClose={() => setShowUVModal(false)}
       />
+
+      {/* Generated Image Full-Size Modal */}
+      {showGenModal && genThumb && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center p-4 animate-fade-in"
+          onClick={() => setShowGenModal(false)}
+        >
+          <div
+            className="relative max-w-[92vw] max-h-[92vh] bg-surface-container-lowest border border-outline-variant rounded-xl shadow-2xl overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-4 py-3 bg-surface-container border-b border-surface-container-highest">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-[20px] text-primary">image</span>
+                <span className="text-xs font-mono font-semibold text-on-surface">Generated Image Preview</span>
+                {currentGenCanvas && (
+                  <span className="text-[10px] font-mono text-on-surface-variant bg-surface-container-high px-2 py-0.5 rounded border border-outline-variant/30">
+                    {currentGenCanvas.width} × {currentGenCanvas.height} px
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => downloadCanvas(currentGenCanvas, `roombake-generated-${Date.now()}.png`)}
+                  className="px-3 py-1 bg-surface-container-high hover:bg-surface-container-highest border border-outline-variant text-xs text-on-surface rounded font-mono flex items-center gap-1.5 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[15px]">download</span>
+                  Save PNG
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowGenModal(false)}
+                  className="p-1 text-on-surface-variant hover:text-on-surface rounded hover:bg-surface-container-highest transition-colors"
+                  title="Close preview"
+                >
+                  <span className="material-symbols-outlined text-[22px]">close</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Image Viewport */}
+            <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-black/70 min-h-[300px]">
+              <img
+                src={genThumb}
+                alt="Full size generated preview"
+                className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl border border-outline-variant/30"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
