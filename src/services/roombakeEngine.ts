@@ -236,7 +236,7 @@ export class RoomBakeEngine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(canvas.clientWidth || 800, canvas.clientHeight || 600, false);
     this.renderer.setClearColor(0x0a0c10, 1);
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.outputColorSpace = THREE.NoColorSpace;
 
     // Scene
     this.scene = new THREE.Scene();
@@ -621,11 +621,10 @@ export class RoomBakeEngine {
         uLightIntensity: { value: this.config.lightIntensity ?? 1.0 },
       },
       vertexShader: `
-        varying vec2 vUv; varying vec3 vW; varying vec3 vN;
+        varying vec2 vUv; varying vec3 vW;
         void main() {
           vUv = uv;
           vW = (modelMatrix * vec4(position, 1.0)).xyz;
-          vN = normalize(mat3(modelMatrix) * normal);
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }`,
       fragmentShader: `
@@ -634,28 +633,12 @@ export class RoomBakeEngine {
         uniform float uLightIntensity;
         varying vec2 vUv;
         varying vec3 vW;
-        varying vec3 vN;
         void main() {
           vec4 c = texture2D(uTex, vUv);
           if (c.a > 0.5 || uShowGaps < 0.5) {
-            vec3 N = normalize(vN);
-            if (!gl_FrontFacing) N = -N;
-
-            // Ambient & Hemisphere base matching Scene Design
-            float hemi = (N.y * 0.5 + 0.5) * 0.35;
-            float ambient = 0.65 + hemi;
-
-            // Key, fill, and front directional lights matching Scene Design
-            vec3 L1 = normalize(vec3(6.0, 12.0, 8.0));   // Key light
-            vec3 L2 = normalize(vec3(-8.0, 6.0, -6.0));  // Fill light
-            vec3 L3 = normalize(vec3(0.0, 4.0, 10.0));   // Front light
-
-            float diff1 = max(dot(N, L1), 0.0) * 0.55;
-            float diff2 = max(dot(N, L2), 0.0) * 0.30;
-            float diff3 = max(dot(N, L3), 0.0) * 0.20;
-
-            float lighting = clamp((ambient + diff1 + diff2 + diff3) * uLightIntensity, 0.1, 4.0);
-            vec3 col = c.rgb * lighting;
+            // Normal clean ambient light environment for baking & texture inspection:
+            // 100% full even illumination without dark directional shadows
+            vec3 col = c.rgb * max(0.1, uLightIntensity);
             gl_FragColor = vec4(col, 1.0);
             return;
           }
@@ -663,7 +646,7 @@ export class RoomBakeEngine {
           float line = 1.0 - min(min(g.x, g.y), g.z);
           vec3 baseGrid = mix(vec3(0.08, 0.09, 0.11), vec3(0.16, 0.18, 0.22),
                               clamp(line, 0.0, 1.0));
-          gl_FragColor = vec4(baseGrid * uLightIntensity, 1.0);
+          gl_FragColor = vec4(baseGrid * max(0.1, uLightIntensity), 1.0);
         }`,
       side: THREE.DoubleSide,
     });
@@ -1585,6 +1568,7 @@ export class RoomBakeEngine {
 
     // If model has an existing texture, blit it into the baking atlas with full alpha so it renders immediately!
     if (existingTexture) {
+      existingTexture.colorSpace = THREE.NoColorSpace;
       existingTexture.needsUpdate = true;
       const applyTex = () => {
         if (!existingTexture) return;

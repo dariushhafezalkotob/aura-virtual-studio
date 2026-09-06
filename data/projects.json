@@ -9,7 +9,7 @@
         "id": "roombake_1788681421910",
         "name": "AI Baked Room Environment",
         "category": "environment",
-        "glbUrl": "/api/assets/roombake_1788682839305.glb",
+        "glbUrl": "/api/assets/roombake_1788683313685.glb",
         "position": [
           0,
           0,
@@ -25,7 +25,7 @@
           1,
           1
         ],
-        "createdAt": "2026-09-06T08:20:39.319Z"
+        "createdAt": "2026-09-06T08:28:33.714Z"
       }
     ],
     "panoramaRotation": 0,
