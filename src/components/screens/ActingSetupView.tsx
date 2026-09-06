@@ -1,171 +1,839 @@
-import React, { useState } from 'react';
-import { Project, CharacterActor } from '../../types';
-import { ThreeStage } from '../viewport/ThreeStage';
+import React, { useState, useEffect, useRef } from 'react';
+import { Project, CharacterActor, WorkflowStage, ActorConstraint } from '../../types';
+import { ThreeStage, TransformMode } from '../viewport/ThreeStage';
 import { KimodoService } from '../../services/kimodoService';
+import { ActorConstraintsPanel } from '../acting/ActorConstraintsPanel';
+import { MultiActorTimeline } from '../acting/MultiActorTimeline';
 
 interface ActingSetupViewProps {
   currentProject: Project;
   onUpdateProject: (updated: Project) => void;
+  onNavigateStage?: (stage: WorkflowStage) => void;
 }
 
-const DEFAULT_ACTORS = [
-  { id: 'actor_1', name: 'Lead Actor (Alpha)', type: 'Humanoid', avatar: '🏃' },
-  { id: 'actor_2', name: 'Supporting (Beta)', type: 'Humanoid', avatar: '🚶' },
+const DEFAULT_INITIAL_ACTORS: CharacterActor[] = [
+  {
+    id: 'actor_soma_alpha',
+    name: 'SOMA',
+    characterType: 'soma',
+    avatar: '🏃',
+    color: '#00ffcc',
+    position: [0, 0, 0],
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+    currentAnimation: 'Walk Forward',
+    motionPrompt: 'walks forward steadily with natural arm sway',
+    duration: 4.0,
+    trajectory: KimodoService.generateTrajectory('straight', 4.0, [0, 0, 0], 1.0),
+  },
+  {
+    id: 'actor_g1_unit',
+    name: 'Unit G1',
+    characterType: 'g1',
+    avatar: '🤖',
+    color: '#ff9500',
+    position: [2.0, 0, -1.0],
+    rotation: [0, -0.4, 0],
+    scale: [1, 1, 1],
+    currentAnimation: 'Wave & Greet',
+    motionPrompt: 'stands, raises right hand high and waves warmly to the camera',
+    duration: 3.0,
+    trajectory: KimodoService.generateTrajectory('inplace', 3.0, [2.0, 0, -1.0], 1.0),
+  },
 ];
+
+const PRESET_ACTOR_COLORS = [
+  '#00ffcc', '#af52de', '#ff9500', '#ff2d55', '#34c759',
+  '#007aff', '#ffd60a', '#ff375f', '#32363d', '#e5e5ea',
+];
+
+const PRESET_AVATARS = ['🏃', '🤖', '🥷', '🦸', '💃', '🧟', '👤', '🦾'];
 
 export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   currentProject,
   onUpdateProject,
+  onNavigateStage,
 }) => {
-  const [motionPrompt, setMotionPrompt] = useState('walks forward 3 paces, stops and looks around');
-  const [selectedActor, setSelectedActor] = useState(DEFAULT_ACTORS[0]);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [timelineSec, setTimelineSec] = useState(0);
-  const [isGenerating, setIsGenerating] = useState(false);
+  // Synchronize actors from project or default
+  const characters: CharacterActor[] = (currentProject.characters && currentProject.characters.length > 0)
+    ? currentProject.characters
+    : DEFAULT_INITIAL_ACTORS;
+
+  const [selectedActorId, setSelectedActorId] = useState<string>(characters[0]?.id || 'actor_soma_alpha');
+  const [transformMode, setTransformMode] = useState<TransformMode>('translate');
+  const [motionPrompt, setMotionPrompt] = useState<string>('walks forward 4 steps, stops and waves to camera');
+  const [durationSec, setDurationSec] = useState<number>(4.0);
+  const [speedMultiplier, setSpeedMultiplier] = useState<number>(1.0);
+  const [trajectoryMode, setTrajectoryMode] = useState<'straight' | 'arc' | 'circle' | 'inplace'>('straight');
+  const [showTrajectories, setShowTrajectories] = useState<boolean>(true);
+  const [renderMode, setRenderMode] = useState<'mesh' | 'skeleton' | 'hybrid'>('mesh');
+  const [showViserEmbed, setShowViserEmbed] = useState<boolean>(false);
+  const [showConstraintsPanel, setShowConstraintsPanel] = useState<boolean>(true);
+  const [showActorEditModal, setShowActorEditModal] = useState<boolean>(false);
+
+  // Timeline playback state
+  const [isPlaying, setIsPlaying] = useState<boolean>(true);
+  const [timelineSec, setTimelineSec] = useState<number>(0);
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
+  const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [statusText, setStatusText] = useState<string | null>(null);
+  const [errorText, setErrorText] = useState<string | null>(null);
 
-  const assets = currentProject.scenes || [];
+  const selectedActor = characters.find((c) => c.id === selectedActorId) || characters[0];
+  const maxDuration = Math.max(5.0, ...characters.map((c) => c.duration || 4.0));
 
-  const handleGenerateMotion = async () => {
-    if (!motionPrompt.trim()) return;
+  // Update constraints for a given actor and persist in project
+  const handleUpdateConstraints = (actorId: string, constraints: ActorConstraint[]) => {
+    const destWithPrompt = constraints.find(
+      (c) => c.enabled && c.type === 'destination' && c.destination?.prompt?.trim()
+    );
+    const updated = characters.map((c) => {
+      if (c.id === actorId) {
+        return {
+          ...c,
+          constraints,
+          ...(destWithPrompt?.destination?.prompt ? { motionPrompt: destWithPrompt.destination.prompt } : {}),
+        };
+      }
+      return c;
+    });
+    if (destWithPrompt?.destination?.prompt && actorId === selectedActorId) {
+      setMotionPrompt(destWithPrompt.destination.prompt);
+    }
+    onUpdateProject({ ...currentProject, characters: updated });
+  };
+
+  // Update actor properties (name, color, avatar, etc.)
+  const handleUpdateActorProps = (
+    actorId: string,
+    updates: Partial<Pick<CharacterActor, 'name' | 'color' | 'avatar'>>
+  ) => {
+    const updated = characters.map((c) => {
+      if (c.id === actorId) {
+        return { ...c, ...updates };
+      }
+      return c;
+    });
+    onUpdateProject({ ...currentProject, characters: updated });
+  };
+
+  // Initialize actors on first mount if empty
+  useEffect(() => {
+    if (!currentProject.characters || currentProject.characters.length === 0) {
+      onUpdateProject({
+        ...currentProject,
+        characters: DEFAULT_INITIAL_ACTORS,
+      });
+    }
+  }, []);
+
+  // Update prompt when selected actor changes
+  useEffect(() => {
+    if (selectedActor) {
+      if (selectedActor.motionPrompt) setMotionPrompt(selectedActor.motionPrompt);
+      if (selectedActor.duration) setDurationSec(selectedActor.duration);
+    }
+  }, [selectedActorId]);
+
+  // Master Timeline Animation Loop
+  const lastTimeRef = useRef<number>(performance.now());
+  useEffect(() => {
+    let animFrame: number;
+    const updateTimeline = (now: number) => {
+      const dt = (now - lastTimeRef.current) / 1000;
+      lastTimeRef.current = now;
+
+      if (isPlaying) {
+        setTimelineSec((prev) => {
+          const next = prev + dt * playbackSpeed;
+          return next >= maxDuration ? 0 : next;
+        });
+      }
+      animFrame = requestAnimationFrame(updateTimeline);
+    };
+    animFrame = requestAnimationFrame(updateTimeline);
+    return () => cancelAnimationFrame(animFrame);
+  }, [isPlaying, maxDuration, playbackSpeed]);
+
+  // Keyboard Shortcuts (Space for Play/Pause, W/E/R for Transforms)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        setIsPlaying((p) => !p);
+      } else if (e.key.toLowerCase() === 'w') {
+        setTransformMode('translate');
+      } else if (e.key.toLowerCase() === 'e') {
+        setTransformMode('rotate');
+      } else if (e.key.toLowerCase() === 'r') {
+        setTransformMode('scale');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Handle Actor Transform Updates from 3D Viewport
+  const handleUpdateActorTransform = (
+    id: string,
+    position: [number, number, number],
+    rotation: [number, number, number],
+    scale: [number, number, number]
+  ) => {
+    const updated = characters.map((c) => {
+      if (c.id === id) {
+        // Regenerate trajectory based on new starting position
+        const traj = KimodoService.generateTrajectory(
+          trajectoryMode,
+          c.duration || 4.0,
+          position,
+          speedMultiplier
+        );
+        return { ...c, position, rotation, scale, trajectory: traj };
+      }
+      return c;
+    });
+    onUpdateProject({ ...currentProject, characters: updated });
+  };
+
+  // Generate Motion with Kimodo AI
+  const handleGenerateMotion = async (
+    overridePrompt?: string,
+    overrideConstraints?: ActorConstraint[]
+  ) => {
+    if (!selectedActor) return;
+    const constraintsToUse = overrideConstraints || selectedActor.constraints || [];
+    const activeDestConstraint = constraintsToUse.find(
+      (c) => c.enabled && c.type === 'destination' && c.destination?.prompt?.trim()
+    );
+
+    let promptToUse = (overridePrompt || motionPrompt).trim();
+    if (!overridePrompt && (!promptToUse || promptToUse === 'walks forward steadily with natural arm sway')) {
+      if (activeDestConstraint?.destination?.prompt?.trim()) {
+        promptToUse = activeDestConstraint.destination.prompt.trim();
+        setMotionPrompt(promptToUse);
+      }
+    }
+    if (!promptToUse) return;
+
+    if (overridePrompt) {
+      setMotionPrompt(overridePrompt);
+    }
+    const compiledConstraints = KimodoService.compileKimodoConstraints(
+      constraintsToUse,
+      durationSec,
+      selectedActor.position
+    );
+
     setIsGenerating(true);
+    setErrorText(null);
+    setStatusText(
+      compiledConstraints.length > 0
+        ? `Synthesizing neural motion conditioned on ${compiledConstraints[0].frame_indices.length} waypoint keypoint(s)...`
+        : 'Synthesizing motion with NVIDIA Kimodo Stage on Hugging Face GPU...'
+    );
+
     try {
       const res = await KimodoService.generateMotion(
         {
-          prompt: motionPrompt,
+          prompt: promptToUse,
+          durationSeconds: durationSec,
           actorId: selectedActor.id,
+          trajectoryMode,
+          speed: speedMultiplier,
+          startPosition: selectedActor.position,
+          constraints: compiledConstraints.length > 0 ? compiledConstraints : undefined,
         },
         (s) => setStatusText(s)
       );
 
-      const character: CharacterActor = {
-        id: selectedActor.id,
-        name: selectedActor.name,
-        modelUrl: '',
-        position: [0, 0, 0],
-        rotation: [0, 0, 0],
-        motionPrompt,
-        currentAnimation: res.animationName,
-      };
-
-      onUpdateProject({
-        ...currentProject,
-        characters: [character],
+      const updated = characters.map((c) => {
+        if (c.id === selectedActor.id) {
+          return {
+            ...c,
+            motionPrompt: promptToUse,
+            currentAnimation: res.animationName,
+            duration: res.duration,
+            trajectory: res.trajectory,
+            motionData: res.motionData,
+            bvhUrl: res.bvhUrl,
+          };
+        }
+        return c;
       });
 
-      setStatusText(`Applied: "${motionPrompt}" to ${selectedActor.name}`);
+      onUpdateProject({ ...currentProject, characters: updated });
+      setIsPlaying(true);
+      setTimelineSec(0);
+      setStatusText(`✓ True Kimodo Neural Motion applied to ${selectedActor.name}`);
       setTimeout(() => setStatusText(null), 4000);
     } catch (e: any) {
-      alert(`Motion error: ${e.message}`);
+      console.error('Kimodo generation failed:', e);
+      setErrorText(e.message || 'Kimodo generation encountered an issue.');
+      setStatusText(null);
     } finally {
       setIsGenerating(false);
     }
   };
 
+  // Add New Actor to Scene
+  const handleAddActor = (type: 'soma' | 'g1') => {
+    const count = characters.length + 1;
+    const isSoma = type === 'soma';
+    const newActor: CharacterActor = {
+      id: `actor_${type}_${Date.now()}`,
+      name: isSoma ? `SOMA ${count}` : `G1 ${count}`,
+      characterType: type,
+      avatar: isSoma ? '🏃' : '🤖',
+      color: isSoma ? '#00ffcc' : '#ff9500',
+      position: [(Math.random() - 0.5) * 4, 0, (Math.random() - 0.5) * 4],
+      rotation: [0, (Math.random() - 0.5) * Math.PI, 0],
+      scale: [1, 1, 1],
+      currentAnimation: 'Walk Forward',
+      motionPrompt: 'walks forward steadily with natural arm sway',
+      duration: 4.0,
+      trajectory: KimodoService.generateTrajectory('straight', 4.0, [0, 0, 0], 1.0),
+    };
+
+    const updated = [...characters, newActor];
+    onUpdateProject({ ...currentProject, characters: updated });
+    setSelectedActorId(newActor.id);
+  };
+
+  // Remove Selected Actor
+  const handleDeleteActor = (id: string) => {
+    if (characters.length <= 1) {
+      alert('Must keep at least one character on stage.');
+      return;
+    }
+    const updated = characters.filter((c) => c.id !== id);
+    onUpdateProject({ ...currentProject, characters: updated });
+    if (selectedActorId === id) {
+      setSelectedActorId(updated[0].id);
+    }
+  };
+
+  const assets = currentProject.scenes || [];
+
   return (
     <div className="relative w-full h-[calc(100vh-61px)] overflow-hidden bg-background flex flex-col">
       {/* Viewport Area */}
-      <div className="flex-1 relative w-full h-full">
-        <ThreeStage assets={assets} selectedAssetId={null} />
+      <div className="flex-1 relative w-full h-full flex">
+        {/* Main 3D Three.js Virtual Stage */}
+        <div className="flex-1 relative w-full h-full">
+          <ThreeStage
+            assets={assets}
+            selectedAssetId={null}
+            characters={characters.map((c) => ({ ...c, renderMode }))}
+            selectedActorId={selectedActorId}
+            transformMode={transformMode}
+            onSelectActor={(id) => setSelectedActorId(id || '')}
+            onUpdateActorTransform={handleUpdateActorTransform}
+            currentTimelineTime={timelineSec}
+            isPlaying={isPlaying}
+            showTrajectories={showTrajectories}
+            panoramaUrl={currentProject.panoramaUrl}
+            panoramaRotation={currentProject.panoramaRotation || 0}
+            splatUrl={currentProject.splatUrl}
+          />
 
-        {/* Status Toast */}
-        {statusText && (
-          <div className="absolute top-md left-1/2 -translate-x-1/2 z-40 bg-surface-container/95 border border-outline-variant/60 px-lg py-sm rounded-lg backdrop-blur-xl shadow-2xl flex items-center gap-md">
-            <span className="material-symbols-outlined text-primary text-[20px]">
-              {isGenerating ? 'progress_activity' : 'check_circle'}
-            </span>
-            <span className="font-label-caps text-xs text-primary tracking-wider uppercase">
-              {statusText}
-            </span>
+          {/* Status Toast */}
+          {statusText && (
+            <div className="absolute top-md left-1/2 -translate-x-1/2 z-40 bg-surface-container/95 border border-primary/40 px-lg py-sm rounded-xl backdrop-blur-xl shadow-2xl flex items-center gap-md animate-fadeIn">
+              <span className={`material-symbols-outlined text-primary text-[20px] ${isGenerating ? 'animate-spin' : ''}`}>
+                {isGenerating ? 'progress_activity' : 'check_circle'}
+              </span>
+              <span className="font-label-caps text-xs text-primary tracking-wider uppercase font-medium">
+                {statusText}
+              </span>
+            </div>
+          )}
+
+          {/* Error / Cold-Start Alert Banner */}
+          {errorText && (
+            <div className="absolute top-md left-1/2 -translate-x-1/2 z-40 bg-surface-container-highest/95 border border-amber-500/60 px-lg py-sm rounded-xl backdrop-blur-xl shadow-2xl flex items-center gap-md max-w-xl animate-fadeIn">
+              <span className="material-symbols-outlined text-amber-400 text-[22px] shrink-0">
+                {errorText.toLowerCase().includes('stage') || errorText.toLowerCase().includes('booting') || errorText.toLowerCase().includes('building') ? 'hourglass_top' : 'warning'}
+              </span>
+              <div className="flex flex-col gap-[2px] flex-1">
+                <span className="text-xs font-semibold text-amber-300 tracking-wide font-label-caps">
+                  {errorText.toLowerCase().includes('stage') || errorText.toLowerCase().includes('booting') || errorText.toLowerCase().includes('building')
+                    ? 'KIMODO GPU CONTAINER STARTING UP'
+                    : 'MOTION GENERATION NOTE'}
+                </span>
+                <span className="text-[11px] text-on-surface-variant leading-relaxed font-mono">
+                  {errorText}
+                </span>
+              </div>
+              <div className="flex items-center gap-xs shrink-0">
+                <button
+                  onClick={() => handleGenerateMotion()}
+                  className="bg-amber-500/20 hover:bg-amber-500 text-amber-200 hover:text-black border border-amber-500/40 px-sm py-[3px] rounded-lg text-xs font-label-caps transition-all cursor-pointer font-medium"
+                >
+                  RETRY
+                </button>
+                <button
+                  onClick={() => setErrorText(null)}
+                  className="text-on-surface-variant hover:text-on-surface p-xs rounded-lg cursor-pointer"
+                  title="Dismiss"
+                >
+                  <span className="material-symbols-outlined text-[18px]">close</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Top Left Floating Bar: Actor Roster & Transform Controls */}
+          <div className="absolute top-md left-md z-30 flex flex-col gap-xs">
+            {/* Actor Roster Selector */}
+            <div className="bg-surface-container/90 border border-outline-variant/40 p-xs rounded-xl backdrop-blur-xl flex items-center gap-xs shadow-2xl">
+              {characters.map((act) => (
+                <button
+                  key={act.id}
+                  onClick={() => setSelectedActorId(act.id)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-label-caps tracking-wide transition-all cursor-pointer flex items-center gap-1.5 ${
+                    selectedActorId === act.id
+                      ? 'bg-primary text-background font-medium shadow-md'
+                      : 'text-on-surface-variant hover:text-primary hover:bg-surface-variant'
+                  }`}
+                >
+                  <span className="text-xs">{act.avatar || '🏃'}</span>
+                  <span>{act.name}</span>
+                </button>
+              ))}
+
+              {/* Add Actor Button */}
+              <div className="flex items-center gap-[2px] ml-xs border-l border-outline-variant/30 pl-xs">
+                <button
+                  onClick={() => handleAddActor('soma')}
+                  title="Add SOMA Character"
+                  className="px-sm py-xs text-[11px] font-label-caps text-on-surface-variant hover:text-primary hover:bg-surface-variant rounded flex items-center gap-[2px] cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[14px]">add</span>
+                  +SOMA
+                </button>
+                <button
+                  onClick={() => handleAddActor('g1')}
+                  title="Add Unit G1 Robot"
+                  className="px-sm py-xs text-[11px] font-label-caps text-on-surface-variant hover:text-primary hover:bg-surface-variant rounded flex items-center gap-[2px] cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[14px]">add</span>
+                  +G1
+                </button>
+              </div>
+
+              {/* Actor Appearance & Rename Button */}
+              {selectedActor && (
+                <div className="relative ml-xs border-l border-outline-variant/30 pl-xs">
+                  <button
+                    onClick={() => setShowActorEditModal(!showActorEditModal)}
+                    title="Rename Actor & Change Mesh Material Color"
+                    className={`px-sm py-xs text-[11px] font-label-caps rounded-lg transition-all flex items-center gap-1.5 cursor-pointer border ${
+                      showActorEditModal
+                        ? 'bg-primary text-background border-primary font-medium shadow-md'
+                        : 'border-outline-variant/30 text-on-surface-variant hover:text-primary hover:bg-surface-variant'
+                    }`}
+                  >
+                    <span
+                      className="w-2.5 h-2.5 rounded-full border border-white/40 shadow-sm"
+                      style={{ backgroundColor: selectedActor.color || '#00ffcc' }}
+                    />
+                    <span className="material-symbols-outlined text-[14px]">palette</span>
+                    <span>STYLE</span>
+                  </button>
+
+                  {/* Actor Appearance & Color Popover */}
+                  {showActorEditModal && (
+                    <div className="absolute top-9 left-0 z-50 bg-surface-container-high/95 border border-outline-variant/40 p-md rounded-2xl shadow-2xl backdrop-blur-2xl flex flex-col gap-sm w-72 animate-fadeIn text-on-surface">
+                      <div className="flex items-center justify-between border-b border-outline-variant/20 pb-xs">
+                        <span className="font-label-caps text-xs font-semibold text-primary flex items-center gap-1">
+                          <span className="material-symbols-outlined text-[16px]">tune</span>
+                          ACTOR PROPERTIES
+                        </span>
+                        <button
+                          onClick={() => setShowActorEditModal(false)}
+                          className="p-0.5 text-on-surface-variant hover:text-primary rounded cursor-pointer"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">close</span>
+                        </button>
+                      </div>
+
+                      {/* 1. Rename Actor */}
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] font-label-caps text-on-surface-variant">
+                          ACTOR NAME:
+                        </span>
+                        <input
+                          type="text"
+                          value={selectedActor.name}
+                          onChange={(e) =>
+                            handleUpdateActorProps(selectedActor.id, { name: e.target.value })
+                          }
+                          placeholder="e.g. SOMA Hero, Cyber Agent..."
+                          className="w-full bg-surface-container border border-outline-variant/40 rounded-lg px-2 py-1 text-xs text-primary font-medium focus:outline-none focus:border-primary"
+                        />
+                      </div>
+
+                      {/* 2. Mesh Material Color */}
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-label-caps text-on-surface-variant">
+                            MESH MATERIAL COLOR:
+                          </span>
+                          <span className="text-[10px] font-mono text-primary uppercase">
+                            {selectedActor.color || '#00ffcc'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-5 gap-1.5 pt-0.5">
+                          {PRESET_ACTOR_COLORS.map((hex) => (
+                            <button
+                              key={hex}
+                              type="button"
+                              onClick={() => handleUpdateActorProps(selectedActor.id, { color: hex })}
+                              className={`h-7 rounded-lg border transition-transform hover:scale-110 cursor-pointer flex items-center justify-center ${
+                                selectedActor.color === hex
+                                  ? 'border-white ring-2 ring-primary shadow-lg scale-105'
+                                  : 'border-black/30 hover:border-white/40'
+                              }`}
+                              style={{ backgroundColor: hex }}
+                            >
+                              {selectedActor.color === hex && (
+                                <span className="material-symbols-outlined text-white text-[14px] drop-shadow">
+                                  check
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex items-center justify-between pt-1 border-t border-outline-variant/15 text-[11px] mt-1">
+                          <span className="text-[10px] text-on-surface-variant font-label-caps">
+                            CUSTOM HEX:
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="color"
+                              value={selectedActor.color || '#00ffcc'}
+                              onChange={(e) =>
+                                handleUpdateActorProps(selectedActor.id, { color: e.target.value })
+                              }
+                              className="w-6 h-6 bg-transparent border-0 rounded cursor-pointer"
+                            />
+                            <input
+                              type="text"
+                              value={selectedActor.color || '#00ffcc'}
+                              onChange={(e) =>
+                                handleUpdateActorProps(selectedActor.id, { color: e.target.value })
+                              }
+                              className="w-16 bg-surface-container border border-outline-variant/30 rounded px-1 text-[10px] font-mono text-primary text-center"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 3. Avatar Emoji */}
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] font-label-caps text-on-surface-variant">
+                          AVATAR ICON:
+                        </span>
+                        <div className="grid grid-cols-8 gap-1">
+                          {PRESET_AVATARS.map((av) => (
+                            <button
+                              key={av}
+                              type="button"
+                              onClick={() => handleUpdateActorProps(selectedActor.id, { avatar: av })}
+                              className={`h-7 rounded-lg bg-surface-container hover:bg-surface-variant flex items-center justify-center text-sm cursor-pointer border transition-transform hover:scale-110 ${
+                                selectedActor.avatar === av
+                                  ? 'border-primary bg-primary/10 shadow-sm'
+                                  : 'border-outline-variant/30'
+                              }`}
+                            >
+                              {av}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Transform Mode Selector & Trajectory Toggle */}
+            <div className="bg-surface-container/90 border border-outline-variant/40 p-xs rounded-xl backdrop-blur-xl flex items-center gap-xs shadow-xl w-fit">
+              <button
+                onClick={() => setTransformMode('translate')}
+                title="Move (W)"
+                className={`p-xs rounded-lg transition-colors cursor-pointer ${
+                  transformMode === 'translate' ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[18px]">open_with</span>
+              </button>
+              <button
+                onClick={() => setTransformMode('rotate')}
+                title="Rotate (E)"
+                className={`p-xs rounded-lg transition-colors cursor-pointer ${
+                  transformMode === 'rotate' ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[18px]">rotate_90_degrees_ccw</span>
+              </button>
+              <button
+                onClick={() => setTransformMode('scale')}
+                title="Scale (R)"
+                className={`p-xs rounded-lg transition-colors cursor-pointer ${
+                  transformMode === 'scale' ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[18px]">aspect_ratio</span>
+              </button>
+
+              <div className="h-4 w-[1px] bg-outline-variant/40 mx-xs" />
+
+              {/* SOMA Display Mode Switcher (Mesh / Skeleton / Hybrid) */}
+              <div className="flex items-center gap-[2px] bg-surface-container-low p-[2px] rounded-lg">
+                <button
+                  onClick={() => setRenderMode('mesh')}
+                  title="SOMA Anatomical Human Body Mesh"
+                  className={`px-xs py-[2px] text-[10px] font-label-caps rounded cursor-pointer ${
+                    renderMode === 'mesh' ? 'bg-primary text-background font-semibold' : 'text-on-surface-variant hover:text-primary'
+                  }`}
+                >
+                  MESH
+                </button>
+                <button
+                  onClick={() => setRenderMode('skeleton')}
+                  title="SOMA 24-Joint Biomechanical Skeleton Rig"
+                  className={`px-xs py-[2px] text-[10px] font-label-caps rounded cursor-pointer ${
+                    renderMode === 'skeleton' ? 'bg-primary text-background font-semibold' : 'text-on-surface-variant hover:text-primary'
+                  }`}
+                >
+                  SKEL
+                </button>
+                <button
+                  onClick={() => setRenderMode('hybrid')}
+                  title="SOMA X-Ray Translucent Mesh + Skeleton"
+                  className={`px-xs py-[2px] text-[10px] font-label-caps rounded cursor-pointer ${
+                    renderMode === 'hybrid' ? 'bg-primary text-background font-semibold' : 'text-on-surface-variant hover:text-primary'
+                  }`}
+                >
+                  HYBRID
+                </button>
+              </div>
+
+              <div className="h-4 w-[1px] bg-outline-variant/40 mx-xs" />
+
+              <button
+                onClick={() => setShowTrajectories(!showTrajectories)}
+                title="Toggle 3D Motion Trajectory Spline"
+                className={`px-sm py-xs text-[11px] font-label-caps tracking-wider rounded-lg transition-colors flex items-center gap-xs cursor-pointer ${
+                  showTrajectories ? 'bg-surface-container-high text-primary font-medium' : 'text-on-surface-variant hover:text-primary'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">timeline</span>
+                PATH
+              </button>
+
+              {selectedActor?.motionData && (
+                <div className="flex items-center gap-1 bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 px-sm py-[2px] rounded-lg text-[10px] font-label-caps tracking-wider font-semibold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  KIMODO DIFFUSION ({selectedActor.motionData.num_frames}F @ {selectedActor.motionData.fps}FPS)
+                </div>
+              )}
+
+              {characters.length > 1 && (
+                <button
+                  onClick={() => handleDeleteActor(selectedActorId)}
+                  title="Remove Selected Actor"
+                  className="p-xs text-error hover:bg-error/10 rounded cursor-pointer ml-xs"
+                >
+                  <span className="material-symbols-outlined text-[18px]">delete</span>
+                </button>
+              )}
+            </div>
           </div>
-        )}
 
-        {/* Actor Selector Floating Pill */}
-        <div className="absolute top-md left-md z-30 bg-surface-container/90 border border-outline-variant/40 p-xs rounded-xl backdrop-blur-xl flex items-center gap-xs">
-          {DEFAULT_ACTORS.map((act) => (
+          {/* Top Right: Constraints Panel Toggle & Live Kimodo Viser Engine Toggle */}
+          <div className="absolute top-md right-md z-30 flex items-center gap-xs">
             <button
-              key={act.id}
-              onClick={() => setSelectedActor(act)}
-              className={`px-md py-xs rounded-lg text-xs font-label-caps tracking-wider transition-colors cursor-pointer flex items-center gap-xs ${
-                selectedActor.id === act.id
-                  ? 'bg-primary text-background font-medium'
-                  : 'text-on-surface-variant hover:text-primary hover:bg-surface-variant'
+              onClick={() => setShowConstraintsPanel(!showConstraintsPanel)}
+              className={`px-md py-sm rounded-xl font-label-caps text-xs tracking-wider border backdrop-blur-xl flex items-center gap-xs transition-all shadow-xl cursor-pointer ${
+                showConstraintsPanel
+                  ? 'bg-primary text-background border-primary font-medium'
+                  : 'bg-surface-container/90 border-outline-variant/40 text-on-surface-variant hover:text-primary'
               }`}
             >
-              <span>{act.avatar}</span>
-              {act.name}
+              <span className="material-symbols-outlined text-[18px]">rule_settings</span>
+              <span>CONSTRAINTS</span>
+              {selectedActor?.constraints && selectedActor.constraints.filter((c) => c.enabled).length > 0 && (
+                <span
+                  className={`text-[10px] px-1.5 py-[1px] rounded-full font-mono font-bold ${
+                    showConstraintsPanel ? 'bg-black text-primary' : 'bg-primary/20 text-primary'
+                  }`}
+                >
+                  {selectedActor.constraints.filter((c) => c.enabled).length}
+                </span>
+              )}
             </button>
-          ))}
+
+            <button
+              onClick={() => setShowViserEmbed(!showViserEmbed)}
+              className={`px-md py-sm rounded-xl font-label-caps text-xs tracking-wider border backdrop-blur-xl flex items-center gap-xs transition-all shadow-xl cursor-pointer ${
+                showViserEmbed
+                  ? 'bg-primary text-background border-primary font-medium'
+                  : 'bg-surface-container/90 border-outline-variant/40 text-on-surface-variant hover:text-primary'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[18px]">sports_esports</span>
+              {showViserEmbed ? 'HIDE VISER' : 'LIVE KIMODO VISER'}
+            </button>
+          </div>
+
+          {/* Floating Actor Constraints Inspector Panel */}
+          {showConstraintsPanel && selectedActor && (
+            <div className="absolute top-[68px] right-md z-30 animate-fadeIn">
+              <ActorConstraintsPanel
+                actor={selectedActor}
+                allActors={characters}
+                currentTimelineTime={timelineSec}
+                maxDuration={maxDuration}
+                isGenerating={isGenerating}
+                onGenerateWithConstraint={(prompt, constraints) =>
+                  handleGenerateMotion(prompt, constraints)
+                }
+                onUpdateConstraints={(updatedConstraints) =>
+                  handleUpdateConstraints(selectedActor.id, updatedConstraints)
+                }
+                onClose={() => setShowConstraintsPanel(false)}
+              />
+            </div>
+          )}
         </div>
+
+        {/* Optional Embedded Live NVIDIA Kimodo Viser 3D Stage Side-by-Side */}
+        {showViserEmbed && (
+          <div className="w-[45%] h-full border-l border-outline-variant/40 bg-surface-container-lowest relative z-20 flex flex-col">
+            <div className="p-xs bg-surface-container flex items-center justify-between border-b border-outline-variant/30">
+              <span className="font-label-caps text-xs text-primary font-medium flex items-center gap-xs">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                NVIDIA KIMODO VISER CLOUD ENGINE (:7860)
+              </span>
+              <button
+                onClick={() => setShowViserEmbed(false)}
+                className="p-xs text-on-surface-variant hover:text-primary rounded cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[16px]">close</span>
+              </button>
+            </div>
+            <iframe
+              src="https://dariushh-kimodo-virtual-stage.hf.space"
+              title="Kimodo Virtual Stage Viser View"
+              className="flex-1 w-full h-full border-none"
+              allow="accelerometer; camera; gyroscope; microphone"
+            />
+          </div>
+        )}
       </div>
 
-      {/* Bottom Timeline & Motion Choreographer Panel */}
+      {/* Bottom Director Choreographer & Timeline Panel */}
       <div className="w-full bg-surface-container border-t border-outline-variant/30 p-md z-30 flex flex-col gap-sm">
-        {/* Prompt Input Row */}
-        <div className="flex items-center gap-sm max-w-4xl mx-auto w-full">
-          <div className="flex-1 bg-surface-container-low border border-outline-variant/40 rounded-lg flex items-center px-md py-xs focus-within:border-primary transition-colors">
-            <span className="material-symbols-outlined text-[18px] text-on-surface-variant mr-xs">
+        {/* Row 1: Natural Language Prompt Input + Controls */}
+        <div className="flex items-center gap-sm max-w-6xl mx-auto w-full">
+          <div className="flex-1 bg-surface-container-low border border-outline-variant/40 rounded-xl flex items-center px-md py-xs focus-within:border-primary transition-all shadow-inner">
+            <span className="material-symbols-outlined text-[20px] text-primary mr-sm">
               directions_run
             </span>
             <input
               type="text"
               value={motionPrompt}
               onChange={(e) => setMotionPrompt(e.target.value)}
-              placeholder="Describe character motion (e.g. walks 3 steps, turns right and waves)..."
-              className="w-full bg-transparent border-none text-primary text-sm focus:outline-none placeholder:text-on-surface-variant/40 py-sm"
+              placeholder="Describe character motion in natural language (e.g. walks 4 steps, stops and waves)..."
+              className="w-full bg-transparent border-none text-primary text-sm focus:outline-none placeholder:text-on-surface-variant/40 py-xs"
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleGenerateMotion();
               }}
             />
           </div>
-          <button
-            onClick={handleGenerateMotion}
-            disabled={isGenerating}
-            className="bg-primary text-background font-label-caps text-label-caps px-lg py-sm rounded-lg hover:bg-white/90 transition-colors font-medium shrink-0 flex items-center gap-xs cursor-pointer disabled:opacity-50"
-          >
-            <span className="material-symbols-outlined text-[16px]">animation</span>
-            {isGenerating ? 'GENERATING...' : 'APPLY MOTION'}
-          </button>
-        </div>
 
-        {/* Timeline Sequencer Bar */}
-        <div className="flex items-center justify-between gap-md max-w-4xl mx-auto w-full pt-xs border-t border-outline-variant/10">
-          <div className="flex items-center gap-xs">
-            <button
-              onClick={() => setIsPlaying(!isPlaying)}
-              className="p-xs text-primary hover:bg-surface-variant rounded cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-[24px]">
-                {isPlaying ? 'pause' : 'play_arrow'}
-              </span>
-            </button>
-            <button
-              onClick={() => setTimelineSec(0)}
-              className="p-xs text-on-surface-variant hover:text-primary rounded cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-[20px]">replay</span>
-            </button>
-            <span className="font-label-caps text-xs text-primary tracking-wider ml-sm">
-              00:{timelineSec.toString().padStart(2, '0')} / 00:10
+          {/* Trajectory Pattern Dropdown */}
+          <select
+            value={trajectoryMode}
+            onChange={(e) => setTrajectoryMode(e.target.value as any)}
+            className="bg-surface-container-low border border-outline-variant/40 text-primary text-xs font-label-caps rounded-xl px-md py-sm focus:outline-none focus:border-primary cursor-pointer"
+          >
+            <option value="straight">Straight Path</option>
+            <option value="arc">90° Arc Turn</option>
+            <option value="circle">360° Circle Patrol</option>
+            <option value="inplace">In-Place Motion</option>
+          </select>
+
+          {/* Duration Slider */}
+          <div className="flex items-center gap-xs bg-surface-container-low border border-outline-variant/40 px-md py-xs rounded-xl">
+            <span className="font-label-caps text-[10px] text-on-surface-variant tracking-wider">
+              DUR:
+            </span>
+            <input
+              type="range"
+              min="2"
+              max="12"
+              step="0.5"
+              value={durationSec}
+              onChange={(e) => setDurationSec(parseFloat(e.target.value))}
+              className="w-16 accent-primary h-1 cursor-pointer"
+            />
+            <span className="font-label-caps text-xs text-primary w-6 font-mono">
+              {durationSec}s
             </span>
           </div>
 
-          <div className="flex-1 mx-md">
-            <input
-              type="range"
-              min="0"
-              max="10"
-              step="0.1"
-              value={timelineSec}
-              onChange={(e) => setTimelineSec(parseFloat(e.target.value))}
-              className="w-full accent-primary h-1 bg-surface-container-highest cursor-pointer"
-            />
+          {/* Stride Speed Multiplier */}
+          <div className="flex items-center gap-xs bg-surface-container-low border border-outline-variant/40 px-sm py-xs rounded-xl">
+            <span className="font-label-caps text-[10px] text-on-surface-variant tracking-wider">
+              SPD:
+            </span>
+            <select
+              value={speedMultiplier}
+              onChange={(e) => setSpeedMultiplier(parseFloat(e.target.value))}
+              className="bg-transparent border-none text-primary text-xs font-mono focus:outline-none cursor-pointer"
+            >
+              <option value="0.75" className="bg-surface-container">0.75x</option>
+              <option value="1.0" className="bg-surface-container">1.0x</option>
+              <option value="1.25" className="bg-surface-container">1.25x</option>
+              <option value="1.5" className="bg-surface-container">1.5x</option>
+            </select>
           </div>
 
-          <span className="font-label-caps text-[10px] text-on-surface-variant tracking-widest">
-            KIMODO MOTION ENGINE
-          </span>
+          {/* Kimodo AI Generate Action Button */}
+          <button
+            onClick={() => handleGenerateMotion()}
+            disabled={isGenerating}
+            className="bg-primary text-background font-label-caps text-label-caps px-lg py-sm rounded-xl hover:bg-white/90 transition-all font-semibold shrink-0 flex items-center gap-xs cursor-pointer disabled:opacity-50 shadow-lg"
+          >
+            <span className={`material-symbols-outlined text-[18px] ${isGenerating ? 'animate-spin' : ''}`}>
+              {isGenerating ? 'progress_activity' : 'auto_fix_high'}
+            </span>
+            {isGenerating ? 'KIMODO GENERATING...' : 'GENERATE MOTION'}
+          </button>
         </div>
+
+        {/* Multi-Actor Timeline Sequencer with Duration Visualization */}
+        <MultiActorTimeline
+          characters={characters}
+          selectedActorId={selectedActorId}
+          timelineSec={timelineSec}
+          maxDuration={maxDuration}
+          isPlaying={isPlaying}
+          playbackSpeed={playbackSpeed}
+          onSelectActor={(id) => setSelectedActorId(id)}
+          onSeek={(t) => setTimelineSec(t)}
+          onTogglePlay={() => setIsPlaying(!isPlaying)}
+          onResetTime={() => setTimelineSec(0)}
+          onChangePlaybackSpeed={(spd) => setPlaybackSpeed(spd)}
+          onAddActor={(type) => handleAddActor(type)}
+          onNavigateStage={onNavigateStage}
+          onUpdateActorProps={handleUpdateActorProps}
+        />
       </div>
     </div>
   );

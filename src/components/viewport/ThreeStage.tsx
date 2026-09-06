@@ -10,7 +10,8 @@ import {
   Splat,
 } from '@react-three/drei';
 import * as THREE from 'three';
-import { SceneAsset } from '../../types';
+import { SceneAsset, CharacterActor } from '../../types';
+import { CharacterActorModel } from './CharacterActorModel';
 
 export type TransformMode = 'translate' | 'rotate' | 'scale';
 export type LightingEnvironmentPreset = 'studio' | 'city' | 'sunset' | 'dawn' | 'park';
@@ -18,6 +19,8 @@ export type LightingEnvironmentPreset = 'studio' | 'city' | 'sunset' | 'dawn' | 
 interface ThreeStageProps {
   assets: SceneAsset[];
   selectedAssetId: string | null;
+  characters?: CharacterActor[];
+  selectedActorId?: string | null;
   transformMode?: TransformMode;
   lightIntensity?: number;
   environmentPreset?: LightingEnvironmentPreset;
@@ -32,6 +35,16 @@ interface ThreeStageProps {
     rotation: [number, number, number],
     scale: [number, number, number]
   ) => void;
+  onSelectActor?: (id: string | null) => void;
+  onUpdateActorTransform?: (
+    id: string,
+    position: [number, number, number],
+    rotation: [number, number, number],
+    scale: [number, number, number]
+  ) => void;
+  currentTimelineTime?: number;
+  isPlaying?: boolean;
+  showTrajectories?: boolean;
   showGrid?: boolean;
 }
 
@@ -130,8 +143,8 @@ class ModelErrorBoundary extends Component<
             <boxGeometry args={[1, 1, 1]} />
             <meshStandardMaterial color="#444748" wireframe />
           </mesh>
-          <Html center distanceFactor={8}>
-            <div className="font-label-caps text-[9px] text-on-surface-variant bg-surface-container/90 px-xs py-[2px] border border-outline-variant/30 whitespace-nowrap">
+          <Html center>
+            <div className="font-label-caps text-[9px] text-on-surface-variant bg-surface-container/90 px-xs py-[2px] border border-outline-variant/30 whitespace-nowrap pointer-events-none select-none">
               {this.props.fallbackName}
             </div>
           </Html>
@@ -463,6 +476,8 @@ const UnrealCameraNavigation: React.FC<{
 export const ThreeStage: React.FC<ThreeStageProps> = ({
   assets,
   selectedAssetId,
+  characters = [],
+  selectedActorId = null,
   transformMode = 'translate',
   lightIntensity = 1.0,
   environmentPreset = 'studio',
@@ -472,6 +487,11 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   splatUrl,
   onSelectAsset,
   onUpdateAssetTransform,
+  onSelectActor,
+  onUpdateActorTransform,
+  currentTimelineTime = 0,
+  isPlaying = false,
+  showTrajectories = true,
   showGrid = true,
 }) => {
   const [isTransformDragging, setIsTransformDragging] = useState(false);
@@ -490,6 +510,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         onPointerMissed={() => {
           if (!isTransformDragging) {
             onSelectAsset?.(null);
+            onSelectActor?.(null);
           }
         }}
       >
@@ -569,15 +590,85 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
                 asset={asset}
                 isSelected={asset.id === selectedAssetId}
                 transformMode={transformMode}
-                onSelect={() => onSelectAsset?.(asset.id)}
+                onSelect={() => {
+                  onSelectActor?.(null);
+                  onSelectAsset?.(asset.id);
+                }}
                 onDraggingChange={setIsTransformDragging}
                 onTransformChange={onUpdateAssetTransform}
               />
             </ModelErrorBoundary>
           ))}
 
+          {/* Render All Character Actors with Kimodo Kinematics & Trajectories */}
+          {characters.map((actor) => (
+            <CharacterActorModel
+              key={actor.id}
+              actor={actor}
+              allActors={characters}
+              isSelected={actor.id === selectedActorId}
+              transformMode={transformMode}
+              currentTimelineTime={currentTimelineTime}
+              isPlaying={isPlaying}
+              showTrajectory={showTrajectories}
+              onSelect={() => {
+                onSelectAsset?.(null);
+                onSelectActor?.(actor.id);
+              }}
+              onDraggingChange={setIsTransformDragging}
+              onTransformChange={onUpdateActorTransform}
+            />
+          ))}
+
+          {/* 3D Visualizers for Active Constraints (Waypoints & Look-At Targets) */}
+          {characters.map((actor) => {
+            if (!actor.constraints) return null;
+            return actor.constraints.map((c) => {
+              if (!c.enabled) return null;
+              const isActive = currentTimelineTime >= c.startTime && currentTimelineTime <= c.endTime;
+
+              return (
+                <group key={`${actor.id}_${c.id}`}>
+                  {/* Destination Waypoint Ring on Floor */}
+                  {c.type === 'destination' && c.destination && (
+                    <group position={[c.destination.position[0], 0.02, c.destination.position[2]]}>
+                      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+                        <ringGeometry args={[0.35, 0.42, 32]} />
+                        <meshBasicMaterial
+                          color={isActive ? '#af52de' : '#6b3096'}
+                          transparent
+                          opacity={isActive ? 0.9 : 0.4}
+                          side={THREE.DoubleSide}
+                        />
+                      </mesh>
+                      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+                        <circleGeometry args={[0.15, 24]} />
+                        <meshBasicMaterial
+                          color={isActive ? '#af52de' : '#6b3096'}
+                          transparent
+                          opacity={isActive ? 0.7 : 0.25}
+                          side={THREE.DoubleSide}
+                        />
+                      </mesh>
+                    </group>
+                  )}
+
+                  {/* Look-At Target 3D Point */}
+                  {c.type === 'look_at' && c.lookAt?.targetType === 'point' && c.lookAt.targetPoint && (
+                    <group position={c.lookAt.targetPoint}>
+                      <mesh>
+                        <sphereGeometry args={[0.08, 16, 16]} />
+                        <meshBasicMaterial color={isActive ? '#00ffcc' : '#007a66'} wireframe={!isActive} />
+                      </mesh>
+                    </group>
+                  )}
+                </group>
+              );
+            });
+          })}
+
           {/* Default Demo Pedestal if empty */}
-          {assets.length === 0 && (
+          {assets.length === 0 && characters.length === 0 && (
             <group position={[0, 0, 0]}>
               <mesh position={[0, 0.05, 0]}>
                 <cylinderGeometry args={[1.5, 1.6, 0.1, 32]} />
