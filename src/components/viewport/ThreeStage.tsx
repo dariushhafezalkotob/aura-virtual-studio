@@ -52,6 +52,7 @@ interface ThreeStageProps {
   isPlaybackTake?: boolean;
   playbackTake?: CameraTake | null;
   showCameraTrajectory?: boolean;
+  onCanvasReady?: (canvas: HTMLCanvasElement) => void;
 }
 
 // 360° Equirectangular Panorama Dome (Resilient Non-Blocking Loader)
@@ -797,6 +798,15 @@ const CameraFovUpdater: React.FC<{ fov?: number }> = ({ fov }) => {
   return null;
 };
 
+// Canvas Publisher Component to share the WebGL DOM element for video capture
+const CanvasPublisher: React.FC<{ onCanvasReady?: (canvas: HTMLCanvasElement) => void }> = ({ onCanvasReady }) => {
+  const { gl } = useThree();
+  useEffect(() => {
+    onCanvasReady?.(gl.domElement);
+  }, [gl, onCanvasReady]);
+  return null;
+};
+
 export const ThreeStage: React.FC<ThreeStageProps> = ({
   assets,
   selectedAssetId,
@@ -823,6 +833,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   isPlaybackTake = false,
   playbackTake = null,
   showCameraTrajectory = true,
+  onCanvasReady,
 }) => {
   const [isTransformDragging, setIsTransformDragging] = useState(false);
 
@@ -833,6 +844,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         gl={{
           antialias: true,
           alpha: true,
+          preserveDrawingBuffer: true,
           toneMapping: THREE.ACESFilmicToneMapping,
           toneMappingExposure: 1.0,
           outputColorSpace: THREE.SRGBColorSpace,
@@ -844,6 +856,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           }
         }}
       >
+        <CanvasPublisher onCanvasReady={onCanvasReady} />
         <CameraFovUpdater fov={cameraFov} />
         <color attach="background" args={['#1c1c1e']} />
 

@@ -31,6 +31,12 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const [focalLength, setFocalLength] = useState('35mm');
   const [iso, setIso] = useState('800');
 
+  // Video Export State
+  const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isExportingVideo, setIsExportingVideo] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const abortExportRef = useRef(false);
+
   // Takes Management
   const [takes, setTakes] = useState<CameraTake[]>(currentProject.cameraTakes || []);
   const [activeTakeId, setActiveTakeId] = useState<string | null>(
@@ -123,9 +129,11 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
               // Automatically wrap up recording when timeline finishes sequence
               stopRecording();
               return dur;
-            } else if (viewMode === 'playback') {
+            } else if (viewMode === 'playback' && !isExportingVideo) {
               // Pause cleanly at end of take review
               setIsPlaying(false);
+              return dur;
+            } else if (isExportingVideo) {
               return dur;
             } else {
               // Loop live standby playback
@@ -139,7 +147,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     };
     animFrame = requestAnimationFrame(updateTimeline);
     return () => cancelAnimationFrame(animFrame);
-  }, [isPlaying, playbackSpeed, maxDuration, viewMode, activeTake, isRecording, stopRecording]);
+  }, [isPlaying, playbackSpeed, maxDuration, viewMode, activeTake, isRecording, isExportingVideo, stopRecording]);
 
   // Recording Duration Counter
   useEffect(() => {
@@ -205,6 +213,152 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     downloadAnchor.remove();
   };
 
+  // High-Quality 16:9 Viewfinder MP4 Video Export Engine
+  const exportTakeToVideo = async (takeToExport?: CameraTake | null) => {
+    const targetTake = takeToExport || activeTake;
+    if (!targetTake || !targetTake.keyframes || targetTake.keyframes.length === 0) {
+      setToastMessage('No recorded camera take available to export.');
+      setTimeout(() => setToastMessage(null), 3000);
+      return;
+    }
+
+    const webglCanvas = webglCanvasRef.current;
+    if (!webglCanvas) {
+      setToastMessage('3D Viewport canvas not ready for video capture.');
+      setTimeout(() => setToastMessage(null), 3000);
+      return;
+    }
+
+    // Determine best supported MIME type (prefer MP4, fallback to WebM)
+    const mimeCandidates = [
+      'video/mp4;codecs=avc1',
+      'video/mp4;codecs=h264',
+      'video/mp4',
+      'video/webm;codecs=h264',
+      'video/webm;codecs=vp9',
+      'video/webm',
+    ];
+    let selectedMime = 'video/webm';
+    for (const cand of mimeCandidates) {
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(cand)) {
+        selectedMime = cand;
+        break;
+      }
+    }
+    const ext = selectedMime.includes('mp4') ? 'mp4' : 'webm';
+
+    // Set up offscreen 16:9 Full HD canvas (1920x1080)
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = 1920;
+    exportCanvas.height = 1080;
+    const ctx = exportCanvas.getContext('2d', { alpha: false, willReadFrequently: false });
+    if (!ctx) return;
+
+    // Set up MediaRecorder
+    const stream = exportCanvas.captureStream(60);
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(stream, {
+        mimeType: selectedMime,
+        videoBitsPerSecond: 12000000, // 12 Mbps high quality 1080p
+      });
+    } catch (err) {
+      console.warn('Failed to initialize MediaRecorder with candidate, using default:', err);
+      recorder = new MediaRecorder(stream);
+    }
+
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) {
+        chunks.push(e.data);
+      }
+    };
+
+    abortExportRef.current = false;
+    setIsExportingVideo(true);
+    setExportProgress(0);
+
+    // Switch to playback mode and rewind
+    setActiveTakeId(targetTake.id);
+    setViewMode('playback');
+    setTimelineSec(0);
+    setIsPlaying(true);
+
+    recorder.start(100);
+
+    const startTime = performance.now();
+    const durationMs = targetTake.duration * 1000;
+
+    const renderLoop = () => {
+      if (abortExportRef.current) {
+        try { recorder.stop(); } catch (_) {}
+        setIsExportingVideo(false);
+        setIsPlaying(false);
+        setToastMessage('Export cancelled.');
+        setTimeout(() => setToastMessage(null), 3000);
+        return;
+      }
+
+      // Crop WebGL canvas to exact 16:9 aspect ratio
+      const srcW = webglCanvas.width;
+      const srcH = webglCanvas.height;
+      const targetAspect = 16 / 9;
+      const srcAspect = srcW / srcH;
+      let sx = 0, sy = 0, sw = srcW, sh = srcH;
+      if (srcAspect > targetAspect) {
+        // Canvas is wider than 16:9 -> crop horizontal sides
+        sw = srcH * targetAspect;
+        sx = (srcW - sw) / 2;
+      } else {
+        // Canvas is taller than 16:9 -> crop top/bottom
+        sh = srcW / targetAspect;
+        sy = (srcH - sh) / 2;
+      }
+
+      ctx.drawImage(webglCanvas, sx, sy, sw, sh, 0, 0, 1920, 1080);
+
+      const elapsed = performance.now() - startTime;
+      const progress = Math.min(100, Math.round((elapsed / durationMs) * 100));
+      setExportProgress(progress);
+
+      if (elapsed < durationMs) {
+        requestAnimationFrame(renderLoop);
+      } else {
+        // Final frame render
+        ctx.drawImage(webglCanvas, sx, sy, sw, sh, 0, 0, 1920, 1080);
+        setTimeout(() => {
+          recorder.onstop = () => {
+            const videoBlob = new Blob(chunks, { type: selectedMime });
+            const downloadUrl = URL.createObjectURL(videoBlob);
+            const a = document.createElement('a');
+            const safeName = targetTake.name.toLowerCase().replace(/\s+/g, '_');
+            a.href = downloadUrl;
+            a.download = `${safeName}_16x9.${ext}`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(downloadUrl), 15000);
+
+            setIsExportingVideo(false);
+            setIsPlaying(false);
+            setTimelineSec(0);
+            setToastMessage(`✅ ${targetTake.name} exported as ${ext.toUpperCase()} (${(videoBlob.size / 1024 / 1024).toFixed(1)} MB)!`);
+            setTimeout(() => setToastMessage(null), 5000);
+          };
+          try {
+            recorder.stop();
+          } catch (e) {
+            console.error('Error stopping MediaRecorder:', e);
+            setIsExportingVideo(false);
+          }
+        }, 150);
+      }
+    };
+
+    // Begin render frame loop
+    requestAnimationFrame(renderLoop);
+  };
+
   const currentFov = LENS_FOV_MAP[focalLength] || 54;
 
   return (
@@ -225,7 +379,10 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         onRecordCameraFrame={handleRecordFrame}
         isPlaybackTake={viewMode === 'playback'}
         playbackTake={activeTake}
-        showCameraTrajectory={true}
+        showCameraTrajectory={!isExportingVideo}
+        onCanvasReady={(canvas) => {
+          webglCanvasRef.current = canvas;
+        }}
       />
 
       {/* Toast Alert Banner */}
@@ -233,6 +390,46 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 bg-surface-container-highest/95 border border-primary/50 text-primary px-4 py-2 rounded-xl backdrop-blur-xl shadow-2xl font-mono text-xs flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-200">
           <span className="material-symbols-outlined text-primary text-[18px]">check_circle</span>
           <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* 16:9 Video Export Rendering Modal */}
+      {isExportingVideo && (
+        <div className="fixed inset-0 z-50 bg-background/85 backdrop-blur-md flex items-center justify-center p-md">
+          <div className="bg-surface-container border border-cyan-500/50 p-6 max-w-md w-full rounded-2xl shadow-2xl text-center relative flex flex-col items-center gap-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-12 h-12 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center border border-cyan-500/40 animate-pulse">
+              <span className="material-symbols-outlined text-[28px]">movie</span>
+            </div>
+            <div>
+              <h3 className="font-headline-sm text-cyan-300 font-semibold mb-1">
+                Capturing 16:9 Video
+              </h3>
+              <p className="text-xs text-on-surface-variant font-mono">
+                Rendering {activeTake?.name} ({activeTake?.duration}s) at 1080p 60 FPS...
+              </p>
+            </div>
+
+            {/* Progress Bar */}
+            <div className="w-full bg-surface-container-highest rounded-full h-3 overflow-hidden border border-outline-variant/40 p-0.5">
+              <div
+                className="bg-gradient-to-r from-cyan-500 to-teal-400 h-full rounded-full transition-all duration-100 ease-out"
+                style={{ width: `${exportProgress}%` }}
+              />
+            </div>
+            <div className="flex justify-between w-full text-[11px] font-mono text-on-surface-variant">
+              <span>{exportProgress}%</span>
+              <span>1080p Widescreen (16:9)</span>
+            </div>
+
+            <button
+              onClick={() => {
+                abortExportRef.current = true;
+              }}
+              className="px-4 py-1.5 rounded-lg bg-surface-container-high hover:bg-surface-container-highest text-xs font-label-caps text-on-surface-variant hover:text-red-400 border border-outline-variant/40 cursor-pointer transition-colors"
+            >
+              Cancel Export
+            </button>
+          </div>
         </div>
       )}
 
@@ -329,6 +526,16 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                     <span className="text-[10px] opacity-70">({t.duration}s)</span>
                     {activeTake?.id === t.id && (
                       <div className="flex items-center gap-1 ml-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            exportTakeToVideo(t);
+                          }}
+                          title="Export 16:9 MP4 Video"
+                          className="hover:text-emerald-400 text-cyan-300"
+                        >
+                          <span className="material-symbols-outlined text-[13px]">movie</span>
+                        </button>
                         <button
                           onClick={(e) => handleExportTakeJson(t, e)}
                           title="Export Take JSON"
@@ -500,27 +707,39 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             </div>
           </div>
 
-          {/* Center Play Button for Take Review Mode */}
-          {viewMode === 'playback' && !isPlaying && activeTake && (
+          {/* Center Play & Export Buttons for Take Review Mode */}
+          {viewMode === 'playback' && !isPlaying && activeTake && !isExportingVideo && (
             <div className="relative my-auto flex flex-col items-center gap-3 pointer-events-auto z-30">
-              <button
-                onClick={() => {
-                  if (timelineSec >= activeTake.duration) {
-                    setTimelineSec(0);
-                  }
-                  setIsPlaying(true);
-                }}
-                className="px-6 py-3.5 rounded-2xl bg-cyan-500 hover:bg-cyan-400 text-background font-label-caps text-sm tracking-widest font-bold shadow-2xl flex items-center gap-2 hover:scale-105 active:scale-95 transition-all cursor-pointer border border-cyan-300"
-              >
-                <span className="material-symbols-outlined text-[24px]">play_arrow</span>
-                PLAY RECORDED {activeTake.name.toUpperCase()}
-              </button>
+              <div className="flex items-center gap-3 flex-wrap justify-center">
+                <button
+                  onClick={() => {
+                    if (timelineSec >= activeTake.duration) {
+                      setTimelineSec(0);
+                    }
+                    setIsPlaying(true);
+                  }}
+                  className="px-6 py-3.5 rounded-2xl bg-cyan-500 hover:bg-cyan-400 text-background font-label-caps text-sm tracking-widest font-bold shadow-2xl flex items-center gap-2 hover:scale-105 active:scale-95 transition-all cursor-pointer border border-cyan-300"
+                >
+                  <span className="material-symbols-outlined text-[24px]">play_arrow</span>
+                  PLAY RECORDED {activeTake.name.toUpperCase()}
+                </button>
+
+                <button
+                  onClick={() => exportTakeToVideo(activeTake)}
+                  className="px-6 py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-label-caps text-sm tracking-widest font-bold shadow-2xl flex items-center gap-2 hover:scale-105 active:scale-95 transition-all cursor-pointer border border-emerald-400"
+                  title="Render and download this take as a 1080p 16:9 MP4 video file"
+                >
+                  <span className="material-symbols-outlined text-[22px]">download</span>
+                  EXPORT 16:9 MP4
+                </button>
+              </div>
+
               <div className="flex items-center gap-2 bg-background/90 px-3 py-1 rounded-full border border-cyan-500/40 backdrop-blur-md text-[11px] font-mono text-cyan-300 shadow-lg">
                 <span>{activeTake.keyframes.length} Frames</span>
                 <span>•</span>
                 <span>{activeTake.duration}s Sequence</span>
                 <span>•</span>
-                <span>16:9 Synced</span>
+                <span>1080p 16:9 Video Ready</span>
               </div>
             </div>
           )}
@@ -588,6 +807,15 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                 >
                   <span className="material-symbols-outlined text-[16px]">replay</span>
                   <span>REPLAY</span>
+                </button>
+                <button
+                  onClick={() => exportTakeToVideo(activeTake)}
+                  disabled={isExportingVideo}
+                  className="h-9 px-2.5 rounded-lg bg-emerald-700/90 hover:bg-emerald-600 text-white font-label-caps text-xs font-bold tracking-wider flex items-center gap-1 cursor-pointer shadow-lg transition-all whitespace-nowrap border border-emerald-500/40"
+                  title="Render and download this take as an MP4 video"
+                >
+                  <span className="material-symbols-outlined text-[16px]">download</span>
+                  <span>EXPORT MP4</span>
                 </button>
               </div>
             )}
