@@ -237,7 +237,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       )}
 
       {/* Cinematic Viewfinder HUD Overlay */}
-      <div className="absolute inset-0 pointer-events-none p-lg flex flex-col justify-between z-20">
+      <div className="absolute inset-0 pointer-events-none p-4 pb-2 flex flex-col justify-between z-20">
         {/* Top HUD Bar */}
         <div className="flex justify-between items-start">
           {/* Left: Mode Switcher, Recording Status & Active Cast */}
@@ -536,10 +536,64 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
           </div>
         </div>
 
-        {/* Bottom Floating Control Bar */}
-        <div className="flex flex-col gap-3 pointer-events-auto">
-          {/* Action Playback & Timeline Scrubber Bar */}
-          <div className="w-full max-w-2xl mx-auto bg-surface-container/95 border border-outline-variant/40 rounded-xl p-2.5 backdrop-blur-xl shadow-2xl flex items-center gap-3">
+        {/* Bottom Floating Control Bar - Unified Single Row Anchored at Bottom */}
+        <div className="w-full flex items-center justify-between gap-3 pointer-events-auto pb-1">
+          {/* Left: Mobile Camera Pairing Button */}
+          <button
+            onClick={() => setShowQRPairing(true)}
+            className="bg-surface-container/90 border border-outline-variant/40 hover:border-primary px-3 py-2 rounded-xl backdrop-blur-md text-xs font-label-caps text-primary tracking-wider flex items-center gap-1.5 cursor-pointer shadow-lg whitespace-nowrap"
+          >
+            <span className="material-symbols-outlined text-[17px]">qr_code_scanner</span>
+            PAIR PHONE
+          </button>
+
+          {/* Center: Unified Play & Record Bar */}
+          <div className="flex-1 max-w-3xl bg-surface-container/95 border border-outline-variant/40 rounded-xl px-3 py-2 backdrop-blur-xl shadow-2xl flex items-center gap-3">
+            {/* Record / Stop Button right next to play controls */}
+            {viewMode === 'live' ? (
+              <button
+                onClick={handleToggleRecord}
+                className={`h-9 px-3.5 rounded-lg flex items-center gap-2 cursor-pointer shadow-lg transition-all font-label-caps text-xs font-bold tracking-wider whitespace-nowrap ${
+                  isRecording
+                    ? 'bg-red-600 ring-2 ring-red-400/50 text-white animate-pulse'
+                    : 'bg-red-600 hover:bg-red-500 text-white'
+                }`}
+                title={isRecording ? 'Stop Recording Take' : 'Start Recording Take'}
+              >
+                <span className="material-symbols-outlined text-[18px]">
+                  {isRecording ? 'stop' : 'fiber_manual_record'}
+                </span>
+                <span>{isRecording ? 'STOP REC' : 'REC'}</span>
+              </button>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => {
+                    setViewMode('live');
+                    handleToggleRecord();
+                  }}
+                  className="h-9 px-3 rounded-lg bg-red-600 hover:bg-red-500 text-white font-label-caps text-xs font-bold tracking-wider flex items-center gap-1.5 cursor-pointer shadow-lg transition-all whitespace-nowrap"
+                  title="Start recording a new take immediately"
+                >
+                  <span className="material-symbols-outlined text-[16px]">videocam</span>
+                  <span>NEW TAKE</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setTimelineSec(0);
+                    setIsPlaying(true);
+                  }}
+                  className="h-9 px-2.5 rounded-lg bg-cyan-950/80 hover:bg-cyan-500 hover:text-background text-cyan-300 border border-cyan-500/40 font-label-caps text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors whitespace-nowrap"
+                  title="Replay Take"
+                >
+                  <span className="material-symbols-outlined text-[16px]">replay</span>
+                  <span>REPLAY</span>
+                </button>
+              </div>
+            )}
+
+            <div className="w-[1px] h-6 bg-outline-variant/40" />
+
             {/* Play/Pause Button */}
             <button
               onClick={() => {
@@ -572,7 +626,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             </button>
 
             {/* Timeline Progress Slider */}
-            <div className="flex-1 flex flex-col gap-1">
+            <div className="flex-1 flex flex-col gap-1 min-w-[120px]">
               <input
                 type="range"
                 min="0"
@@ -601,109 +655,51 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
               {formatTime(timelineSec)} / {formatTime(effectiveDuration)}
             </div>
 
-            {/* Playback Mode Extra Action: Switch to Live / Record New */}
+            {/* Mode Switch to Live Camera in Playback Mode */}
             {viewMode === 'playback' && (
               <button
                 onClick={() => {
                   setViewMode('live');
                   setIsPlaying(true);
                 }}
-                className="px-2 py-1 text-[11px] font-label-caps rounded bg-surface-container-high hover:bg-surface-container-highest text-on-surface border border-outline-variant/50 flex items-center gap-1 cursor-pointer transition-colors"
-                title="Return to Live Camera flight and record a new take"
+                className="px-2 py-1 text-[11px] font-label-caps rounded bg-surface-container-high hover:bg-surface-container-highest text-on-surface border border-outline-variant/50 flex items-center gap-1 cursor-pointer transition-colors whitespace-nowrap"
+                title="Return to Live Camera flight"
               >
                 <span className="material-symbols-outlined text-[14px]">videocam</span>
-                LIVE CAM
+                LIVE
               </button>
             )}
           </div>
 
-          {/* Director Viewfinder Control Strip */}
-          <div className="flex justify-between items-end">
-            {/* Mobile Camera Pairing Button */}
-            <button
-              onClick={() => setShowQRPairing(true)}
-              className="bg-surface-container/90 border border-outline-variant/40 hover:border-primary px-md py-sm rounded-lg backdrop-blur-md text-xs font-label-caps text-primary tracking-widest flex items-center gap-xs cursor-pointer shadow-lg"
-            >
-              <span className="material-symbols-outlined text-[18px]">qr_code_scanner</span>
-              PAIR PHONE / TABLET
-            </button>
-
-            {/* Main Action Buttons (Record / Stop / Review) */}
-            <div className="flex items-center gap-md">
-              {viewMode === 'playback' ? (
-                <div className="flex items-center gap-3">
-                  {/* Replay Take Button */}
-                  <button
-                    onClick={() => {
-                      setTimelineSec(0);
-                      setIsPlaying(true);
-                    }}
-                    className="h-12 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-background font-label-caps text-xs font-bold tracking-wider flex items-center gap-2 cursor-pointer shadow-xl transition-all"
-                  >
-                    <span className="material-symbols-outlined text-[20px]">replay</span>
-                    REPLAY TAKE
-                  </button>
-
-                  {/* Record New Take Button */}
-                  <button
-                    onClick={() => {
-                      setViewMode('live');
-                      handleToggleRecord();
-                    }}
-                    className="h-12 px-5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-label-caps text-xs font-bold tracking-wider flex items-center gap-2 cursor-pointer shadow-xl transition-all"
-                    title="Start recording a new take immediately"
-                  >
-                    <span className="material-symbols-outlined text-[20px]">videocam</span>
-                    RECORD NEW TAKE
-                  </button>
-                </div>
-              ) : (
+          {/* Right: Lens & ISO Preset Selectors */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
+              <span className="font-label-caps text-[9px] text-on-surface-variant px-1">LENS</span>
+              {['24mm', '35mm', '50mm', '85mm'].map((fl) => (
                 <button
-                  onClick={handleToggleRecord}
-                  className={`w-14 h-14 rounded-full flex items-center justify-center cursor-pointer shadow-2xl transition-transform hover:scale-105 ${
-                    isRecording
-                      ? 'bg-red-600 ring-4 ring-red-400/40 text-white'
-                      : 'bg-primary text-background'
+                  key={fl}
+                  onClick={() => setFocalLength(fl)}
+                  className={`px-2 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
+                    focalLength === fl ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
                   }`}
-                  title={isRecording ? 'Stop Recording Take' : 'Start Recording Take'}
                 >
-                  <span className="material-symbols-outlined text-[28px]">
-                    {isRecording ? 'stop' : 'videocam'}
-                  </span>
+                  {fl}
                 </button>
-              )}
+              ))}
             </div>
-
-            {/* Lens & ISO Preset Selectors */}
-            <div className="flex flex-col gap-xs items-end">
-              <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-xs rounded-lg backdrop-blur-md shadow-md">
-                <span className="font-label-caps text-[9px] text-on-surface-variant px-xs">LENS</span>
-                {['24mm', '35mm', '50mm', '85mm'].map((fl) => (
-                  <button
-                    key={fl}
-                    onClick={() => setFocalLength(fl)}
-                    className={`px-sm py-xs text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
-                      focalLength === fl ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
-                    }`}
-                  >
-                    {fl}
-                  </button>
-                ))}
-              </div>
-              <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-xs rounded-lg backdrop-blur-md shadow-md">
-                <span className="font-label-caps text-[9px] text-on-surface-variant px-xs">ISO</span>
-                {['400', '800', '1600'].map((val) => (
-                  <button
-                    key={val}
-                    onClick={() => setIso(val)}
-                    className={`px-sm py-xs text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
-                      iso === val ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
-                    }`}
-                  >
-                    {val}
-                  </button>
-                ))}
-              </div>
+            <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
+              <span className="font-label-caps text-[9px] text-on-surface-variant px-1">ISO</span>
+              {['400', '800', '1600'].map((val) => (
+                <button
+                  key={val}
+                  onClick={() => setIso(val)}
+                  className={`px-2 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
+                    iso === val ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
+                  }`}
+                >
+                  {val}
+                </button>
+              ))}
             </div>
           </div>
         </div>
