@@ -11,7 +11,7 @@
         "id": "roombake_1788679764838",
         "name": "AI Baked Room Environment",
         "category": "environment",
-        "glbUrl": "blob:http://localhost:3000/c4ed9b6c-2d29-4922-b962-07b15da122dc",
+        "glbUrl": "/api/assets/baked_room_studio.glb",
         "position": [
           0,
           0,

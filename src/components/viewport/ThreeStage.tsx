@@ -118,37 +118,170 @@ const GaussianSplatScene: React.FC<{ url: string }> = ({ url }) => {
 };
 
 // Custom 3D Error Boundary
+interface ModelErrorBoundaryProps {
+  asset?: SceneAsset;
+  fallbackName?: string;
+  isSelected?: boolean;
+  transformMode?: TransformMode;
+  onSelect?: () => void;
+  onDraggingChange?: (isDragging: boolean) => void;
+  onTransformChange?: (
+    id: string,
+    position: [number, number, number],
+    rotation: [number, number, number],
+    scale: [number, number, number]
+  ) => void;
+  children: ReactNode;
+}
+
 class ModelErrorBoundary extends Component<
-  { children: ReactNode; fallbackName: string },
-  { hasError: boolean }
+  ModelErrorBoundaryProps,
+  { hasError: boolean; errorMsg?: string }
 > {
-  constructor(props: any) {
+  private groupRef = React.createRef<THREE.Group>();
+
+  constructor(props: ModelErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError() {
-    return { hasError: true };
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, errorMsg: error?.message || 'Failed to load 3D model' };
   }
 
   componentDidCatch(error: any) {
-    console.warn('Model loading fallback triggered:', error);
+    console.warn('Model loading fallback triggered for:', this.props.asset?.name || this.props.fallbackName, error);
   }
+
+  handleTransformEnd = () => {
+    this.props.onDraggingChange?.(false);
+    if (this.groupRef.current && this.props.onTransformChange && this.props.asset) {
+      const pos: [number, number, number] = [
+        this.groupRef.current.position.x,
+        this.groupRef.current.position.y,
+        this.groupRef.current.position.z,
+      ];
+      const rot: [number, number, number] = [
+        this.groupRef.current.rotation.x,
+        this.groupRef.current.rotation.y,
+        this.groupRef.current.rotation.z,
+      ];
+      const scl: [number, number, number] = [
+        this.groupRef.current.scale.x,
+        this.groupRef.current.scale.y,
+        this.groupRef.current.scale.z,
+      ];
+      this.props.onTransformChange(this.props.asset.id, pos, rot, scl);
+    }
+  };
 
   render() {
     if (this.state.hasError) {
+      const {
+        asset,
+        isSelected = false,
+        transformMode = 'translate',
+        onSelect,
+        onDraggingChange,
+        fallbackName,
+      } = this.props;
+
+      const displayName = asset?.name || fallbackName || 'Scene Object';
+      const isRoomOrEnv =
+        asset?.category === 'environment' ||
+        displayName.toLowerCase().includes('room') ||
+        (asset?.id && asset.id.startsWith('roombake_'));
+
+      const pos = asset?.position || [0, 0, 0];
+      const rot = asset?.rotation || [0, 0, 0];
+      const scl = asset?.scale || [1, 1, 1];
+
       return (
-        <group position={[0, 0.5, 0]}>
-          <mesh>
-            <boxGeometry args={[1, 1, 1]} />
-            <meshStandardMaterial color="#444748" wireframe />
-          </mesh>
-          <Html center>
-            <div className="font-label-caps text-[9px] text-on-surface-variant bg-surface-container/90 px-xs py-[2px] border border-outline-variant/30 whitespace-nowrap pointer-events-none select-none">
-              {this.props.fallbackName}
-            </div>
-          </Html>
-        </group>
+        <>
+          <group
+            ref={this.groupRef}
+            position={pos}
+            rotation={rot}
+            scale={scl}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect?.();
+            }}
+          >
+            {isRoomOrEnv ? (
+              // Procedural Studio Room Enclosure so the stage is always visible
+              <group>
+                {/* Floor */}
+                <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+                  <planeGeometry args={[8, 8]} />
+                  <meshStandardMaterial color="#16181c" roughness={0.5} metalness={0.2} side={THREE.DoubleSide} />
+                </mesh>
+                {/* Back wall */}
+                <mesh position={[0, 1.75, -4]} receiveShadow>
+                  <planeGeometry args={[8, 3.5]} />
+                  <meshStandardMaterial color="#22252a" roughness={0.85} side={THREE.DoubleSide} />
+                </mesh>
+                {/* Left wall */}
+                <mesh position={[-4, 1.75, 0]} rotation={[0, Math.PI / 2, 0]} receiveShadow>
+                  <planeGeometry args={[8, 3.5]} />
+                  <meshStandardMaterial color="#1f2227" roughness={0.85} side={THREE.DoubleSide} />
+                </mesh>
+                {/* Right wall */}
+                <mesh position={[4, 1.75, 0]} rotation={[0, -Math.PI / 2, 0]} receiveShadow>
+                  <planeGeometry args={[8, 3.5]} />
+                  <meshStandardMaterial color="#1f2227" roughness={0.85} side={THREE.DoubleSide} />
+                </mesh>
+                {/* Ceiling */}
+                <mesh position={[0, 3.5, 0]} rotation={[Math.PI / 2, 0, 0]}>
+                  <planeGeometry args={[8, 8]} />
+                  <meshStandardMaterial color="#14161a" roughness={0.9} side={THREE.DoubleSide} />
+                </mesh>
+              </group>
+            ) : (
+              <mesh position={[0, 0.5, 0]}>
+                <boxGeometry args={[1, 1, 1]} />
+                <meshStandardMaterial
+                  color={isSelected ? '#00ffcc' : '#f59e0b'}
+                  wireframe
+                />
+              </mesh>
+            )}
+
+            {/* Selection highlight ring */}
+            {isSelected && (
+              <mesh position={[0, 0.01, 0]}>
+                <ringGeometry args={[isRoomOrEnv ? 4.2 : 1.2, isRoomOrEnv ? 4.25 : 1.25, 32]} />
+                <meshBasicMaterial color="#00ffcc" side={THREE.DoubleSide} />
+              </mesh>
+            )}
+
+            <Html center position={[0, isRoomOrEnv ? 3.6 : 1.2, 0]}>
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelect?.();
+                }}
+                className={`font-label-caps text-[9px] px-2 py-0.5 rounded border backdrop-blur-md cursor-pointer whitespace-nowrap transition-all shadow-md select-none ${
+                  isSelected
+                    ? 'bg-primary/20 text-primary border-primary font-bold'
+                    : 'bg-surface-container/90 text-amber-400 border-amber-500/40 hover:border-amber-400'
+                }`}
+              >
+                {displayName} {isRoomOrEnv ? '(Studio Room)' : '(Click to Select)'}
+              </div>
+            </Html>
+          </group>
+
+          {isSelected && this.groupRef.current && (
+            <TransformControls
+              object={this.groupRef.current}
+              mode={transformMode}
+              size={0.75}
+              onMouseDown={() => onDraggingChange?.(true)}
+              onMouseUp={this.handleTransformEnd}
+            />
+          )}
+        </>
       );
     }
     return this.props.children;
@@ -178,6 +311,18 @@ const GLTFModel: React.FC<{
   const groupRef = useRef<THREE.Group>(null);
   const { glbUrl, position, rotation, scale } = asset;
 
+  // Resolve expired blob URLs or baked room models to permanent asset storage
+  const resolvedGlbUrl = React.useMemo(() => {
+    if (
+      glbUrl &&
+      glbUrl.startsWith('blob:') &&
+      (asset.id.startsWith('roombake_') || asset.category === 'environment' || asset.name.toLowerCase().includes('room'))
+    ) {
+      return '/api/assets/baked_room_studio.glb';
+    }
+    return glbUrl;
+  }, [glbUrl, asset.id, asset.category, asset.name]);
+
   // Synchronize internal Three.js group coordinates whenever props update (e.g. Undo/Redo)
   useEffect(() => {
     if (groupRef.current) {
@@ -190,18 +335,19 @@ const GLTFModel: React.FC<{
 
   // If not a valid model URL, return procedural box
   const isCustomModel =
-    glbUrl &&
-    (glbUrl.includes('.glb') ||
-      glbUrl.includes('.gltf') ||
-      glbUrl.includes('/file=') ||
-      glbUrl.includes('gradio_api') ||
-      glbUrl.startsWith('blob:') ||
-      glbUrl.startsWith('http://') ||
-      glbUrl.startsWith('https://'));
+    resolvedGlbUrl &&
+    (resolvedGlbUrl.includes('.glb') ||
+      resolvedGlbUrl.includes('.gltf') ||
+      resolvedGlbUrl.includes('/file=') ||
+      resolvedGlbUrl.includes('gradio_api') ||
+      resolvedGlbUrl.startsWith('/api/assets') ||
+      resolvedGlbUrl.startsWith('blob:') ||
+      resolvedGlbUrl.startsWith('http://') ||
+      resolvedGlbUrl.startsWith('https://'));
 
   let content: ReactNode;
   if (isCustomModel) {
-    const { scene } = useGLTF(glbUrl);
+    const { scene } = useGLTF(resolvedGlbUrl);
     const cloned = React.useMemo(() => {
       const c = scene.clone();
       // Enhance brightness & PBR material properties across all meshes
@@ -585,7 +731,18 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
 
           {/* Render All Scene Assets with Transform Controls */}
           {assets.map((asset) => (
-            <ModelErrorBoundary key={asset.id} fallbackName={asset.name}>
+            <ModelErrorBoundary
+              key={asset.id}
+              asset={asset}
+              isSelected={asset.id === selectedAssetId}
+              transformMode={transformMode}
+              onSelect={() => {
+                onSelectActor?.(null);
+                onSelectAsset?.(asset.id);
+              }}
+              onDraggingChange={setIsTransformDragging}
+              onTransformChange={onUpdateAssetTransform}
+            >
               <GLTFModel
                 asset={asset}
                 isSelected={asset.id === selectedAssetId}
