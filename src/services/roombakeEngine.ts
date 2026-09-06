@@ -1463,10 +1463,28 @@ export class RoomBakeEngine {
       mergedGeom.setAttribute('uv', new THREE.BufferAttribute(outUv, 2));
     }
 
-    // Default to Smart Coplanar Island Unwrapping
-    if (uvMode === 'smart' || !hasAnyUv || (uvMode === 'auto' && !hasAnyUv)) {
+    // Extract existing diffuse / albedo texture from model materials if present
+    let existingTexture: THREE.Texture | null = null;
+    for (const m of gathered) {
+      if (m.material) {
+        const mats = Array.isArray(m.material) ? m.material : [m.material];
+        for (const mat of mats) {
+          const anyMat = mat as any;
+          if (anyMat.map && anyMat.map.isTexture) {
+            existingTexture = anyMat.map;
+            break;
+          }
+        }
+      }
+      if (existingTexture) break;
+    }
+
+    // Default to Smart Coplanar Island Unwrapping, but preserve UVs if model already has texture
+    const effectiveUvMode = (existingTexture && hasAnyUv && uvMode !== 'smart' && uvMode !== 'box') ? 'model' : uvMode;
+
+    if (effectiveUvMode === 'smart' || !hasAnyUv || (effectiveUvMode === 'auto' && !hasAnyUv)) {
       this.smartUnwrapGeometry(mergedGeom);
-    } else if (uvMode === 'box') {
+    } else if (effectiveUvMode === 'box') {
       this.autoUnwrapGeometry(mergedGeom);
     }
 
@@ -1500,6 +1518,31 @@ export class RoomBakeEngine {
     this.applyOrbit();
     this.generatePresetViews();
     this.clearBake();
+
+    // If model has an existing texture, blit it into the baking atlas so it renders immediately!
+    if (existingTexture) {
+      existingTexture.needsUpdate = true;
+      const applyTex = () => {
+        if (!existingTexture) return;
+        this.renderer.setRenderTarget(this.RTs.bakeA);
+        this.renderer.setClearColor(0x000000, 0);
+        this.renderer.clear(true, true, true);
+        this.blit(existingTexture, this.RTs.bakeA);
+        this.refreshDisplay(this.dilationPasses);
+      };
+
+      if (
+        existingTexture.image &&
+        typeof HTMLImageElement !== 'undefined' &&
+        existingTexture.image instanceof HTMLImageElement &&
+        !existingTexture.image.complete
+      ) {
+        existingTexture.image.onload = applyTex;
+      } else {
+        applyTex();
+      }
+    }
+
     this.state.modelName = `${fileName} (${this.config.room.W.toFixed(1)}m × ${this.config.room.H.toFixed(1)}m × ${this.config.room.D.toFixed(1)}m)`;
   }
 

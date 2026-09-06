@@ -605,17 +605,20 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const handleAddRoomBakeAsset = (assetData: { name: string; glbUrl?: string; modelBlob?: Blob }) => {
     if (assetData.glbUrl) {
       const existingIdx = (currentProject.scenes || []).findIndex(
-        (a) => a.category === 'environment' && (a.id.startsWith('roombake_') || a.name.includes('Room'))
+        (a) =>
+          (selectedAssetId && a.id === selectedAssetId) ||
+          (a.category === 'environment' && (a.id.startsWith('roombake_') || a.name.includes('Room')))
       );
+      const existingAsset = existingIdx >= 0 ? currentProject.scenes![existingIdx] : null;
 
       const newAsset: SceneAsset = {
-        id: existingIdx >= 0 ? currentProject.scenes![existingIdx].id : `roombake_${Date.now()}`,
-        name: assetData.name || 'AI Baked Room Environment',
-        category: 'environment',
+        id: existingAsset ? existingAsset.id : `roombake_${Date.now()}`,
+        name: assetData.name || (existingAsset ? existingAsset.name : 'AI Baked Room Environment'),
+        category: existingAsset ? existingAsset.category : 'environment',
         glbUrl: assetData.glbUrl,
-        position: existingIdx >= 0 ? currentProject.scenes![existingIdx].position : [0, 0, 0],
-        rotation: existingIdx >= 0 ? currentProject.scenes![existingIdx].rotation : [0, 0, 0],
-        scale: existingIdx >= 0 ? currentProject.scenes![existingIdx].scale : [1, 1, 1],
+        position: existingAsset ? existingAsset.position : [0, 0, 0],
+        rotation: existingAsset ? existingAsset.rotation : [0, 0, 0],
+        scale: existingAsset ? existingAsset.scale : [1, 1, 1],
         createdAt: new Date().toISOString(),
       };
 
@@ -2065,6 +2068,11 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
         isOpen={showRoomBakeStudio}
         onClose={() => setShowRoomBakeStudio(false)}
         onAddSceneAsset={handleAddRoomBakeAsset}
+        targetAsset={
+          selectedAsset ||
+          assets.find((a) => a.category === 'environment' || a.name.toLowerCase().includes('room')) ||
+          null
+        }
       />
     </div>
   );

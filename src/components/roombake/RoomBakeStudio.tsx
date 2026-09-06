@@ -2,18 +2,21 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { RoomBakeEngine, ViewPoint } from '../../services/roombakeEngine';
 import { generateTexture } from '../../services/roombakeAiService';
 import { UVInspectorModal } from './UVInspectorModal';
+import { SceneAsset } from '../../types';
 import * as THREE from 'three';
 
 interface RoomBakeStudioProps {
   isOpen: boolean;
   onClose: () => void;
   onAddSceneAsset?: (assetData: { name: string; glbUrl?: string; modelBlob?: Blob }) => void;
+  targetAsset?: SceneAsset | null;
 }
 
 export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   isOpen,
   onClose,
   onAddSceneAsset,
+  targetAsset,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<RoomBakeEngine | null>(null);
@@ -156,6 +159,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   const isOpenRef = useRef(isOpen);
   isOpenRef.current = isOpen;
   const keysDownRef = useRef<Set<string>>(new Set());
+  const lastLoadedTargetIdRef = useRef<string | null>(null);
 
   // Initialize Engine & Viewport (Persistent Session with Unreal Navigation)
   useEffect(() => {
@@ -175,6 +179,31 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
         refreshViewInfo(v);
         updateStats();
       }
+    }
+
+    // Auto-load active scene model (e.g. baked room or selected asset) with its textures into RoomBake
+    if (targetAsset && targetAsset.glbUrl && targetAsset.id !== lastLoadedTargetIdRef.current) {
+      lastLoadedTargetIdRef.current = targetAsset.id;
+      addLog(`Loading target scene model: "${targetAsset.name}" with its textures into RoomBake...`, 'info');
+
+      engineRef.current.loadCustomModel(targetAsset.glbUrl, 'model')
+        .then(() => {
+          if (!engineRef.current) return;
+          setViews([...engineRef.current.views]);
+          setModelStatus(targetAsset.name);
+          setSelectedViewIdx(1);
+          const v = engineRef.current.views[1] || engineRef.current.views[0];
+          if (v) {
+            engineRef.current.renderConditioning(v, autoRange, depthInvert, maskFeather);
+            refreshViewInfo(v);
+          }
+          updateStats();
+          addLog(`✓ Loaded "${targetAsset.name}" with its textures into RoomBake!`, 'ok');
+        })
+        .catch((err) => {
+          console.warn('Failed to load targetAsset in RoomBake:', err);
+          addLog(`Could not load target model (${err.message}). Using default room.`, 'err');
+        });
     }
 
     let dragging = false;
@@ -361,6 +390,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   const handleResetBox = () => {
     const engine = engineRef.current;
     if (!engine) return;
+    lastLoadedTargetIdRef.current = null;
     engine.buildDefaultRoom();
     setViews([...engine.views]);
     setModelStatus(engine.state.modelName);
@@ -835,7 +865,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
 
       if (onAddSceneAsset) {
         onAddSceneAsset({
-          name: 'AI Baked Room Environment',
+          name: targetAsset?.name || 'AI Baked Room Environment',
           glbUrl,
           modelBlob: blob,
         });
@@ -865,9 +895,16 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
           <span className="text-xs font-mono px-2.5 py-1 bg-surface-container border border-outline-variant/40 rounded text-on-surface-variant">
             PROJECTIVE BAKE HARNESS
           </span>
-          <span className="text-xs font-mono text-on-surface-variant/80 hidden md:inline">
-            {modelStatus}
-          </span>
+          {targetAsset ? (
+            <span className="text-xs font-mono px-2.5 py-1 bg-cyan-500/15 border border-cyan-400/40 rounded text-cyan-300 font-semibold flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-[15px]">view_in_ar</span>
+              ACTIVE TARGET: {targetAsset.name}
+            </span>
+          ) : (
+            <span className="text-xs font-mono text-on-surface-variant/80 hidden md:inline">
+              {modelStatus}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-3">

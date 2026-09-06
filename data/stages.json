@@ -1,10 +1,43 @@
 [
   {
+    "id": "stage_proj_proj_1788681327567",
+    "name": "test",
+    "createdAt": "2026-09-06T07:57:07.770Z",
+    "scenes": [
+      {
+        "id": "roombake_1788681421910",
+        "name": "AI Baked Room Environment",
+        "category": "environment",
+        "glbUrl": "/api/assets/roombake_1788681421887.glb",
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "createdAt": "2026-09-06T07:57:01.910Z"
+      }
+    ],
+    "panoramaRotation": 0,
+    "environmentPreset": "studio",
+    "lightIntensity": 1,
+    "thumbnail": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80"
+  },
+  {
     "id": "stage_proj_1788679487201",
     "name": "hideout01",
     "createdAt": "2026-09-06T07:29:24.838Z",
     "environmentPreset": "studio",
-    "lightIntensity": 1.0,
+    "lightIntensity": 1,
     "panoramaRotation": 0,
     "scenes": [
       {
