@@ -396,45 +396,145 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
           </div>
         </div>
 
-        {/* Center Prompt / Crosshairs */}
-        {viewMode === 'playback' && !isPlaying && activeTake && (
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-3 pointer-events-auto z-30">
-            <button
-              onClick={() => {
-                if (timelineSec >= activeTake.duration) {
-                  setTimelineSec(0);
-                }
-                setIsPlaying(true);
-              }}
-              className="px-6 py-3.5 rounded-2xl bg-cyan-500 hover:bg-cyan-400 text-background font-label-caps text-sm tracking-widest font-bold shadow-2xl flex items-center gap-2 hover:scale-105 active:scale-95 transition-all cursor-pointer border border-cyan-300"
-            >
-              <span className="material-symbols-outlined text-[24px]">play_arrow</span>
-              PLAY RECORDED {activeTake.name.toUpperCase()}
-            </button>
-            <div className="flex items-center gap-2 bg-background/85 px-3 py-1 rounded-full border border-outline-variant/40 backdrop-blur-md text-[11px] font-mono text-cyan-300">
-              <span>{activeTake.keyframes.length} Frames</span>
-              <span>•</span>
-              <span>{activeTake.duration}s Sequence</span>
-              <span>•</span>
-              <span>Synced Actors & Camera</span>
+        {/* Large 16:9 Director Viewfinder Framing Guide & Matte Mask */}
+        <div
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[88vw] max-w-5xl max-h-[66vh] aspect-video pointer-events-none z-20 flex flex-col justify-between p-3"
+          style={{ aspectRatio: '16 / 9' }}
+        >
+          {/* Outer Border & Cinematic Letterbox Matte Shadow */}
+          <div
+            className={`absolute inset-0 rounded-lg pointer-events-none transition-all duration-300 border-2 ${
+              isRecording
+                ? 'border-red-500 shadow-[0_0_0_9999px_rgba(0,0,0,0.50)]'
+                : viewMode === 'playback'
+                ? 'border-cyan-400/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.40)]'
+                : 'border-primary/50 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]'
+            }`}
+          />
+
+          {/* 4 Corner L-Brackets */}
+          <div
+            className={`w-8 h-8 border-t-4 border-l-4 absolute top-0 left-0 rounded-tl transition-colors ${
+              isRecording ? 'border-red-500' : viewMode === 'playback' ? 'border-cyan-400' : 'border-primary'
+            }`}
+          />
+          <div
+            className={`w-8 h-8 border-t-4 border-r-4 absolute top-0 right-0 rounded-tr transition-colors ${
+              isRecording ? 'border-red-500' : viewMode === 'playback' ? 'border-cyan-400' : 'border-primary'
+            }`}
+          />
+          <div
+            className={`w-8 h-8 border-b-4 border-l-4 absolute bottom-0 left-0 rounded-bl transition-colors ${
+              isRecording ? 'border-red-500' : viewMode === 'playback' ? 'border-cyan-400' : 'border-primary'
+            }`}
+          />
+          <div
+            className={`w-8 h-8 border-b-4 border-r-4 absolute bottom-0 right-0 rounded-br transition-colors ${
+              isRecording ? 'border-red-500' : viewMode === 'playback' ? 'border-cyan-400' : 'border-primary'
+            }`}
+          />
+
+          {/* 90% Action Safe Frame Line */}
+          <div
+            className={`absolute inset-[5%] border border-dashed rounded pointer-events-none opacity-40 transition-colors ${
+              isRecording ? 'border-red-400/60' : viewMode === 'playback' ? 'border-cyan-400/60' : 'border-primary/40'
+            }`}
+          />
+
+          {/* Rule of Thirds Grid Lines */}
+          <div className="absolute inset-0 pointer-events-none grid grid-cols-3 grid-rows-3 opacity-15">
+            <div className="border-r border-b border-primary" />
+            <div className="border-r border-b border-primary" />
+            <div className="border-b border-primary" />
+            <div className="border-r border-b border-primary" />
+            <div className="border-r border-b border-primary" />
+            <div className="border-b border-primary" />
+            <div className="border-r border-primary" />
+            <div className="border-r border-primary" />
+            <div />
+          </div>
+
+          {/* Center Crosshairs & Reticle */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center">
+            <div className={`w-8 h-[1px] absolute ${isRecording ? 'bg-red-500/70' : 'bg-primary/50'}`} />
+            <div className={`h-8 w-[1px] absolute ${isRecording ? 'bg-red-500/70' : 'bg-primary/50'}`} />
+            <div
+              className={`w-2.5 h-2.5 rounded-full ${
+                isRecording ? 'bg-red-500 animate-pulse' : viewMode === 'playback' ? 'bg-cyan-400/70' : 'bg-primary/70'
+              }`}
+            />
+          </div>
+
+          {/* Top Edge Metadata Badges */}
+          <div className="relative flex justify-between items-center px-2 pt-1 text-[10px] font-mono tracking-wider">
+            <div className="flex items-center gap-2">
+              <span
+                className={`px-2 py-0.5 rounded font-bold backdrop-blur-md border ${
+                  isRecording
+                    ? 'bg-red-950/80 text-red-300 border-red-500/50'
+                    : viewMode === 'playback'
+                    ? 'bg-cyan-950/80 text-cyan-300 border-cyan-500/50'
+                    : 'bg-background/80 text-primary border-outline-variant/40'
+                }`}
+              >
+                16:9 • 1.78:1
+              </span>
+              <span className="text-on-surface-variant/80 hidden sm:inline">
+                SAFE AREA 90%
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-on-surface-variant/80 hidden sm:inline">
+                {isRecording ? 'RECORDING 16:9 DCI' : viewMode === 'playback' ? '16:9 PLAYBACK MONITOR' : '16:9 FRAMING'}
+              </span>
+              <span
+                className={`px-2 py-0.5 rounded font-bold backdrop-blur-md border ${
+                  isRecording
+                    ? 'bg-red-950/80 text-red-400 border-red-500/50 animate-pulse'
+                    : 'bg-background/80 text-on-surface-variant border-outline-variant/40'
+                }`}
+              >
+                {isRecording ? 'REC ACTIVE' : '60 FPS'}
+              </span>
             </div>
           </div>
-        )}
 
-        {/* Center Crosshair Grid Overlay with Framing Guides */}
-        {viewMode === 'live' && (
-          <div
-            className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-56 border pointer-events-none flex items-center justify-center transition-colors ${
-              isRecording ? 'border-red-500/40' : 'border-primary/20'
-            }`}
-          >
-            <div className={`w-5 h-5 border-t-2 border-l-2 absolute top-0 left-0 ${isRecording ? 'border-red-500' : 'border-primary/50'}`} />
-            <div className={`w-5 h-5 border-t-2 border-r-2 absolute top-0 right-0 ${isRecording ? 'border-red-500' : 'border-primary/50'}`} />
-            <div className={`w-5 h-5 border-b-2 border-l-2 absolute bottom-0 left-0 ${isRecording ? 'border-red-500' : 'border-primary/50'}`} />
-            <div className={`w-5 h-5 border-b-2 border-r-2 absolute bottom-0 right-0 ${isRecording ? 'border-red-500' : 'border-primary/50'}`} />
-            <div className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-primary/50'}`} />
+          {/* Center Play Button for Take Review Mode */}
+          {viewMode === 'playback' && !isPlaying && activeTake && (
+            <div className="relative my-auto flex flex-col items-center gap-3 pointer-events-auto z-30">
+              <button
+                onClick={() => {
+                  if (timelineSec >= activeTake.duration) {
+                    setTimelineSec(0);
+                  }
+                  setIsPlaying(true);
+                }}
+                className="px-6 py-3.5 rounded-2xl bg-cyan-500 hover:bg-cyan-400 text-background font-label-caps text-sm tracking-widest font-bold shadow-2xl flex items-center gap-2 hover:scale-105 active:scale-95 transition-all cursor-pointer border border-cyan-300"
+              >
+                <span className="material-symbols-outlined text-[24px]">play_arrow</span>
+                PLAY RECORDED {activeTake.name.toUpperCase()}
+              </button>
+              <div className="flex items-center gap-2 bg-background/90 px-3 py-1 rounded-full border border-cyan-500/40 backdrop-blur-md text-[11px] font-mono text-cyan-300 shadow-lg">
+                <span>{activeTake.keyframes.length} Frames</span>
+                <span>•</span>
+                <span>{activeTake.duration}s Sequence</span>
+                <span>•</span>
+                <span>16:9 Synced</span>
+              </div>
+            </div>
+          )}
+
+          {/* Bottom Edge Metadata Badges */}
+          <div className="relative flex justify-between items-center px-2 pb-1 text-[10px] font-mono tracking-wider mt-auto">
+            <span className="text-on-surface-variant/70">
+              VIRTUAL CAM 01
+            </span>
+            <span className="text-on-surface-variant/70">
+              FOV {currentFov}° • {focalLength}
+            </span>
           </div>
-        )}
+        </div>
 
         {/* Bottom Floating Control Bar */}
         <div className="flex flex-col gap-3 pointer-events-auto">
