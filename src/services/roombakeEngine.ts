@@ -17,7 +17,6 @@ export interface RoomBakeConfig {
   genH: number;
   panoW: number;
   panoH: number;
-  lightIntensity?: number;
 }
 
 export const DEFAULT_ROOMBAKE_CONFIG: RoomBakeConfig = {
@@ -28,7 +27,6 @@ export const DEFAULT_ROOMBAKE_CONFIG: RoomBakeConfig = {
   genH: 1024,
   panoW: 2048,
   panoH: 1024,
-  lightIntensity: 1.0,
 };
 
 export interface ViewPoint {
@@ -236,7 +234,6 @@ export class RoomBakeEngine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(canvas.clientWidth || 800, canvas.clientHeight || 600, false);
     this.renderer.setClearColor(0x0a0c10, 1);
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     // Scene
     this.scene = new THREE.Scene();
@@ -614,58 +611,23 @@ export class RoomBakeEngine {
     });
 
     this.roomMat = new THREE.ShaderMaterial({
-      uniforms: {
-        uTex: { value: null },
-        uShowGaps: { value: 1.0 },
-        uAtlas: { value: atlas },
-        uLightIntensity: { value: this.config.lightIntensity ?? 1.0 },
-      },
+      uniforms: { uTex: { value: null }, uShowGaps: { value: 1.0 }, uAtlas: { value: atlas } },
       vertexShader: `
-        varying vec2 vUv;
-        varying vec3 vW;
-        varying vec3 vN;
+        varying vec2 vUv; varying vec3 vW;
         void main() {
-          vUv = uv;
-          vW = (modelMatrix * vec4(position, 1.0)).xyz;
-          vN = normalize(mat3(modelMatrix) * normal);
+          vUv = uv; vW = (modelMatrix * vec4(position, 1.0)).xyz;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }`,
       fragmentShader: `
-        uniform sampler2D uTex;
-        uniform float uShowGaps;
-        uniform float uLightIntensity;
-        varying vec2 vUv;
-        varying vec3 vW;
-        varying vec3 vN;
+        uniform sampler2D uTex; uniform float uShowGaps;
+        varying vec2 vUv; varying vec3 vW;
         void main() {
           vec4 c = texture2D(uTex, vUv);
-
-          // Calculate normal facing camera to guarantee all interior room walls are evenly lit
-          vec3 N = normalize(vN);
-          if (!gl_FrontFacing) N = -N;
-
-          // Studio surface & grid for unbaked regions or gaps
+          if (c.a > 0.5 || uShowGaps < 0.5) { gl_FragColor = vec4(c.rgb, 1.0); return; }
           vec3 g = abs(fract(vW * 2.0 - 0.5) - 0.5) / fwidth(vW * 2.0);
           float line = 1.0 - min(min(g.x, g.y), g.z);
-          vec3 studioGrid = mix(vec3(0.50, 0.53, 0.57), vec3(0.68, 0.72, 0.76), clamp(line, 0.0, 1.0));
-          vec3 studioFlat = vec3(0.58, 0.61, 0.65);
-          vec3 unbakedBase = (uShowGaps > 0.5) ? studioGrid : studioFlat;
-
-          // Studio lighting for unbaked base only so 3D geometry and room bounds are visible
-          float hemi = clamp(N.y * 0.2 + 0.8, 0.65, 1.0);
-          vec3 camDir = normalize(-vW);
-          float camFacing = clamp(dot(N, camDir) * 0.25 + 0.75, 0.75, 1.0);
-          vec3 unbakedCol = unbakedBase * (hemi * camFacing * max(0.2, uLightIntensity));
-
-          // Textures are 100% LIGHT-INDEPENDENT: rendered at full true RGB fidelity
-          vec3 texturedCol = c.rgb * max(0.1, uLightIntensity);
-
-          // Blend: if texture exists (alpha > 0.01), show light-independent texture; else show unbaked studio surface
-          float hasTex = smoothstep(0.01, 0.12, c.a);
-          vec3 col = mix(unbakedCol, texturedCol, hasTex);
-
-          gl_FragColor = vec4(col, 1.0);
-          #include <colorspace_fragment>
+          gl_FragColor = vec4(mix(vec3(0.08, 0.09, 0.11), vec3(0.16, 0.18, 0.22),
+                                  clamp(line, 0.0, 1.0)), 1.0);
         }`,
       side: THREE.DoubleSide,
     });
@@ -744,13 +706,6 @@ export class RoomBakeEngine {
 
   public setShowGaps(show: boolean) {
     this.roomMat.uniforms.uShowGaps.value = show ? 1.0 : 0.0;
-  }
-
-  public setLightIntensity(intensity: number) {
-    this.config.lightIntensity = intensity;
-    if (this.roomMat && this.roomMat.uniforms.uLightIntensity) {
-      this.roomMat.uniforms.uLightIntensity.value = Math.max(0.1, intensity);
-    }
   }
 
   public fsPass(material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null) {
@@ -1587,7 +1542,6 @@ export class RoomBakeEngine {
 
     // If model has an existing texture, blit it into the baking atlas with full alpha so it renders immediately!
     if (existingTexture) {
-      existingTexture.colorSpace = THREE.SRGBColorSpace;
       existingTexture.needsUpdate = true;
       const applyTex = () => {
         if (!existingTexture) return;
@@ -2020,11 +1974,8 @@ export class RoomBakeEngine {
 
     const exportMat = new THREE.MeshStandardMaterial({
       map: bakedTexture,
-      emissive: new THREE.Color(0xffffff),
-      emissiveMap: bakedTexture,
-      emissiveIntensity: 1.0,
-      roughness: 0.9,
-      metalness: 0.0,
+      roughness: 0.85,
+      metalness: 0.05,
       side: THREE.DoubleSide,
     });
 

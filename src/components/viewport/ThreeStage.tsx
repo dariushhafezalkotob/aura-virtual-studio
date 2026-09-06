@@ -354,13 +354,8 @@ const GLTFModel: React.FC<{
       c.traverse((child) => {
         if ((child as THREE.Mesh).isMesh) {
           const mesh = child as THREE.Mesh;
-          const isUnlit =
-            asset.unlit ??
-            (asset.category === 'environment' ||
-              asset.id.startsWith('roombake_') ||
-              asset.name.toLowerCase().includes('room') ||
-              asset.name.toLowerCase().includes('bake'));
-
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
           if (mesh.material) {
             const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
             for (const m of mats) {
@@ -372,30 +367,8 @@ const GLTFModel: React.FC<{
               if (mesh.geometry?.attributes?.color) {
                 mat.vertexColors = true;
               }
-
-              if (isUnlit) {
-                // Light-independent display: make texture emit at 100% full brightness
-                if (mat.map) {
-                  mat.emissiveMap = mat.map;
-                  mat.emissive = new THREE.Color(0xffffff);
-                  mat.emissiveIntensity = 1.0;
-                } else if (mat.color) {
-                  mat.emissive = mat.color.clone();
-                  mat.emissiveIntensity = 1.0;
-                }
-                mat.roughness = 1.0;
-                mat.metalness = 0.0;
-                mesh.castShadow = false;
-                mesh.receiveShadow = false;
-              } else {
-                mat.emissive = new THREE.Color(0x000000);
-                mat.emissiveIntensity = 0.0;
-                if (mat.metalness !== undefined) mat.metalness = Math.min(mat.metalness, 0.25);
-                if (mat.roughness !== undefined) mat.roughness = Math.max(0.3, Math.min(mat.roughness, 0.85));
-                mesh.castShadow = true;
-                mesh.receiveShadow = true;
-              }
-
+              if (mat.metalness !== undefined) mat.metalness = Math.min(mat.metalness, 0.25);
+              if (mat.roughness !== undefined) mat.roughness = Math.max(0.3, Math.min(mat.roughness, 0.85));
               mat.side = THREE.DoubleSide;
               mat.needsUpdate = true;
             }

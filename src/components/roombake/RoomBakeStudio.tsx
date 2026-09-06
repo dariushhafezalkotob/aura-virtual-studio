@@ -10,8 +10,6 @@ interface RoomBakeStudioProps {
   onClose: () => void;
   onAddSceneAsset?: (assetData: { name: string; glbUrl?: string; modelBlob?: Blob }) => void;
   targetAsset?: SceneAsset | null;
-  lightIntensity?: number;
-  onUpdateLightIntensity?: (intensity: number) => void;
 }
 
 export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
@@ -19,16 +17,12 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   onClose,
   onAddSceneAsset,
   targetAsset,
-  lightIntensity = 1.0,
-  onUpdateLightIntensity,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<RoomBakeEngine | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const userImageInputRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
-
-  const [localLightIntensity, setLocalLightIntensity] = useState<number>(lightIntensity);
 
   // UI State
   const [logs, setLogs] = useState<{ text: string; type: 'info' | 'ok' | 'err' }[]>([]);
@@ -172,7 +166,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     if (!canvasRef.current) return;
 
     if (!engineRef.current) {
-      const engine = new RoomBakeEngine(canvasRef.current, { lightIntensity: localLightIntensity });
+      const engine = new RoomBakeEngine(canvasRef.current);
       engineRef.current = engine;
       setViews([...engine.views]);
       setModelStatus(engine.state.modelName);
@@ -343,16 +337,6 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
       keysDownRef.current.clear();
     };
   }, [isOpen, selectedViewIdx, updateStats, refreshViewInfo]);
-
-  // Sync ambient/directional light intensity from Scene Design or local adjustments
-  useEffect(() => {
-    if (lightIntensity !== undefined) {
-      setLocalLightIntensity(lightIntensity);
-      if (engineRef.current) {
-        engineRef.current.setLightIntensity(lightIntensity);
-      }
-    }
-  }, [lightIntensity]);
 
   // Auto-load target scene model (e.g. baked room or selected asset) with its textures whenever RoomBake opens
   useEffect(() => {
@@ -692,7 +676,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     if (!v) return;
 
     const texture = new THREE.CanvasTexture(currentGenCanvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.colorSpace = THREE.NoColorSpace;
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
 
@@ -750,7 +734,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     setGenThumb(genCv.toDataURL());
 
     const texture = new THREE.CanvasTexture(genCv);
-    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.colorSpace = THREE.NoColorSpace;
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
 
@@ -958,32 +942,6 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Ambient Lighting Sync Slider */}
-          <div
-            className="flex items-center gap-2 px-3 py-1 bg-surface-container border border-outline-variant/40 rounded shadow-sm"
-            title="Adjust ambient and directional light intensity (synchronized with Scene Design)"
-          >
-            <span className="material-symbols-outlined text-[16px] text-amber-400">light_mode</span>
-            <span className="text-[10px] font-mono text-on-surface-variant font-medium tracking-wider">LIGHT</span>
-            <input
-              type="range"
-              min="0.2"
-              max="3.0"
-              step="0.1"
-              value={localLightIntensity}
-              onChange={(e) => {
-                const val = parseFloat(e.target.value);
-                setLocalLightIntensity(val);
-                if (engineRef.current) engineRef.current.setLightIntensity(val);
-                if (onUpdateLightIntensity) onUpdateLightIntensity(val);
-              }}
-              className="w-20 h-1 accent-amber-400 cursor-pointer"
-            />
-            <span className="text-[10px] font-mono text-amber-400 font-semibold w-7 text-right">
-              {localLightIntensity.toFixed(1)}x
-            </span>
-          </div>
-
           <button
             onClick={handleAddToActiveScene}
             className="flex items-center gap-2 px-4 py-1.5 bg-primary text-on-primary font-medium text-xs tracking-wider uppercase rounded hover:opacity-90 transition-opacity shadow-lg shadow-primary/20"

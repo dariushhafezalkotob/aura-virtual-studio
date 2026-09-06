@@ -620,7 +620,6 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
         rotation: existingAsset ? existingAsset.rotation : [0, 0, 0],
         scale: existingAsset ? existingAsset.scale : [1, 1, 1],
         createdAt: new Date().toISOString(),
-        unlit: true,
       };
 
       let updatedScenes: SceneAsset[];
@@ -1141,41 +1140,6 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               <span className="material-symbols-outlined text-[13px]">restart_alt</span>
               RESET TRANSFORM (ORIGIN)
             </button>
-            <div className="flex items-center justify-between py-1 px-1.5 bg-surface-container-high/40 rounded border border-outline-variant/30">
-              <span className="font-label-caps text-[9px] text-on-surface-variant flex items-center gap-1 font-semibold">
-                <span className="material-symbols-outlined text-[13px] text-amber-400">lightbulb</span>
-                LIGHT-INDEPENDENT
-              </span>
-              <button
-                onClick={() => {
-                  const currentUnlit =
-                    selectedAsset.unlit ??
-                    (selectedAsset.category === 'environment' ||
-                      selectedAsset.id.startsWith('roombake_') ||
-                      selectedAsset.name.toLowerCase().includes('room'));
-                  const updatedScenes = (currentProject.scenes || []).map((a) =>
-                    a.id === selectedAsset.id ? { ...a, unlit: !currentUnlit } : a
-                  );
-                  onUpdateProject({ ...currentProject, scenes: updatedScenes });
-                }}
-                className={`text-[9px] font-mono px-2 py-0.5 rounded transition-colors cursor-pointer ${
-                  (selectedAsset.unlit ??
-                    (selectedAsset.category === 'environment' ||
-                      selectedAsset.id.startsWith('roombake_') ||
-                      selectedAsset.name.toLowerCase().includes('room')))
-                    ? 'bg-amber-400 text-surface-container-lowest font-bold'
-                    : 'bg-surface-container-highest text-on-surface-variant hover:text-on-surface'
-                }`}
-                title="When ON (Unlit), textures render at 100% true brightness independent of scene lights and shadows"
-              >
-                {(selectedAsset.unlit ??
-                  (selectedAsset.category === 'environment' ||
-                    selectedAsset.id.startsWith('roombake_') ||
-                    selectedAsset.name.toLowerCase().includes('room')))
-                  ? 'ON (UNLIT)'
-                  : 'OFF (LIT)'}
-              </button>
-            </div>
             <div className="flex flex-col gap-xs pt-xs border-t border-outline-variant/20">
               <button
                 onClick={() => setShowRoomBakeStudio(true)}
@@ -2109,8 +2073,6 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           assets.find((a) => a.category === 'environment' || a.name.toLowerCase().includes('room')) ||
           null
         }
-        lightIntensity={lightIntensity}
-        onUpdateLightIntensity={setLightIntensity}
       />
     </div>
   );
