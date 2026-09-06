@@ -164,7 +164,10 @@ export function App() {
         )}
 
         {currentStage === 'stage3_camera' && currentProject && (
-          <CameraRecordView currentProject={currentProject} />
+          <CameraRecordView
+            currentProject={currentProject}
+            onUpdateProject={handleUpdateProject}
+          />
         )}
       </div>
     </div>

@@ -4,6 +4,23 @@ export type AI3DEngine = 'trellis' | 'hunyuan3d' | 'hunyuan_world';
 
 export type AssetCategory = 'environment' | 'prop';
 
+export interface CameraKeyframe {
+  time: number; // in seconds relative to timeline start
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+  fov?: number;
+}
+
+export interface CameraTake {
+  id: string;
+  name: string; // e.g., "Take 1"
+  createdAt: string;
+  duration: number; // in seconds
+  keyframes: CameraKeyframe[];
+  focalLength?: string;
+  fps?: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -12,6 +29,7 @@ export interface Project {
   description?: string;
   scenes?: SceneAsset[];
   characters?: CharacterActor[];
+  cameraTakes?: CameraTake[];
   panoramaUrl?: string;
   panoramaRotation?: number;
   panoramaBlur?: number;

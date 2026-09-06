@@ -10,7 +10,7 @@ import {
   Splat,
 } from '@react-three/drei';
 import * as THREE from 'three';
-import { SceneAsset, CharacterActor } from '../../types';
+import { SceneAsset, CharacterActor, CameraTake, CameraKeyframe } from '../../types';
 import { CharacterActorModel } from './CharacterActorModel';
 
 export type TransformMode = 'translate' | 'rotate' | 'scale';
@@ -47,6 +47,11 @@ interface ThreeStageProps {
   isPlaying?: boolean;
   showTrajectories?: boolean;
   showGrid?: boolean;
+  isRecordingCamera?: boolean;
+  onRecordCameraFrame?: (frame: CameraKeyframe) => void;
+  isPlaybackTake?: boolean;
+  playbackTake?: CameraTake | null;
+  showCameraTrajectory?: boolean;
 }
 
 // 360° Equirectangular Panorama Dome (Resilient Non-Blocking Loader)
@@ -581,10 +586,24 @@ const UnrealCameraNavigation: React.FC<{
     };
   }, [enabled, gl]);
 
+  // When re-enabling navigation (e.g. exiting take playback), sync orbit target with current camera
+  const wasEnabledRef = useRef(enabled);
+  useEffect(() => {
+    if (enabled && !wasEnabledRef.current) {
+      const fwd = new THREE.Vector3();
+      camera.getWorldDirection(fwd);
+      orbitRef.current.target.copy(camera.position);
+      orbitRef.current.pitch = Math.asin(Math.max(-0.99, Math.min(0.99, fwd.y)));
+      orbitRef.current.yaw = Math.atan2(fwd.x, fwd.z);
+    }
+    wasEnabledRef.current = enabled;
+  }, [enabled, camera]);
+
   useFrame((_, delta) => {
+    if (!enabled) return;
     const orbit = orbitRef.current;
 
-    if (enabled && keysDown.current.size > 0) {
+    if (keysDown.current.size > 0) {
       const isShift = keysDown.current.has('shift');
       const moveSpeed = (isShift ? 9.0 : 3.8) * delta;
 
@@ -618,6 +637,149 @@ const UnrealCameraNavigation: React.FC<{
   });
 
   return null;
+};
+
+// Cached scratch objects to avoid GC allocation during 60 FPS animation frames
+const _p0 = new THREE.Vector3();
+const _p1 = new THREE.Vector3();
+const _q0 = new THREE.Quaternion();
+const _q1 = new THREE.Quaternion();
+
+// 60 FPS Camera Trajectory Playback Driver
+const CameraPlaybackDriver: React.FC<{
+  take: CameraTake;
+  currentTime: number;
+}> = ({ take, currentTime }) => {
+  const { camera } = useThree();
+
+  useFrame(() => {
+    const kfs = take.keyframes;
+    if (!kfs || kfs.length === 0) return;
+
+    const pCam = camera as THREE.PerspectiveCamera;
+
+    if (currentTime <= kfs[0].time) {
+      const k0 = kfs[0];
+      camera.position.set(k0.position[0], k0.position[1], k0.position[2]);
+      camera.quaternion.set(k0.quaternion[0], k0.quaternion[1], k0.quaternion[2], k0.quaternion[3]);
+      if (k0.fov && pCam.isPerspectiveCamera && Math.abs(pCam.fov - k0.fov) > 0.1) {
+        pCam.fov = k0.fov;
+        pCam.updateProjectionMatrix();
+      }
+      camera.updateMatrixWorld(true);
+      return;
+    }
+
+    const lastIdx = kfs.length - 1;
+    if (currentTime >= kfs[lastIdx].time) {
+      const kn = kfs[lastIdx];
+      camera.position.set(kn.position[0], kn.position[1], kn.position[2]);
+      camera.quaternion.set(kn.quaternion[0], kn.quaternion[1], kn.quaternion[2], kn.quaternion[3]);
+      if (kn.fov && pCam.isPerspectiveCamera && Math.abs(pCam.fov - kn.fov) > 0.1) {
+        pCam.fov = kn.fov;
+        pCam.updateProjectionMatrix();
+      }
+      camera.updateMatrixWorld(true);
+      return;
+    }
+
+    // Binary search to find keyframe bracket [idx0, idx1]
+    let low = 0;
+    let high = lastIdx;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (kfs[mid].time <= currentTime) {
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    const idx0 = Math.max(0, high);
+    const idx1 = Math.min(lastIdx, idx0 + 1);
+    const k0 = kfs[idx0];
+    const k1 = kfs[idx1];
+
+    const dt = k1.time - k0.time;
+    const alpha = dt > 0.0001 ? Math.max(0, Math.min(1, (currentTime - k0.time) / dt)) : 0;
+
+    _p0.set(k0.position[0], k0.position[1], k0.position[2]);
+    _p1.set(k1.position[0], k1.position[1], k1.position[2]);
+    camera.position.copy(_p0).lerp(_p1, alpha);
+
+    _q0.set(k0.quaternion[0], k0.quaternion[1], k0.quaternion[2], k0.quaternion[3]);
+    _q1.set(k1.quaternion[0], k1.quaternion[1], k1.quaternion[2], k1.quaternion[3]);
+    camera.quaternion.copy(_q0).slerp(_q1, alpha);
+
+    if (k0.fov && k1.fov && pCam.isPerspectiveCamera) {
+      const targetFov = THREE.MathUtils.lerp(k0.fov, k1.fov, alpha);
+      if (Math.abs(pCam.fov - targetFov) > 0.1) {
+        pCam.fov = targetFov;
+        pCam.updateProjectionMatrix();
+      }
+    }
+
+    camera.updateMatrixWorld(true);
+  });
+
+  return null;
+};
+
+// Continuous Camera Keyframe Recorder (Samples at ~60 FPS)
+const CameraRecorder: React.FC<{
+  isRecording: boolean;
+  currentTime: number;
+  onRecordFrame?: (frame: CameraKeyframe) => void;
+}> = ({ isRecording, currentTime, onRecordFrame }) => {
+  const { camera } = useThree();
+  const lastRecordedTimeRef = useRef<number>(-1);
+
+  useFrame(() => {
+    if (!isRecording || !onRecordFrame) return;
+
+    // Sample camera keyframe at ~60 FPS (at least 12ms apart)
+    if (lastRecordedTimeRef.current >= 0 && Math.abs(currentTime - lastRecordedTimeRef.current) < 0.012) {
+      return;
+    }
+    lastRecordedTimeRef.current = currentTime;
+
+    const pCam = camera as THREE.PerspectiveCamera;
+    const frame: CameraKeyframe = {
+      time: Math.max(0, currentTime),
+      position: [camera.position.x, camera.position.y, camera.position.z],
+      quaternion: [camera.quaternion.x, camera.quaternion.y, camera.quaternion.z, camera.quaternion.w],
+      fov: pCam.isPerspectiveCamera ? pCam.fov : 50,
+    };
+    onRecordFrame(frame);
+  });
+
+  useEffect(() => {
+    if (!isRecording) {
+      lastRecordedTimeRef.current = -1;
+    }
+  }, [isRecording]);
+
+  return null;
+};
+
+// Holographic 3D Trajectory Ribbon for Recorded Camera Path
+const CameraTrajectoryVisualizer: React.FC<{
+  take: CameraTake | null | undefined;
+}> = ({ take }) => {
+  const lineObj = React.useMemo(() => {
+    if (!take || !take.keyframes || take.keyframes.length < 2) return null;
+    const points = take.keyframes.map((k) => new THREE.Vector3(k.position[0], k.position[1], k.position[2]));
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({
+      color: 0x00ffcc,
+      linewidth: 2,
+      transparent: true,
+      opacity: 0.65,
+    });
+    return new THREE.Line(geometry, material);
+  }, [take]);
+
+  if (!lineObj) return null;
+  return <primitive object={lineObj} />;
 };
 
 // Dynamic Camera FOV Controller for Virtual Lenses
@@ -656,6 +818,11 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   isPlaying = false,
   showTrajectories = true,
   showGrid = true,
+  isRecordingCamera = false,
+  onRecordCameraFrame,
+  isPlaybackTake = false,
+  playbackTake = null,
+  showCameraTrajectory = true,
 }) => {
   const [isTransformDragging, setIsTransformDragging] = useState(false);
 
@@ -853,8 +1020,25 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           )}
         </Suspense>
 
-        {/* 60 FPS Continuous Unreal Engine Keyboard & Mouse Flight Controller (Exact RoomBake Camera) */}
-        <UnrealCameraNavigation enabled={!isTransformDragging} />
+        {/* Continuous Camera Keyframe Recorder */}
+        <CameraRecorder
+          isRecording={isRecordingCamera}
+          currentTime={currentTimelineTime}
+          onRecordFrame={onRecordCameraFrame}
+        />
+
+        {/* Camera Playback Driver (Smoothly animates camera during take review) */}
+        {isPlaybackTake && playbackTake && (
+          <CameraPlaybackDriver take={playbackTake} currentTime={currentTimelineTime} />
+        )}
+
+        {/* Holographic 3D Camera Trajectory Ribbon */}
+        {showCameraTrajectory && playbackTake && (
+          <CameraTrajectoryVisualizer take={playbackTake} />
+        )}
+
+        {/* 60 FPS Continuous Unreal Engine Keyboard & Mouse Flight Controller (disabled during take playback) */}
+        <UnrealCameraNavigation enabled={!isTransformDragging && !isPlaybackTake} />
       </Canvas>
     </div>
   );
