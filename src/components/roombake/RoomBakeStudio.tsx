@@ -39,13 +39,12 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   const [views, setViews] = useState<ViewPoint[]>([]);
   const [selectedViewIdx, setSelectedViewIdx] = useState(1);
   const [fov, setFov] = useState(60);
-  const [viewInfo, setViewInfo] = useState('—');
 
   // 02 Conditioning
   const [frameSize, setFrameSize] = useState('1024x1024');
   const [condInfo, setCondInfo] = useState('—');
-  const [nearDist, setNearDist] = useState(0.3);
-  const [farDist, setFarDist] = useState(12.0);
+  const nearDist = 0.3;
+  const farDist = 12.0;
   const [autoRange, setAutoRange] = useState(true);
   const [depthInvert, setDepthInvert] = useState(false);
   const [maskFeather, setMaskFeather] = useState(6);
@@ -55,41 +54,15 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   const [atlasThumb, setAtlasThumb] = useState<string | null>(null);
 
   // 03 Generate
-  const [srcSelect, setSrcSelect] = useState<'gemini' | 'openai' | 'mock' | 'normals' | 'upload' | 'comfy'>('gemini');
+  const [srcSelect, setSrcSelect] = useState<'gemini' | 'mock' | 'normals' | 'upload'>('gemini');
   const [genericPrompt, setGenericPrompt] = useState('warm oak parquet floor, lime-plaster walls, matte white ceiling, flat even lighting, no cast shadows, albedo texture, interior photograph');
   const [genericSeed, setGenericSeed] = useState(20260903);
 
   // Gemini State
-  const [gemKey, setGemKey] = useState(localStorage.getItem('roombake_gemini_key') || '');
-  const [gemKeyStatus, setGemKeyStatus] = useState(localStorage.getItem('roombake_gemini_key') ? '✓ saved' : '');
-  const [gemMode, setGemMode] = useState<'proxy' | 'direct'>('direct');
-  const [gemModelSelect, setGemModelSelect] = useState('gemini-3.1-flash-lite-image');
-  const [gemCustomModel, setGemCustomModel] = useState('gemini-3.1-flash-lite-image');
+  const gemKey = localStorage.getItem('roombake_gemini_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
   const [gemSendCond, setGemSendCond] = useState(true);
   const [gemStyle, setGemStyle] = useState('A futuristic cyberpunk hideout interior, industrial sci-fi architecture, aged black metal wall panels, wet polished concrete floor, subtle holographic interface glow on the walls, cinematic warm tungsten lighting mixed with cold blue ambient light, realistic materials, believable wear and scratches.');
-  const [gemTemplate, setGemTemplate] = useState(`Photorealistic architectural photograph of a room interior wall and surface view.\nScene style: {{STYLE}}.\nLighting: flat even diffused interior lighting, architectural photography, ultra sharp textures, no distortion, high detail, ARRI style 8K detail.\nSeamless continuity: If any portion of a wall, floor, or ceiling is already textured in the reference view, seamlessly continue and extend that exact material, color palette, scale, and pattern across the rest of the surface with an invisible boundary.`);
-
-  // OpenAI State
-  const [oaiKey, setOaiKey] = useState(localStorage.getItem('roombake_openai_key') || '');
-  const [oaiKeyStatus, setOaiKeyStatus] = useState(localStorage.getItem('roombake_openai_key') ? '✓ saved' : '');
-  const [oaiMode, setOaiMode] = useState<'proxy' | 'direct'>('direct');
-  const [oaiModelSelect, setOaiModelSelect] = useState('dall-e-3');
-  const [oaiCustomModel, setOaiCustomModel] = useState('dall-e-3');
-  const [oaiProxyUrl, setOaiProxyUrl] = useState('http://127.0.0.1:8787');
-  const [oaiQuality, setOaiQuality] = useState<'standard' | 'hd'>('standard');
-  const [oaiBase, setOaiBase] = useState(true);
-  const [oaiStyle, setOaiStyle] = useState('A futuristic cyberpunk hideout interior, industrial sci-fi architecture, aged black metal wall panels, wet polished concrete floor, subtle holographic interface glow on the walls, cinematic warm tungsten lighting mixed with cold blue ambient light, realistic materials, believable wear and scratches.');
-  const [oaiTemplate, setOaiTemplate] = useState(`Photorealistic architectural photograph of a room interior wall and surface view.\nScene style: {{STYLE}}.\nLighting: flat even interior lighting, architectural photography, ultra sharp textures, no distortion, high detail, ARRI style 8K detail.`);
-
-  // ComfyUI State
-  const [comfyUrl, setComfyUrl] = useState('http://127.0.0.1:8188');
-  const [comfyWorkflow, setComfyWorkflow] = useState('');
-  const [nodePrompt, setNodePrompt] = useState('6.text');
-  const [nodeSeed, setNodeSeed] = useState('3.seed');
-  const [nodeDepth, setNodeDepth] = useState('12.image');
-  const [nodeNormal, setNodeNormal] = useState('14.image');
-  const [nodeMask, setNodeMask] = useState('15.image');
-  const [nodeInit, setNodeInit] = useState('16.image');
+  const gemTemplate = `Photorealistic architectural photograph of a room interior wall and surface view.\nScene style: {{STYLE}}.\nLighting: flat even diffused interior lighting, architectural photography, ultra sharp textures, no distortion, high detail, ARRI style 8K detail.\nSeamless continuity: If any portion of a wall, floor, or ceiling is already textured in the reference view, seamlessly continue and extend that exact material, color palette, scale, and pattern across the rest of the surface with an invisible boundary.`;
 
   // Generated Image Thumbnail & Canvas
   const [genThumb, setGenThumb] = useState<string | null>(null);
@@ -147,13 +120,8 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     setHasSnapshot(engine.state.hasSnapshot);
   }, []);
 
-  const refreshViewInfo = useCallback((view: ViewPoint) => {
-    if (view.type === 'pano') {
-      setViewInfo(`Panorama · pos: [${view.pos.map((n) => n.toFixed(2)).join(', ')}]`);
-    } else {
-      const tgt = view.target ? `target: [${view.target.map((n) => n.toFixed(2)).join(', ')}] · ` : '';
-      setViewInfo(`pos: [${view.pos.map((n) => n.toFixed(2)).join(', ')}] · ${tgt}fov: ${view.fov || 60}°`);
-    }
+  const refreshViewInfo = useCallback((_view: ViewPoint) => {
+    // viewInfo removed from UI per simplified 01 layout
   }, []);
 
   const isOpenRef = useRef(isOpen);
@@ -439,20 +407,6 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   };
 
   // Section 01: View Handlers
-  const handleSelectView = (idx: number) => {
-    setSelectedViewIdx(idx);
-    const engine = engineRef.current;
-    if (!engine) return;
-    const v = engine.views[idx];
-    if (v) {
-      if (v.fov) setFov(v.fov);
-      engine.renderConditioning(v, autoRange, depthInvert, maskFeather);
-      refreshViewInfo(v);
-      updateStats();
-      addLog(`Selected view "${v.name}"`, 'info');
-    }
-  };
-
   const handleFovChange = (newFov: number) => {
     setFov(newFov);
     const engine = engineRef.current;
@@ -544,55 +498,6 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     addLog(`Saved ${viewName}-${type}.png`, 'ok');
   };
 
-  // Section 03: Check Models Helpers
-  const handleCheckGeminiModels = async () => {
-    const key = gemKey.trim();
-    if (!key) {
-      addLog('Enter a Google Gemini API key first.', 'err');
-      return;
-    }
-    addLog('Checking Gemini API key against Google AI Studio...', 'info');
-    try {
-      const dRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
-      const dJson = await dRes.json();
-      if (!dRes.ok) throw new Error(dJson.error?.message || `Gemini API error: ${dRes.status}`);
-      const ids: string[] = (dJson.models || []).map((m: any) => m.name.replace(/^models\//, '')).sort();
-      addLog(`Gemini API key is active! Total models accessible: ${ids.length}`, 'ok');
-      const imgModels = ids.filter((m) => /image|flash|imagen/i.test(m));
-      if (imgModels.length) {
-        addLog(`Image-compatible models found: ${imgModels.join(', ')}`, 'info');
-      }
-    } catch (e: any) {
-      addLog(`Gemini check failed: ${e.message}`, 'err');
-    }
-  };
-
-  const handleCheckOpenAIModels = async () => {
-    const key = oaiKey.trim();
-    if (!key) {
-      addLog('Enter an OpenAI API key first.', 'err');
-      return;
-    }
-    addLog('Checking API key permissions against OpenAI...', 'info');
-    try {
-      const dRes = await fetch('https://api.openai.com/v1/models', {
-        headers: { Authorization: `Bearer ${key}` },
-      });
-      const dJson = await dRes.json();
-      if (!dRes.ok) throw new Error(dJson.error?.message || `OpenAI API error ${dRes.status}`);
-      const ids: string[] = (dJson.data || []).map((m: any) => m.id).sort();
-      const hasDalle3 = ids.includes('dall-e-3');
-      const hasDalle2 = ids.includes('dall-e-2');
-      if (hasDalle3 || hasDalle2) {
-        addLog(`OpenAI API key is active! Access to DALL·E 3 (${hasDalle3 ? 'YES' : 'NO'}), DALL·E 2 (${hasDalle2 ? 'YES' : 'NO'})`, 'ok');
-      } else {
-        addLog(`OpenAI API key is valid, but DALL·E is not enabled on this account.`, 'err');
-      }
-    } catch (e: any) {
-      addLog(`OpenAI check failed: ${e.message}`, 'err');
-    }
-  };
-
   // Section 03: Generate Image (Without Baking)
   const handleGenerateImageOnly = async () => {
     const engine = engineRef.current;
@@ -609,17 +514,13 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
       }
       const initCv = engine.state.bakes > 0 ? engine.renderInitFromAtlas(v) : null;
 
-      const activeModel =
-        srcSelect === 'gemini'
-          ? (gemModelSelect === 'custom' ? gemCustomModel : gemModelSelect)
-          : (oaiModelSelect === 'custom' ? oaiCustomModel : oaiModelSelect);
-
-      const activeKey = srcSelect === 'gemini' ? gemKey : oaiKey;
-      const activePrompt = srcSelect === 'gemini' ? gemTemplate : (srcSelect === 'openai' ? oaiTemplate : genericPrompt);
-      const activeStyle = srcSelect === 'gemini' ? gemStyle : (srcSelect === 'openai' ? oaiStyle : '');
+      const activeModel = 'gemini-3.1-flash-lite-image';
+      const activeKey = gemKey;
+      const activePrompt = srcSelect === 'gemini' ? gemTemplate : genericPrompt;
+      const activeStyle = srcSelect === 'gemini' ? gemStyle : '';
 
       const genCv = await generateTexture({
-        provider: srcSelect === 'gemini' || srcSelect === 'openai' || srcSelect === 'mock' || srcSelect === 'normals'
+        provider: srcSelect === 'gemini' || srcSelect === 'mock' || srcSelect === 'normals'
           ? srcSelect
           : 'mock',
         model: activeModel,
@@ -627,13 +528,13 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
         style: activeStyle,
         apiKey: activeKey,
         sendCond: gemSendCond,
-        quality: oaiQuality,
+        quality: 'standard',
         size: frameSize,
         images: {
           depth: engine.cond.depth,
           normal: engine.cond.normal,
           mask: engine.cond.mask,
-          base: oaiBase ? initCv : null,
+          base: initCv,
         },
       });
 
@@ -702,17 +603,13 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     engine.renderConditioning(v, autoRange, depthInvert, maskFeather);
     const initCv = engine.state.bakes > 0 ? engine.renderInitFromAtlas(v) : null;
 
-    const activeModel =
-      srcSelect === 'gemini'
-        ? (gemModelSelect === 'custom' ? gemCustomModel : gemModelSelect)
-        : (oaiModelSelect === 'custom' ? oaiCustomModel : oaiModelSelect);
-
-    const activeKey = srcSelect === 'gemini' ? gemKey : oaiKey;
-    const activePrompt = srcSelect === 'gemini' ? gemTemplate : (srcSelect === 'openai' ? oaiTemplate : genericPrompt);
-    const activeStyle = srcSelect === 'gemini' ? gemStyle : (srcSelect === 'openai' ? oaiStyle : '');
+    const activeModel = 'gemini-3.1-flash-lite-image';
+    const activeKey = gemKey;
+    const activePrompt = srcSelect === 'gemini' ? gemTemplate : genericPrompt;
+    const activeStyle = srcSelect === 'gemini' ? gemStyle : '';
 
     const genCv = await generateTexture({
-      provider: srcSelect === 'gemini' || srcSelect === 'openai' || srcSelect === 'mock' || srcSelect === 'normals'
+      provider: srcSelect === 'gemini' || srcSelect === 'mock' || srcSelect === 'normals'
         ? srcSelect
         : 'mock',
       model: activeModel,
@@ -720,13 +617,13 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
       style: activeStyle,
       apiKey: activeKey,
       sendCond: gemSendCond,
-      quality: oaiQuality,
+      quality: 'standard',
       size: frameSize,
       images: {
         depth: engine.cond.depth,
         normal: engine.cond.normal,
         mask: engine.cond.mask,
-        base: oaiBase ? initCv : null,
+        base: initCv,
       },
     });
 
@@ -773,7 +670,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     addLog(`Starting automated multi-view baking across ${engine.views.length} viewpoints...`, 'info');
 
     try {
-      const isAI = srcSelect === 'openai' || srcSelect === 'gemini';
+      const isAI = srcSelect === 'gemini';
       for (let i = 0; i < engine.views.length; i++) {
         const v = engine.views[i];
         if (isAI && v.type === 'pano') {
@@ -1187,27 +1084,6 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
             {openSections.s01 && (
               <div className="flex flex-col gap-3 pt-1 animate-fade-in">
                 <div className="flex flex-col gap-1">
-                  <label className="text-[11px] font-mono text-on-surface-variant">
-                    Capture view
-                  </label>
-                  <select
-                    value={selectedViewIdx}
-                    onChange={(e) => handleSelectView(parseInt(e.target.value, 10))}
-                    className="w-full bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded outline-none focus:border-primary font-mono"
-                  >
-                    {views.map((v, i) => (
-                      <option key={i} value={i}>
-                        {v.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="font-mono text-[10.5px] text-on-surface-variant/80">
-                  {viewInfo}
-                </div>
-
-                <div className="flex flex-col gap-1">
                   <div className="flex justify-between text-[11px] font-mono text-on-surface-variant">
                     <span>Field of view</span>
                     <b>{fov}°</b>
@@ -1237,10 +1113,6 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                     Panorama here
                   </button>
                 </div>
-
-                <p className="text-[11px] text-on-surface-variant/70 leading-relaxed font-sans">
-                  Wide angles distort what diffusion models produce. Keep perspective views near 60° and add more of them rather than one 100° shot.
-                </p>
               </div>
             )}
           </div>
@@ -1287,56 +1159,11 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                   Render depth · normal · mask
                 </button>
 
-                <div className="font-mono text-[10.5px] text-on-surface-variant/80">
-                  {condInfo}
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    disabled={!depthThumb}
-                    onClick={() => saveCondMap('depth')}
-                    className="py-1 px-2 bg-surface-container border border-outline-variant text-[11px] text-on-surface hover:bg-surface-container-high transition-colors font-mono disabled:opacity-40"
-                  >
-                    Save depth
-                  </button>
-                  <button
-                    disabled={!normalThumb}
-                    onClick={() => saveCondMap('normal')}
-                    className="py-1 px-2 bg-surface-container border border-outline-variant text-[11px] text-on-surface hover:bg-surface-container-high transition-colors font-mono disabled:opacity-40"
-                  >
-                    Save normal
-                  </button>
-                  <button
-                    disabled={!maskThumb}
-                    onClick={() => saveCondMap('mask')}
-                    className="py-1 px-2 bg-surface-container border border-outline-variant text-[11px] text-on-surface hover:bg-surface-container-high transition-colors font-mono disabled:opacity-40"
-                  >
-                    Save mask
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-mono text-on-surface-variant">Near (m)</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={nearDist}
-                      onChange={(e) => setNearDist(parseFloat(e.target.value))}
-                      className="w-full bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded outline-none focus:border-primary font-mono"
-                    />
+                {condInfo && (
+                  <div className="font-mono text-[10.5px] text-on-surface-variant/80">
+                    {condInfo}
                   </div>
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-mono text-on-surface-variant">Far (m)</label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      value={farDist}
-                      onChange={(e) => setFarDist(parseFloat(e.target.value))}
-                      className="w-full bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded outline-none focus:border-primary font-mono"
-                    />
-                  </div>
-                </div>
+                )}
 
                 <label className="flex items-center gap-2 cursor-pointer text-xs font-mono text-on-surface-variant select-none">
                   <input
@@ -1373,10 +1200,6 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                     className="accent-primary"
                   />
                 </div>
-
-                <p className="text-[11px] text-on-surface-variant/70 leading-relaxed font-sans">
-                  A feathered mask is a per-pixel denoise-strength map for differential diffusion. A hard binary edge is what produces visible seams between an old view and a new one.
-                </p>
               </div>
             )}
           </div>
@@ -1409,17 +1232,15 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                     onChange={(e) => setSrcSelect(e.target.value as any)}
                     className="w-full bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded outline-none focus:border-primary font-mono"
                   >
-                    <option value="gemini">Google Gemini (gemini-3.1-flash-lite-image)</option>
-                    <option value="openai">OpenAI GPT Image — via local proxy</option>
-                    <option value="mock">Placeholder — mock render (per-view drift)</option>
-                    <option value="normals">Placeholder — normals (views agree exactly)</option>
+                    <option value="gemini">Google Gemini AI</option>
                     <option value="upload">Upload an image</option>
-                    <option value="comfy">ComfyUI HTTP API</option>
+                    <option value="mock">Placeholder (Mock render)</option>
+                    <option value="normals">Placeholder (Surface normals)</option>
                   </select>
                 </div>
 
-                {/* Generic Prompt & Seed (for mock / normals / comfy) */}
-                {(srcSelect === 'mock' || srcSelect === 'normals' || srcSelect === 'comfy') && (
+                {/* Generic Prompt & Seed (for mock / normals) */}
+                {(srcSelect === 'mock' || srcSelect === 'normals') && (
                   <div className="flex flex-col gap-2 pt-1 border-t border-surface-container-highest">
                     <div className="flex flex-col gap-1">
                       <label className="text-[11px] font-mono text-on-surface-variant">Prompt</label>
@@ -1456,118 +1277,9 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                   </div>
                 )}
 
-                {/* ComfyUI Box */}
-                {srcSelect === 'comfy' && (
-                  <div className="flex flex-col gap-2 pt-1 border-t border-surface-container-highest">
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[11px] font-mono text-on-surface-variant">Server</label>
-                      <input
-                        type="text"
-                        value={comfyUrl}
-                        onChange={(e) => setComfyUrl(e.target.value)}
-                        className="w-full bg-surface-container border border-outline-variant px-2.5 py-1 text-xs font-mono text-on-surface rounded"
-                      />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[11px] font-mono text-on-surface-variant">Workflow (API format)</label>
-                      <textarea
-                        rows={3}
-                        value={comfyWorkflow}
-                        onChange={(e) => setComfyWorkflow(e.target.value)}
-                        placeholder='Paste JSON from ComfyUI → Workflow → Export (API).'
-                        className="w-full bg-surface-container border border-outline-variant p-2 text-xs font-mono text-on-surface rounded resize-y"
-                      />
-                    </div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      <input type="text" placeholder="6.text" value={nodePrompt} onChange={(e) => setNodePrompt(e.target.value)} className="bg-surface-container border border-outline-variant px-2 py-1 text-[11px] font-mono text-on-surface rounded" />
-                      <input type="text" placeholder="3.seed" value={nodeSeed} onChange={(e) => setNodeSeed(e.target.value)} className="bg-surface-container border border-outline-variant px-2 py-1 text-[11px] font-mono text-on-surface rounded" />
-                      <input type="text" placeholder="12.image" value={nodeDepth} onChange={(e) => setNodeDepth(e.target.value)} className="bg-surface-container border border-outline-variant px-2 py-1 text-[11px] font-mono text-on-surface rounded" />
-                    </div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      <input type="text" placeholder="14.image" value={nodeNormal} onChange={(e) => setNodeNormal(e.target.value)} className="bg-surface-container border border-outline-variant px-2 py-1 text-[11px] font-mono text-on-surface rounded" />
-                      <input type="text" placeholder="15.image" value={nodeMask} onChange={(e) => setNodeMask(e.target.value)} className="bg-surface-container border border-outline-variant px-2 py-1 text-[11px] font-mono text-on-surface rounded" />
-                      <input type="text" placeholder="16.image" value={nodeInit} onChange={(e) => setNodeInit(e.target.value)} className="bg-surface-container border border-outline-variant px-2 py-1 text-[11px] font-mono text-on-surface rounded" />
-                    </div>
-                  </div>
-                )}
-
                 {/* Gemini Box */}
                 {srcSelect === 'gemini' && (
                   <div className="flex flex-col gap-3 pt-1">
-                    <div className="flex flex-col gap-1">
-                      <div className="flex justify-between items-center">
-                        <label className="text-[11px] font-mono text-on-surface-variant">
-                          Google Gemini API Key (AI Studio)
-                        </label>
-                        <b className="text-emerald-400 font-mono text-[10px]">{gemKeyStatus}</b>
-                      </div>
-                      <div className="flex gap-2">
-                        <input
-                          type="password"
-                          placeholder="AIzaSy..."
-                          value={gemKey}
-                          onChange={(e) => {
-                            const val = e.target.value.trim();
-                            setGemKey(val);
-                            if (val) {
-                              localStorage.setItem('roombake_gemini_key', val);
-                              setGemKeyStatus('✓ saved');
-                            } else {
-                              setGemKeyStatus('');
-                            }
-                          }}
-                          className="flex-1 bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded outline-none focus:border-primary font-mono"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleCheckGeminiModels}
-                          className="px-2.5 py-1.5 bg-surface-container border border-outline-variant text-[11px] font-mono text-on-surface hover:bg-surface-container-high transition-colors whitespace-nowrap"
-                        >
-                          Check Models
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[11px] font-mono text-on-surface-variant">Mode</label>
-                        <select
-                          value={gemMode}
-                          onChange={(e) => setGemMode(e.target.value as any)}
-                          className="w-full bg-surface-container border border-outline-variant px-2 py-1.5 text-xs text-on-surface rounded font-mono"
-                        >
-                          <option value="direct">Direct API (Browser Fetch)</option>
-                          <option value="proxy">Local Proxy (http://127.0.0.1:8787)</option>
-                        </select>
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[11px] font-mono text-on-surface-variant">Model</label>
-                        <select
-                          value={gemModelSelect}
-                          onChange={(e) => setGemModelSelect(e.target.value)}
-                          className="w-full bg-surface-container border border-outline-variant px-2 py-1.5 text-xs text-on-surface rounded font-mono"
-                        >
-                          <option value="gemini-3.1-flash-lite-image">gemini-3.1-flash-lite-image</option>
-                          <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-                          <option value="imagen-3.0-generate-002">imagen-3.0-generate-002</option>
-                          <option value="custom">Custom...</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    {gemModelSelect === 'custom' && (
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[11px] font-mono text-on-surface-variant">Custom Gemini Model Name</label>
-                        <input
-                          type="text"
-                          value={gemCustomModel}
-                          onChange={(e) => setGemCustomModel(e.target.value)}
-                          className="w-full bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded font-mono"
-                        />
-                      </div>
-                    )}
-
                     <label className="flex items-center gap-2 cursor-pointer text-xs font-mono text-on-surface-variant select-none">
                       <input
                         type="checkbox"
@@ -1579,160 +1291,12 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                     </label>
 
                     <div className="flex flex-col gap-1">
-                      <label className="text-[11px] font-mono text-on-surface-variant">Scene style</label>
+                      <label className="text-[11px] font-mono text-on-surface-variant">Prompt / Scene Style</label>
                       <textarea
                         rows={3}
                         value={gemStyle}
                         onChange={(e) => setGemStyle(e.target.value)}
-                        className="w-full bg-surface-container border border-outline-variant p-2 text-xs text-on-surface rounded font-mono resize-y"
-                      />
-                    </div>
-
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[11px] font-mono text-on-surface-variant">
-                        Prompt template · {'{{STYLE}}'} is replaced
-                      </label>
-                      <textarea
-                        rows={4}
-                        value={gemTemplate}
-                        onChange={(e) => setGemTemplate(e.target.value)}
-                        className="w-full bg-surface-container border border-outline-variant p-2 text-xs text-on-surface rounded font-mono resize-y"
-                      />
-                    </div>
-
-                    <p className="text-[11px] text-on-surface-variant/70 leading-relaxed font-sans">
-                      Get a free Gemini API key from <code>aistudio.google.com</code>. Supports multimodal conditioning using depth and surface normal maps.
-                    </p>
-                  </div>
-                )}
-
-                {/* OpenAI Box */}
-                {srcSelect === 'openai' && (
-                  <div className="flex flex-col gap-3 pt-1">
-                    <div className="flex flex-col gap-1">
-                      <div className="flex justify-between items-center">
-                        <label className="text-[11px] font-mono text-on-surface-variant">OpenAI API Key</label>
-                        <b className="text-emerald-400 font-mono text-[10px]">{oaiKeyStatus}</b>
-                      </div>
-                      <div className="flex gap-2">
-                        <input
-                          type="password"
-                          placeholder="sk-..."
-                          value={oaiKey}
-                          onChange={(e) => {
-                            const val = e.target.value.trim();
-                            setOaiKey(val);
-                            if (val) {
-                              localStorage.setItem('roombake_openai_key', val);
-                              setOaiKeyStatus('✓ saved');
-                            } else {
-                              setOaiKeyStatus('');
-                            }
-                          }}
-                          className="flex-1 bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded outline-none focus:border-primary font-mono"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleCheckOpenAIModels}
-                          className="px-2.5 py-1.5 bg-surface-container border border-outline-variant text-[11px] font-mono text-on-surface hover:bg-surface-container-high transition-colors whitespace-nowrap"
-                        >
-                          Check Models
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[11px] font-mono text-on-surface-variant">Mode</label>
-                        <select
-                          value={oaiMode}
-                          onChange={(e) => setOaiMode(e.target.value as any)}
-                          className="w-full bg-surface-container border border-outline-variant px-2 py-1.5 text-xs text-on-surface rounded font-mono"
-                        >
-                          <option value="direct">Direct API (Browser Fetch)</option>
-                          <option value="proxy">Local Proxy (http://127.0.0.1:8787)</option>
-                        </select>
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[11px] font-mono text-on-surface-variant">Model</label>
-                        <select
-                          value={oaiModelSelect}
-                          onChange={(e) => setOaiModelSelect(e.target.value)}
-                          className="w-full bg-surface-container border border-outline-variant px-2 py-1.5 text-xs text-on-surface rounded font-mono"
-                        >
-                          <option value="dall-e-3">DALL-E 3 (High Quality)</option>
-                          <option value="chatgpt-image-latest">chatgpt-image-latest</option>
-                          <option value="dall-e-2">DALL-E 2 (Edits / Fast)</option>
-                          <option value="custom">Custom...</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    {oaiModelSelect === 'custom' && (
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[11px] font-mono text-on-surface-variant">Custom Model Name</label>
-                        <input
-                          type="text"
-                          value={oaiCustomModel}
-                          onChange={(e) => setOaiCustomModel(e.target.value)}
-                          className="w-full bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded font-mono"
-                        />
-                      </div>
-                    )}
-
-                    {oaiMode === 'proxy' && (
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[11px] font-mono text-on-surface-variant">Proxy URL</label>
-                        <input
-                          type="text"
-                          value={oaiProxyUrl}
-                          onChange={(e) => setOaiProxyUrl(e.target.value)}
-                          className="w-full bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded font-mono"
-                        />
-                      </div>
-                    )}
-
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[11px] font-mono text-on-surface-variant">Quality</label>
-                      <select
-                        value={oaiQuality}
-                        onChange={(e) => setOaiQuality(e.target.value as any)}
-                        className="w-full bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded font-mono"
-                      >
-                        <option value="standard">standard</option>
-                        <option value="hd">hd (high detail)</option>
-                      </select>
-                    </div>
-
-                    <label className="flex items-center gap-2 cursor-pointer text-xs font-mono text-on-surface-variant select-none">
-                      <input
-                        type="checkbox"
-                        checked={oaiBase}
-                        onChange={(e) => setOaiBase(e.target.checked)}
-                        className="accent-primary"
-                      />
-                      Send the current render as the base image (for edits/proxy)
-                    </label>
-
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[11px] font-mono text-on-surface-variant">Scene style</label>
-                      <textarea
-                        rows={3}
-                        value={oaiStyle}
-                        onChange={(e) => setOaiStyle(e.target.value)}
-                        className="w-full bg-surface-container border border-outline-variant p-2 text-xs text-on-surface rounded font-mono resize-y"
-                      />
-                    </div>
-
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[11px] font-mono text-on-surface-variant">
-                        Prompt template · {'{{STYLE}}'} is replaced
-                      </label>
-                      <textarea
-                        rows={4}
-                        value={oaiTemplate}
-                        onChange={(e) => setOaiTemplate(e.target.value)}
+                        placeholder="e.g. Modern minimalist interior, light oak wood floor, concrete plaster accent wall, soft diffused lighting"
                         className="w-full bg-surface-container border border-outline-variant p-2 text-xs text-on-surface rounded font-mono resize-y"
                       />
                     </div>
