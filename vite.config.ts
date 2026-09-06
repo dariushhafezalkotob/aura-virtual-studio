@@ -230,6 +230,63 @@ function apiMiddlewarePlugin(): Plugin {
           }
         }
 
+        // 0.6 Persistent Asset Upload & Static File Serving (./data/assets)
+        if (req.url?.startsWith('/api/assets/')) {
+          const rawName = req.url.replace('/api/assets/', '').split('?')[0];
+          const filename = path.basename(decodeURIComponent(rawName));
+          const assetPath = path.join(process.cwd(), 'data', 'assets', filename);
+
+          if (fs.existsSync(assetPath)) {
+            const ext = path.extname(filename).toLowerCase();
+            let contentType = 'application/octet-stream';
+            if (ext === '.glb') contentType = 'model/gltf-binary';
+            else if (ext === '.gltf') contentType = 'model/gltf+json';
+            else if (ext === '.png') contentType = 'image/png';
+            else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
+            else if (ext === '.json') contentType = 'application/json';
+
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+            fs.createReadStream(assetPath).pipe(res);
+            return;
+          } else {
+            res.statusCode = 404;
+            res.end('Asset not found');
+            return;
+          }
+        }
+
+        if (req.url?.startsWith('/api/upload-asset') && req.method === 'POST') {
+          const assetsDir = path.join(process.cwd(), 'data', 'assets');
+          if (!fs.existsSync(assetsDir)) {
+            fs.mkdirSync(assetsDir, { recursive: true });
+          }
+
+          const urlObj = new URL(req.url, 'http://localhost:3000');
+          const queryName = urlObj.searchParams.get('filename') || `asset_${Date.now()}.glb`;
+          const filename = path.basename(queryName);
+          const destPath = path.join(assetsDir, filename);
+
+          const chunks: Buffer[] = [];
+          req.on('data', (chunk) => {
+            chunks.push(chunk);
+          });
+          req.on('end', () => {
+            try {
+              const buffer = Buffer.concat(chunks);
+              fs.writeFileSync(destPath, buffer);
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ success: true, url: `/api/assets/${filename}` }));
+            } catch (err: any) {
+              console.error('[API /api/upload-asset] Failed to save asset to disk:', err);
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ success: false, error: err.message }));
+            }
+          });
+          return;
+        }
+
         // 1. Image & Asset Proxy for 360 Panoramas, PLY/SPLAT assets, and GLB models (CORS safe)
         if (req.url?.startsWith('/api/proxy-image')) {
           try {

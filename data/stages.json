@@ -1,5 +1,37 @@
 [
   {
+    "id": "stage_proj_1788679487201",
+    "name": "hideout01",
+    "createdAt": "2026-09-06T07:29:24.838Z",
+    "environmentPreset": "studio",
+    "lightIntensity": 1.0,
+    "panoramaRotation": 0,
+    "scenes": [
+      {
+        "id": "roombake_1788679764838",
+        "name": "AI Baked Room Environment",
+        "category": "environment",
+        "glbUrl": "blob:http://localhost:3000/c4ed9b6c-2d29-4922-b962-07b15da122dc",
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "createdAt": "2026-09-06T07:29:24.838Z"
+      }
+    ]
+  },
+  {
     "id": "stage_cyberpunk_alley",
     "name": "Cyberpunk Neon Alley",
     "createdAt": "2026-09-06T06:53:02.499Z",

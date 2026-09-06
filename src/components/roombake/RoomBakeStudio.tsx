@@ -814,7 +814,24 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
       addLog('Exporting baked room into active Virtual Stage...', 'info');
       const glbBuffer = await engine.exportBakedGLB();
       const blob = new Blob([glbBuffer], { type: 'model/gltf-binary' });
-      const glbUrl = URL.createObjectURL(blob);
+      let glbUrl = URL.createObjectURL(blob);
+
+      // Persist to local disk so the model remains permanent across browser reloads
+      try {
+        const uploadRes = await fetch(`/api/upload-asset?filename=roombake_${Date.now()}.glb`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'model/gltf-binary' },
+          body: glbBuffer,
+        });
+        if (uploadRes.ok) {
+          const uploadData = await uploadRes.json();
+          if (uploadData.url) {
+            glbUrl = uploadData.url;
+          }
+        }
+      } catch (uploadErr) {
+        console.warn('Could not persist baked room to disk, using blob fallback', uploadErr);
+      }
 
       if (onAddSceneAsset) {
         onAddSceneAsset({
