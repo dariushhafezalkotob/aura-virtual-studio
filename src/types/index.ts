@@ -44,6 +44,7 @@ export interface SceneAsset {
   engine?: AI3DEngine;
   category?: AssetCategory;
   createdAt: string;
+  unlit?: boolean;
 }
 
 export interface MotionData {

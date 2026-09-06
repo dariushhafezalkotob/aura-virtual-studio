@@ -354,23 +354,57 @@ const GLTFModel: React.FC<{
       c.traverse((child) => {
         if ((child as THREE.Mesh).isMesh) {
           const mesh = child as THREE.Mesh;
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
+          const isUnlit =
+            asset.unlit ??
+            (asset.category === 'environment' ||
+              asset.id.startsWith('roombake_') ||
+              asset.name.toLowerCase().includes('room') ||
+              asset.name.toLowerCase().includes('bake'));
+
           if (mesh.material) {
             const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-            for (const m of mats) {
-              const mat = m as THREE.MeshStandardMaterial;
-              if (mat.map) {
-                mat.map.colorSpace = THREE.SRGBColorSpace;
-                mat.map.needsUpdate = true;
+            if (isUnlit) {
+              const unlitMats = mats.map((m) => {
+                const anyM = m as any;
+                if (anyM.isMeshBasicMaterial) {
+                  anyM.side = THREE.DoubleSide;
+                  if (anyM.map) {
+                    anyM.map.colorSpace = THREE.SRGBColorSpace;
+                    anyM.map.needsUpdate = true;
+                  }
+                  return anyM;
+                }
+                const basic = new THREE.MeshBasicMaterial({
+                  map: anyM.map || null,
+                  color: anyM.map ? 0xffffff : (anyM.color || 0xffffff),
+                  side: THREE.DoubleSide,
+                });
+                if (basic.map) {
+                  basic.map.colorSpace = THREE.SRGBColorSpace;
+                  basic.map.needsUpdate = true;
+                }
+                return basic;
+              });
+              mesh.material = Array.isArray(mesh.material) ? unlitMats : unlitMats[0];
+              mesh.castShadow = false;
+              mesh.receiveShadow = false;
+            } else {
+              mesh.castShadow = true;
+              mesh.receiveShadow = true;
+              for (const m of mats) {
+                const mat = m as THREE.MeshStandardMaterial;
+                if (mat.map) {
+                  mat.map.colorSpace = THREE.SRGBColorSpace;
+                  mat.map.needsUpdate = true;
+                }
+                if (mesh.geometry?.attributes?.color) {
+                  mat.vertexColors = true;
+                }
+                if (mat.metalness !== undefined) mat.metalness = Math.min(mat.metalness, 0.25);
+                if (mat.roughness !== undefined) mat.roughness = Math.max(0.3, Math.min(mat.roughness, 0.85));
+                mat.side = THREE.DoubleSide;
+                mat.needsUpdate = true;
               }
-              if (mesh.geometry?.attributes?.color) {
-                mat.vertexColors = true;
-              }
-              if (mat.metalness !== undefined) mat.metalness = Math.min(mat.metalness, 0.25);
-              if (mat.roughness !== undefined) mat.roughness = Math.max(0.3, Math.min(mat.roughness, 0.85));
-              mat.side = THREE.DoubleSide;
-              mat.needsUpdate = true;
             }
           }
         }

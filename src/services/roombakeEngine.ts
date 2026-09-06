@@ -644,12 +644,6 @@ export class RoomBakeEngine {
           vec3 N = normalize(vN);
           if (!gl_FrontFacing) N = -N;
 
-          // Balanced studio ambient & hemisphere illumination (even, bright, shadowless across all walls)
-          float hemi = clamp(N.y * 0.2 + 0.8, 0.65, 1.0);
-          vec3 camDir = normalize(-vW);
-          float camFacing = clamp(dot(N, camDir) * 0.25 + 0.75, 0.75, 1.0);
-          float ambientLight = hemi * camFacing * max(0.2, uLightIntensity);
-
           // Studio surface & grid for unbaked regions or gaps
           vec3 g = abs(fract(vW * 2.0 - 0.5) - 0.5) / fwidth(vW * 2.0);
           float line = 1.0 - min(min(g.x, g.y), g.z);
@@ -657,11 +651,19 @@ export class RoomBakeEngine {
           vec3 studioFlat = vec3(0.58, 0.61, 0.65);
           vec3 unbakedBase = (uShowGaps > 0.5) ? studioGrid : studioFlat;
 
-          // Texture detection: if texture alpha > 0.01, blend in texture colors
-          float hasTex = smoothstep(0.01, 0.12, c.a);
-          vec3 albedo = mix(unbakedBase, c.rgb, hasTex);
+          // Studio lighting for unbaked base only so 3D geometry and room bounds are visible
+          float hemi = clamp(N.y * 0.2 + 0.8, 0.65, 1.0);
+          vec3 camDir = normalize(-vW);
+          float camFacing = clamp(dot(N, camDir) * 0.25 + 0.75, 0.75, 1.0);
+          vec3 unbakedCol = unbakedBase * (hemi * camFacing * max(0.2, uLightIntensity));
 
-          vec3 col = albedo * ambientLight;
+          // Textures are 100% LIGHT-INDEPENDENT: rendered at full true RGB fidelity
+          vec3 texturedCol = c.rgb * max(0.1, uLightIntensity);
+
+          // Blend: if texture exists (alpha > 0.01), show light-independent texture; else show unbaked studio surface
+          float hasTex = smoothstep(0.01, 0.12, c.a);
+          vec3 col = mix(unbakedCol, texturedCol, hasTex);
+
           gl_FragColor = vec4(col, 1.0);
           #include <colorspace_fragment>
         }`,
@@ -2013,13 +2015,11 @@ export class RoomBakeEngine {
     const atlasCanvas = this.getAtlasCanvas();
     const bakedTexture = new THREE.CanvasTexture(atlasCanvas);
     bakedTexture.colorSpace = THREE.SRGBColorSpace;
-    bakedTexture.flipY = true;
+    bakedTexture.flipY = false;
     bakedTexture.needsUpdate = true;
 
-    const exportMat = new THREE.MeshStandardMaterial({
+    const exportMat = new THREE.MeshBasicMaterial({
       map: bakedTexture,
-      roughness: 0.85,
-      metalness: 0.05,
       side: THREE.DoubleSide,
     });
 
