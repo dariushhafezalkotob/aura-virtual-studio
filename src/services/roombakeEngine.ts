@@ -621,10 +621,13 @@ export class RoomBakeEngine {
         uLightIntensity: { value: this.config.lightIntensity ?? 1.0 },
       },
       vertexShader: `
-        varying vec2 vUv; varying vec3 vW;
+        varying vec2 vUv;
+        varying vec3 vW;
+        varying vec3 vN;
         void main() {
           vUv = uv;
           vW = (modelMatrix * vec4(position, 1.0)).xyz;
+          vN = normalize(mat3(modelMatrix) * normal);
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }`,
       fragmentShader: `
@@ -633,22 +636,33 @@ export class RoomBakeEngine {
         uniform float uLightIntensity;
         varying vec2 vUv;
         varying vec3 vW;
-        #include <colorspace_pars_fragment>
+        varying vec3 vN;
         void main() {
           vec4 c = texture2D(uTex, vUv);
-          if (c.a > 0.5 || uShowGaps < 0.5) {
-            // Normal clean ambient light environment for baking & texture inspection:
-            // 100% full even illumination without dark directional shadows
-            vec3 col = c.rgb * max(0.1, uLightIntensity);
-            gl_FragColor = vec4(col, 1.0);
-            #include <colorspace_fragment>
-            return;
-          }
+
+          // Calculate normal facing camera to guarantee all interior room walls are evenly lit
+          vec3 N = normalize(vN);
+          if (!gl_FrontFacing) N = -N;
+
+          // Balanced studio ambient & hemisphere illumination (even, bright, shadowless across all walls)
+          float hemi = clamp(N.y * 0.2 + 0.8, 0.65, 1.0);
+          vec3 camDir = normalize(-vW);
+          float camFacing = clamp(dot(N, camDir) * 0.25 + 0.75, 0.75, 1.0);
+          float ambientLight = hemi * camFacing * max(0.2, uLightIntensity);
+
+          // Studio surface & grid for unbaked regions or gaps
           vec3 g = abs(fract(vW * 2.0 - 0.5) - 0.5) / fwidth(vW * 2.0);
           float line = 1.0 - min(min(g.x, g.y), g.z);
-          vec3 baseGrid = mix(vec3(0.08, 0.09, 0.11), vec3(0.16, 0.18, 0.22),
-                              clamp(line, 0.0, 1.0));
-          gl_FragColor = vec4(baseGrid * max(0.1, uLightIntensity), 1.0);
+          vec3 studioGrid = mix(vec3(0.50, 0.53, 0.57), vec3(0.68, 0.72, 0.76), clamp(line, 0.0, 1.0));
+          vec3 studioFlat = vec3(0.58, 0.61, 0.65);
+          vec3 unbakedBase = (uShowGaps > 0.5) ? studioGrid : studioFlat;
+
+          // Texture detection: if texture alpha > 0.01, blend in texture colors
+          float hasTex = smoothstep(0.01, 0.12, c.a);
+          vec3 albedo = mix(unbakedBase, c.rgb, hasTex);
+
+          vec3 col = albedo * ambientLight;
+          gl_FragColor = vec4(col, 1.0);
           #include <colorspace_fragment>
         }`,
       side: THREE.DoubleSide,
