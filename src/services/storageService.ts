@@ -6,6 +6,79 @@ const STORE_NAME = 'projects';
 const LOCAL_STORAGE_KEY = 'aura_projects';
 
 /**
+ * Rehydrates ephemeral Blob URLs for any BVH motion data in projects.
+ */
+function rehydrateProjects(projects: Project[]): Project[] {
+  return projects.map((p) => ({
+    ...p,
+    characters: (p.characters || []).map((c) => {
+      if (c.motionData?.bvh) {
+        try {
+          const blob = new Blob([c.motionData.bvh], { type: 'text/plain' });
+          return { ...c, bvhUrl: URL.createObjectURL(blob) };
+        } catch {
+          return c;
+        }
+      }
+      return c;
+    }),
+  }));
+}
+
+/**
+ * Strips ephemeral Blob URLs before serializing projects to disk or database.
+ */
+function cleanProjectsForStorage(projects: Project[]): Project[] {
+  return projects.map((project) => ({
+    ...project,
+    characters: (project.characters || []).map((c) => ({
+      ...c,
+      bvhUrl: undefined,
+    })),
+  }));
+}
+
+/**
+ * Persists all projects directly to the local file system (./data/projects.json)
+ * via the Vite local dev server API.
+ */
+export async function saveProjectsToDisk(projects: Project[]): Promise<boolean> {
+  try {
+    const cleaned = cleanProjectsForStorage(projects);
+    const resp = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cleaned),
+    });
+    return resp.ok;
+  } catch (err) {
+    console.warn('[StorageService] Local disk write failed:', err);
+    return false;
+  }
+}
+
+/**
+ * Loads projects from the local file system (./data/projects.json) via Vite dev server.
+ */
+export async function loadProjectsFromDisk(): Promise<Project[] | null> {
+  try {
+    const resp = await fetch('/api/projects');
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (Array.isArray(data) && data.length > 0) {
+      return rehydrateProjects(data);
+    }
+    if (data.projects && Array.isArray(data.projects) && data.projects.length > 0) {
+      return rehydrateProjects(data.projects);
+    }
+    return null;
+  } catch (err) {
+    console.warn('[StorageService] Local disk read failed:', err);
+    return null;
+  }
+}
+
+/**
  * Opens or initializes the native IndexedDB instance for Aura Virtual Studio.
  */
 function openDB(): Promise<IDBDatabase> {
@@ -30,7 +103,6 @@ function openDB(): Promise<IDBDatabase> {
 
 /**
  * Persists all projects with full high-density neural motion data into IndexedDB.
- * IndexedDB has virtually unlimited quota (hundreds of megabytes to gigabytes).
  */
 export async function saveProjectsToIndexedDB(projects: Project[]): Promise<void> {
   try {
@@ -40,16 +112,9 @@ export async function saveProjectsToIndexedDB(projects: Project[]): Promise<void
 
     // Clear stale projects and insert current state
     store.clear();
-    for (const project of projects) {
-      // Don't store ephemeral blob URLs in IndexedDB
-      const cleanedProject: Project = {
-        ...project,
-        characters: (project.characters || []).map((c) => ({
-          ...c,
-          bvhUrl: undefined,
-        })),
-      };
-      store.put(cleanedProject);
+    const cleaned = cleanProjectsForStorage(projects);
+    for (const project of cleaned) {
+      store.put(project);
     }
 
     await new Promise<void>((resolve, reject) => {
@@ -76,22 +141,7 @@ export async function loadProjectsFromIndexedDB(): Promise<Project[] | null> {
       req.onsuccess = () => {
         const results = req.result as Project[];
         if (Array.isArray(results) && results.length > 0) {
-          // Rehydrate ephemeral BVH Blob URLs
-          const rehydrated = results.map((p) => ({
-            ...p,
-            characters: (p.characters || []).map((c) => {
-              if (c.motionData?.bvh) {
-                try {
-                  const blob = new Blob([c.motionData.bvh], { type: 'text/plain' });
-                  return { ...c, bvhUrl: URL.createObjectURL(blob) };
-                } catch {
-                  return c;
-                }
-              }
-              return c;
-            }),
-          }));
-          resolve(rehydrated);
+          resolve(rehydrateProjects(results));
         } else {
           resolve(null);
         }
@@ -129,21 +179,59 @@ export function sanitizeProjectsForLocalStorage(projects: Project[]): string {
 }
 
 /**
- * Safely saves projects across both tiers:
- * 1. Full data (with all 77-joint rotations and BVH) -> IndexedDB
- * 2. Lightweight metadata -> LocalStorage (wrapped in try/catch to guarantee zero crashes)
+ * Safely saves projects across all three tiers:
+ * 1. Local Disk File (./data/projects.json) -> 100% immune to browser resets
+ * 2. Full data (with all 77-joint rotations and BVH) -> IndexedDB
+ * 3. Lightweight metadata -> LocalStorage (wrapped in try/catch to guarantee zero crashes)
  */
 export async function persistProjectsSafely(projects: Project[]): Promise<void> {
-  // 1. Full persistence to IndexedDB (asynchronous, high quota)
+  // 1. Primary: Persist to local disk JSON file via Vite API
+  saveProjectsToDisk(projects).catch(() => {});
+
+  // 2. Secondary: High-capacity browser IndexedDB
   await saveProjectsToIndexedDB(projects);
 
-  // 2. Lightweight fallback to localStorage (synchronous instant boot)
+  // 3. Fallback: Lightweight metadata in localStorage
   try {
     const serialized = sanitizeProjectsForLocalStorage(projects);
     localStorage.setItem(LOCAL_STORAGE_KEY, serialized);
   } catch (err) {
-    console.warn('[StorageService] LocalStorage quota exceeded, successfully persisted to IndexedDB:', err);
+    console.warn('[StorageService] LocalStorage quota exceeded, safely saved to disk and IndexedDB:', err);
   }
+}
+
+/**
+ * High-reliability multi-tier loader:
+ * 1. Try local disk file (./data/projects.json)
+ * 2. Try browser IndexedDB
+ * 3. Fallback to localStorage / default initial projects
+ */
+export async function loadProjectsSafely(defaultProjects: Project[]): Promise<Project[]> {
+  // Tier 1: Local Disk File
+  const diskProjects = await loadProjectsFromDisk();
+  if (diskProjects && diskProjects.length > 0) {
+    console.log(`[StorageService] Loaded ${diskProjects.length} project(s) from local disk (data/projects.json)`);
+    return diskProjects;
+  }
+
+  // Tier 2: IndexedDB
+  const idbProjects = await loadProjectsFromIndexedDB();
+  if (idbProjects && idbProjects.length > 0) {
+    console.log(`[StorageService] Loaded ${idbProjects.length} project(s) from IndexedDB`);
+    // Sync to disk so future loads are instant
+    saveProjectsToDisk(idbProjects).catch(() => {});
+    return idbProjects;
+  }
+
+  // Tier 3: LocalStorage
+  const localProjects = getInitialProjectsFromLocalStorage(defaultProjects);
+  if (localProjects && localProjects.length > 0) {
+    console.log(`[StorageService] Loaded ${localProjects.length} project(s) from localStorage`);
+    saveProjectsToDisk(localProjects).catch(() => {});
+    return localProjects;
+  }
+
+  return defaultProjects;
 }
 
 /**

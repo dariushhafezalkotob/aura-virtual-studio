@@ -1,0 +1,26 @@
+[
+  {
+    "id": "proj_1",
+    "name": "Desert Echo",
+    "thumbnail": "https://images.unsplash.com/photo-1509316975850-ff9c5deb0cd9?auto=format&fit=crop&w=800&q=80",
+    "modified": "2 days ago",
+    "description": "Arid desert outpost with dynamic sandstorms and ancient artifacts.",
+    "scenes": []
+  },
+  {
+    "id": "proj_2",
+    "name": "Neon Nocturne",
+    "thumbnail": "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=800&q=80",
+    "modified": "5 days ago",
+    "description": "Cyberpunk rain-slicked city alley with neon signage.",
+    "scenes": []
+  },
+  {
+    "id": "proj_3",
+    "name": "The Glass Forest",
+    "thumbnail": "https://images.unsplash.com/photo-1511497584788-87676104235f?auto=format&fit=crop&w=800&q=80",
+    "modified": "1 week ago",
+    "description": "Crystalline forest with luminescent flora and surreal atmosphere.",
+    "scenes": []
+  }
+]

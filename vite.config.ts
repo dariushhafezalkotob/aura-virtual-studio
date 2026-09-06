@@ -125,6 +125,59 @@ function apiMiddlewarePlugin(): Plugin {
     name: 'api-middleware',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
+        // 0. Local Disk File Persistence for Projects & Scenes (Bulletproof Local Dev)
+        if (req.url?.startsWith('/api/projects')) {
+          const dataDir = path.join(process.cwd(), 'data');
+          const projectsFilePath = path.join(dataDir, 'projects.json');
+
+          if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+          }
+
+          if (req.method === 'GET') {
+            try {
+              if (fs.existsSync(projectsFilePath)) {
+                const content = fs.readFileSync(projectsFilePath, 'utf-8');
+                res.setHeader('Content-Type', 'application/json');
+                res.end(content);
+                return;
+              } else {
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ success: true, projects: [] }));
+                return;
+              }
+            } catch (err: any) {
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ success: false, error: err.message }));
+              return;
+            }
+          }
+
+          if (req.method === 'POST') {
+            let body = '';
+            req.on('data', (chunk) => { body += chunk; });
+            req.on('end', () => {
+              try {
+                const parsed = JSON.parse(body);
+                // Atomic file write using temporary file to prevent corruption
+                const tempFilePath = path.join(dataDir, `projects.tmp.${Date.now()}.json`);
+                fs.writeFileSync(tempFilePath, JSON.stringify(parsed, null, 2), 'utf-8');
+                fs.renameSync(tempFilePath, projectsFilePath);
+
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ success: true, count: Array.isArray(parsed) ? parsed.length : 1 }));
+              } catch (err: any) {
+                console.error('[API /api/projects] Failed to save projects to disk:', err);
+                res.statusCode = 500;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ success: false, error: err.message }));
+              }
+            });
+            return;
+          }
+        }
+
         // 1. Image & Asset Proxy for 360 Panoramas, PLY/SPLAT assets, and GLB models (CORS safe)
         if (req.url?.startsWith('/api/proxy-image')) {
           try {

@@ -8,7 +8,7 @@ import { ActingSetupView } from './components/screens/ActingSetupView';
 import { CameraRecordView } from './components/screens/CameraRecordView';
 import {
   getInitialProjectsFromLocalStorage,
-  loadProjectsFromIndexedDB,
+  loadProjectsSafely,
   persistProjectsSafely,
 } from './services/storageService';
 
@@ -46,13 +46,17 @@ export function App() {
 
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [currentStage, setCurrentStage] = useState<WorkflowStage>('projects');
+  const [isHydrated, setIsHydrated] = useState<boolean>(false);
 
-  // Hydrate high-capacity neural motion data from IndexedDB on mount
+  // Hydrate full project data (Disk -> IndexedDB -> LocalStorage) on mount
   useEffect(() => {
     let active = true;
-    loadProjectsFromIndexedDB().then((dbProjects) => {
-      if (active && dbProjects && dbProjects.length > 0) {
-        setProjects(dbProjects);
+    loadProjectsSafely(INITIAL_PROJECTS).then((loaded) => {
+      if (active && loaded && loaded.length > 0) {
+        setProjects(loaded);
+      }
+      if (active) {
+        setIsHydrated(true);
       }
     });
     return () => {
@@ -60,10 +64,12 @@ export function App() {
     };
   }, []);
 
-  // Persist project changes safely to IndexedDB (full data) + LocalStorage (lightweight)
+  // Persist project changes safely to Disk, IndexedDB, and LocalStorage
+  // CRITICAL: Must wait until hydration has finished to prevent overwriting saved data!
   useEffect(() => {
+    if (!isHydrated) return;
     persistProjectsSafely(projects);
-  }, [projects]);
+  }, [projects, isHydrated]);
 
   const currentProject = projects.find((p) => p.id === currentProjectId) || null;
 

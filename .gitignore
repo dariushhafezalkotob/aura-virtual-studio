@@ -7,3 +7,4 @@ dist-ssr
 .env.*.local
 .npm-cache
 .DS_Store
+data/*.tmp.*
