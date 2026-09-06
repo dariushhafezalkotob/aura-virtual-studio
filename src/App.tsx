@@ -151,6 +151,7 @@ export function App() {
           <SceneDesignView
             currentProject={currentProject}
             onUpdateProject={handleUpdateProject}
+            onNavigateStage={setCurrentStage}
           />
         )}
 

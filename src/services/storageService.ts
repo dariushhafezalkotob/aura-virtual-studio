@@ -1,4 +1,4 @@
-import { Project } from '../types';
+import { Project, SavedStageTemplate } from '../types';
 
 const DB_NAME = 'aura_virtual_studio_db';
 const DB_VERSION = 1;
@@ -256,3 +256,121 @@ export function getInitialProjectsFromLocalStorage(defaultProjects: Project[]): 
     return defaultProjects;
   }
 }
+
+const LOCAL_STORAGE_STAGES_KEY = 'aura_saved_stages';
+
+/**
+ * Loads all saved stage templates from local disk (data/stages.json) or localStorage fallback.
+ */
+export async function loadStageTemplates(): Promise<SavedStageTemplate[]> {
+  try {
+    const res = await fetch('/api/stages');
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        return data;
+      }
+    }
+  } catch (err) {
+    console.warn('[StorageService] Failed to load stages from disk:', err);
+  }
+
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_STAGES_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch {}
+
+  return [];
+}
+
+/**
+ * Saves all stage templates to local disk (data/stages.json) and localStorage fallback.
+ */
+export async function saveStageTemplates(stages: SavedStageTemplate[]): Promise<boolean> {
+  try {
+    await fetch('/api/stages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(stages),
+    });
+  } catch (err) {
+    console.warn('[StorageService] Failed to save stages to disk:', err);
+  }
+
+  try {
+    localStorage.setItem(LOCAL_STORAGE_STAGES_KEY, JSON.stringify(stages));
+  } catch {}
+
+  return true;
+}
+
+/**
+ * Saves a single stage template to the library.
+ */
+export async function saveStageTemplate(stage: SavedStageTemplate): Promise<SavedStageTemplate[]> {
+  const current = await loadStageTemplates();
+  const existingIdx = current.findIndex((s) => s.id === stage.id);
+  let updated: SavedStageTemplate[];
+  if (existingIdx >= 0) {
+    updated = current.map((s) => (s.id === stage.id ? stage : s));
+  } else {
+    updated = [stage, ...current];
+  }
+  await saveStageTemplates(updated);
+  return updated;
+}
+
+/**
+ * Deletes a stage template from the library.
+ */
+export async function deleteStageTemplate(stageId: string): Promise<SavedStageTemplate[]> {
+  const current = await loadStageTemplates();
+  const filtered = current.filter((s) => s.id !== stageId);
+  await saveStageTemplates(filtered);
+  return filtered;
+}
+
+/**
+ * Exports a stage template as a downloadable .json file.
+ */
+export function exportStageToFile(stage: SavedStageTemplate): void {
+  const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(stage, null, 2));
+  const downloadAnchor = document.createElement('a');
+  downloadAnchor.setAttribute('href', dataStr);
+  downloadAnchor.setAttribute('download', `${stage.name.toLowerCase().replace(/[^a-z0-9]/gi, '_')}_stage.json`);
+  document.body.appendChild(downloadAnchor);
+  downloadAnchor.click();
+  downloadAnchor.remove();
+}
+
+/**
+ * Imports a stage template from an uploaded .json file.
+ */
+export function importStageFromFile(file: File): Promise<SavedStageTemplate> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string;
+        const parsed = JSON.parse(text) as SavedStageTemplate;
+        if (!parsed.name || !Array.isArray(parsed.scenes)) {
+          throw new Error('Invalid stage file structure: missing name or scenes array');
+        }
+        if (!parsed.id) {
+          parsed.id = `stage_${Date.now()}`;
+        }
+        resolve(parsed);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsText(file);
+  });
+}
+

@@ -18,6 +18,19 @@ export interface Project {
   splatUrl?: string;
 }
 
+export interface SavedStageTemplate {
+  id: string;
+  name: string;
+  createdAt: string;
+  scenes: SceneAsset[];
+  panoramaUrl?: string;
+  panoramaRotation?: number;
+  splatUrl?: string;
+  environmentPreset?: string;
+  lightIntensity?: number;
+  thumbnail?: string;
+}
+
 export interface SceneAsset {
   id: string;
   name: string;

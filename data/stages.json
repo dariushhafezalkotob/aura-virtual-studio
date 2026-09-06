@@ -1,0 +1,54 @@
+[
+  {
+    "id": "stage_cyberpunk_alley",
+    "name": "Cyberpunk Neon Alley",
+    "createdAt": "2026-09-06T06:53:02.499Z",
+    "panoramaUrl": "https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/2294472375_24a3b8ef46_o.jpg",
+    "panoramaRotation": 0,
+    "environmentPreset": "city",
+    "lightIntensity": 1.2,
+    "scenes": [
+      {
+        "id": "asset_prop_1",
+        "name": "Sci-Fi Film Camera",
+        "glbUrl": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/AntiqueCamera/glTF-Binary/AntiqueCamera.glb",
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0.4,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "createdAt": "2026-09-06T06:53:02.502Z"
+      }
+    ]
+  },
+  {
+    "id": "stage_virtual_film_studio",
+    "name": "Virtual Film Studio Stage",
+    "createdAt": "2026-09-06T06:53:02.502Z",
+    "panoramaUrl": "https://threejs.org/examples/textures/equirectangular.png",
+    "panoramaRotation": 0,
+    "environmentPreset": "studio",
+    "lightIntensity": 1,
+    "scenes": []
+  },
+  {
+    "id": "stage_sunset_horizon",
+    "name": "Sunset Horizon Studio",
+    "createdAt": "2026-09-06T06:53:02.502Z",
+    "panoramaUrl": "https://threejs.org/examples/textures/kandao3.jpg",
+    "panoramaRotation": 1.5,
+    "environmentPreset": "sunset",
+    "lightIntensity": 1.4,
+    "scenes": []
+  }
+]

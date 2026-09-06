@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Project, SceneAsset, AI3DEngine, AssetCategory } from '../../types';
+import { Project, SceneAsset, AI3DEngine, AssetCategory, WorkflowStage, SavedStageTemplate } from '../../types';
 import { TrellisService, GenerationProgress } from '../../services/trellisService';
 import {
   ThreeStage,
@@ -7,10 +7,18 @@ import {
   LightingEnvironmentPreset,
 } from '../viewport/ThreeStage';
 import { RoomBakeStudio } from '../roombake/RoomBakeStudio';
+import {
+  loadStageTemplates,
+  saveStageTemplate,
+  deleteStageTemplate,
+  exportStageToFile,
+  importStageFromFile,
+} from '../../services/storageService';
 
 interface SceneDesignViewProps {
   currentProject: Project;
   onUpdateProject: (project: Project) => void;
+  onNavigateStage?: (stage: WorkflowStage) => void;
 }
 
 const PROP_PRESETS = [
@@ -61,6 +69,7 @@ const PANORAMA_360_PRESETS = [
 export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   currentProject,
   onUpdateProject,
+  onNavigateStage,
 }) => {
   const [selectedEngine, setSelectedEngine] = useState<AI3DEngine>('trellis');
   const [selectedCategory] = useState<AssetCategory>('prop');
@@ -72,6 +81,23 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const [showPanoramaModal, setShowPanoramaModal] = useState(false);
   const [showHunyuanWorldModal, setShowHunyuanWorldModal] = useState(false);
   const [showRoomBakeStudio, setShowRoomBakeStudio] = useState(false);
+
+  // Stage Saving & Stage Library State
+  const [saveToast, setSaveToast] = useState<string | null>(null);
+  const [showStageLibraryModal, setShowStageLibraryModal] = useState<boolean>(false);
+  const [stageLibrary, setStageLibrary] = useState<SavedStageTemplate[]>([]);
+  const [newStageTemplateName, setNewStageTemplateName] = useState<string>('');
+  const [isSavingStage, setIsSavingStage] = useState<boolean>(false);
+  const stageImportInputRef = useRef<HTMLInputElement>(null);
+
+  // Load stage templates from disk / local storage on mount
+  useEffect(() => {
+    loadStageTemplates().then((templates) => {
+      if (templates && templates.length > 0) {
+        setStageLibrary(templates);
+      }
+    });
+  }, []);
 
   // 360 AI Generator State
   const [isGenerating360, setIsGenerating360] = useState(false);
@@ -637,6 +663,114 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     onUpdateProject(updated);
   };
 
+  // ----------------------------------------------------
+  // Stage Persistence & Reusable Stage Library Handlers
+  // ----------------------------------------------------
+
+  const handleSaveStage = () => {
+    setIsSavingStage(true);
+    const updatedProject: Project = {
+      ...currentProject,
+      scenes: assets,
+      panoramaUrl: panoramaUrl || undefined,
+      panoramaRotation: panoramaRotation || 0,
+      splatUrl: splatUrl || undefined,
+      modified: 'Just now',
+    };
+    onUpdateProject(updatedProject);
+    setSaveToast(`✓ Stage saved to disk (${assets.length} object${assets.length === 1 ? '' : 's'})`);
+    setTimeout(() => {
+      setSaveToast(null);
+      setIsSavingStage(false);
+    }, 3000);
+  };
+
+  const handleSaveToLibrary = async (customName?: string) => {
+    const stageName = (customName || newStageTemplateName || `${currentProject.name} Stage`).trim();
+    if (!stageName) return;
+
+    const newTemplate: SavedStageTemplate = {
+      id: `stage_${Date.now()}`,
+      name: stageName,
+      createdAt: new Date().toISOString(),
+      scenes: JSON.parse(JSON.stringify(assets)),
+      panoramaUrl: panoramaUrl || undefined,
+      panoramaRotation: panoramaRotation || 0,
+      splatUrl: splatUrl || undefined,
+      environmentPreset,
+      lightIntensity,
+      thumbnail: currentProject.thumbnail,
+    };
+
+    const updated = await saveStageTemplate(newTemplate);
+    setStageLibrary(updated);
+    setNewStageTemplateName('');
+    setSaveToast(`✓ Saved to Stage Library: "${stageName}"`);
+    setTimeout(() => setSaveToast(null), 3500);
+  };
+
+  const handleLoadStageTemplate = (template: SavedStageTemplate) => {
+    pushUndoSnapshot();
+    setPanoramaUrl(template.panoramaUrl || null);
+    setPanoramaRotation(template.panoramaRotation || 0);
+    setSplatUrl(template.splatUrl || null);
+    if (template.environmentPreset) {
+      setEnvironmentPreset(template.environmentPreset as any);
+    }
+    if (template.lightIntensity !== undefined) {
+      setLightIntensity(template.lightIntensity);
+    }
+
+    onUpdateProject({
+      ...currentProject,
+      scenes: template.scenes || [],
+      panoramaUrl: template.panoramaUrl || undefined,
+      panoramaRotation: template.panoramaRotation || 0,
+      splatUrl: template.splatUrl || undefined,
+      modified: 'Just now',
+    });
+
+    setShowStageLibraryModal(false);
+    setSaveToast(`✓ Loaded stage "${template.name}" (${template.scenes?.length || 0} objects)`);
+    setTimeout(() => setSaveToast(null), 3500);
+  };
+
+  const handleDeleteStageTemplate = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm('Delete this saved stage from your library?')) {
+      const updated = await deleteStageTemplate(id);
+      setStageLibrary(updated);
+    }
+  };
+
+  const handleExportStage = (template: SavedStageTemplate, e: React.MouseEvent) => {
+    e.stopPropagation();
+    exportStageToFile(template);
+  };
+
+  const handleImportStageFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const imported = await importStageFromFile(file);
+      const updated = await saveStageTemplate(imported);
+      setStageLibrary(updated);
+      setSaveToast(`✓ Imported stage "${imported.name}" into library`);
+      setTimeout(() => setSaveToast(null), 3500);
+    } catch (err: any) {
+      alert('Failed to import stage JSON file: ' + err.message);
+    } finally {
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  const handleProceedToActing = () => {
+    handleSaveStage();
+    if (onNavigateStage) {
+      onNavigateStage('stage2_acting');
+    }
+  };
+
   return (
     <div className="flex-1 flex flex-col h-full w-full min-h-0 bg-background relative overflow-hidden select-none">
       {/* Top Controls Bar */}
@@ -843,11 +977,61 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           >
             <span className="material-symbols-outlined text-[16px]">grid_on</span>
           </button>
+
+          <div className="h-4 w-px bg-outline-variant/30 mx-[2px]" />
+
+          {/* Save Stage Button */}
+          <button
+            onClick={handleSaveStage}
+            disabled={isSavingStage}
+            className="flex items-center gap-1 px-sm py-[4px] bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/40 rounded-lg text-[11px] font-label-caps transition-all cursor-pointer shadow-sm active:scale-95 disabled:opacity-50"
+            title="Save current stage layout and assets immediately to disk"
+          >
+            <span className="material-symbols-outlined text-[15px]">
+              {isSavingStage ? 'sync' : 'save'}
+            </span>
+            <span>{isSavingStage ? 'SAVING...' : 'SAVE STAGE'}</span>
+          </button>
+
+          {/* Stage Library / Presets Modal Button */}
+          <button
+            onClick={() => setShowStageLibraryModal(true)}
+            className="flex items-center gap-1 px-sm py-[4px] bg-surface-container-high/70 hover:bg-surface-container-highest text-on-surface-variant hover:text-on-surface border border-outline-variant/40 rounded-lg text-[11px] font-label-caps transition-all cursor-pointer shadow-sm"
+            title="Stage Library & Reusable Presets"
+          >
+            <span className="material-symbols-outlined text-[15px] text-amber-400">bookmark</span>
+            <span>STAGES</span>
+            {stageLibrary.length > 0 && (
+              <span className="ml-0.5 px-1 rounded-full bg-amber-500/20 text-amber-300 text-[9px] font-mono font-bold">
+                {stageLibrary.length}
+              </span>
+            )}
+          </button>
+
+          {/* Proceed to Acting Setup */}
+          {onNavigateStage && (
+            <button
+              onClick={handleProceedToActing}
+              className="flex items-center gap-1 px-sm py-[4px] bg-primary/20 hover:bg-primary/30 text-primary border border-primary/40 rounded-lg text-[11px] font-label-caps font-bold transition-all cursor-pointer shadow-sm"
+              title="Save current stage and proceed to Stage 02: Acting Setup"
+            >
+              <span>ACTING</span>
+              <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* 3D WebGL Viewport */}
       <div className="flex-1 w-full h-full relative min-h-0 overflow-hidden">
+        {/* Floating Save / Load Confirmation Banner */}
+        {saveToast && (
+          <div className="absolute top-sm left-1/2 -translate-x-1/2 bg-emerald-500/90 text-white font-medium px-md py-xs rounded-full shadow-2xl backdrop-blur-md flex items-center gap-xs text-xs z-30 animate-in fade-in slide-in-from-top-2 duration-200 border border-emerald-400/50">
+            <span className="material-symbols-outlined text-[16px]">check_circle</span>
+            <span>{saveToast}</span>
+          </div>
+        )}
+
         <ThreeStage
           assets={assets}
           selectedAssetId={selectedAssetId}
@@ -1648,6 +1832,170 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                 className="px-md py-xs text-xs bg-primary text-surface-container-lowest font-bold rounded-lg hover:bg-primary/90 transition-colors font-label-caps cursor-pointer shadow"
               >
                 Save Key
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden file input for importing stage templates */}
+      <input
+        type="file"
+        ref={stageImportInputRef}
+        onChange={handleImportStageFile}
+        accept=".json"
+        className="hidden"
+      />
+
+      {/* Stage Library & Presets Modal */}
+      {showStageLibraryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-md animate-in fade-in duration-150">
+          <div className="bg-surface-container border border-outline-variant/60 rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="px-lg py-md border-b border-outline-variant/30 flex items-center justify-between bg-surface-container-high/40">
+              <div className="flex items-center gap-sm">
+                <span className="material-symbols-outlined text-amber-400 text-2xl">bookmark</span>
+                <div>
+                  <h3 className="font-heading font-bold text-base text-on-surface">Stage Library & Presets</h3>
+                  <p className="text-[11px] text-on-surface-variant">
+                    Save, load, and export reusable stage layouts, 3D props, skyboxes, and lighting environments
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowStageLibraryModal(false)}
+                className="p-1 rounded-lg hover:bg-surface-container-highest text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-xl">close</span>
+              </button>
+            </div>
+
+            {/* Save Current Stage Section */}
+            <div className="p-md bg-surface-container-lowest/50 border-b border-outline-variant/20 flex flex-col sm:flex-row items-center gap-sm">
+              <div className="flex-1 w-full flex items-center gap-xs bg-surface-container-low border border-outline-variant px-sm py-1.5 rounded-lg focus-within:border-primary">
+                <span className="material-symbols-outlined text-on-surface-variant text-[16px]">label</span>
+                <input
+                  type="text"
+                  value={newStageTemplateName}
+                  onChange={(e) => setNewStageTemplateName(e.target.value)}
+                  placeholder={`Preset name (e.g. "${currentProject.name} Stage")...`}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSaveToLibrary();
+                  }}
+                  className="w-full bg-transparent text-xs text-on-surface placeholder:text-on-surface-variant/50 outline-none"
+                />
+              </div>
+              <div className="flex items-center gap-xs w-full sm:w-auto shrink-0">
+                <button
+                  onClick={() => handleSaveToLibrary()}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-1 px-md py-1.5 bg-primary text-surface-container-lowest font-bold text-xs rounded-lg hover:bg-primary/90 transition-all font-label-caps cursor-pointer shadow-sm active:scale-95"
+                >
+                  <span className="material-symbols-outlined text-[15px]">add_circle</span>
+                  <span>Save Current</span>
+                </button>
+                <button
+                  onClick={() => stageImportInputRef.current?.click()}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-1 px-sm py-1.5 bg-surface-container-high hover:bg-surface-container-highest text-on-surface border border-outline-variant/40 text-xs rounded-lg transition-all font-label-caps cursor-pointer"
+                  title="Import Stage from .json"
+                >
+                  <span className="material-symbols-outlined text-[15px]">upload_file</span>
+                  <span>Import</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Stage Presets List */}
+            <div className="flex-1 overflow-y-auto p-md space-y-sm min-h-[220px]">
+              <div className="flex items-center justify-between text-[11px] font-label-caps text-on-surface-variant px-1">
+                <span>SAVED PRESETS ({stageLibrary.length})</span>
+                <span>Actions</span>
+              </div>
+
+              {stageLibrary.length === 0 ? (
+                <div className="py-12 text-center text-on-surface-variant/70 flex flex-col items-center gap-xs">
+                  <span className="material-symbols-outlined text-4xl text-outline-variant">landscape</span>
+                  <p className="text-xs">No saved stage presets found.</p>
+                  <p className="text-[11px]">Save your current stage scene design above to use it across any project!</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-sm">
+                  {stageLibrary.map((stage) => (
+                    <div
+                      key={stage.id}
+                      className="p-sm bg-surface-container-low hover:bg-surface-container rounded-xl border border-outline-variant/30 hover:border-outline-variant/60 transition-all flex items-center justify-between gap-md group"
+                    >
+                      {/* Stage Info */}
+                      <div className="flex items-center gap-sm min-w-0">
+                        <div className="w-10 h-10 rounded-lg bg-surface-container-high border border-outline-variant/30 flex items-center justify-center shrink-0 text-primary">
+                          <span className="material-symbols-outlined text-xl">view_in_ar</span>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-xs">
+                            <h4 className="text-xs font-bold text-on-surface truncate">{stage.name}</h4>
+                          </div>
+                          <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-on-surface-variant flex-wrap">
+                            <span className="font-mono">
+                              {stage.scenes?.length || 0} object{(stage.scenes?.length || 0) === 1 ? '' : 's'}
+                            </span>
+                            <span>•</span>
+                            <span className="capitalize">{stage.environmentPreset || 'Studio'} light</span>
+                            {stage.panoramaUrl && (
+                              <>
+                                <span>•</span>
+                                <span className="text-amber-400">360° Skybox</span>
+                              </>
+                            )}
+                            {stage.splatUrl && (
+                              <>
+                                <span>•</span>
+                                <span className="text-purple-400">3DGS Splat</span>
+                              </>
+                            )}
+                            <span>•</span>
+                            <span>{new Date(stage.createdAt).toLocaleDateString()}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => handleLoadStageTemplate(stage)}
+                          className="flex items-center gap-1 px-sm py-1 bg-primary/20 hover:bg-primary/30 text-primary border border-primary/40 rounded-lg text-xs font-label-caps font-bold transition-all cursor-pointer shadow-sm active:scale-95"
+                          title="Load this stage into the current project"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">file_open</span>
+                          <span>Load</span>
+                        </button>
+                        <button
+                          onClick={(e) => handleExportStage(stage, e)}
+                          className="p-1 text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high rounded-lg transition-colors cursor-pointer"
+                          title="Export stage as JSON"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">download</span>
+                        </button>
+                        <button
+                          onClick={(e) => handleDeleteStageTemplate(stage.id, e)}
+                          className="p-1 text-on-surface-variant hover:text-error hover:bg-error/10 rounded-lg transition-colors cursor-pointer"
+                          title="Delete stage preset"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-lg py-xs border-t border-outline-variant/30 bg-surface-container-high/30 flex justify-between items-center text-[10px] text-on-surface-variant">
+              <span>Saved stages persist in local file storage (<code>./data/stages.json</code>)</span>
+              <button
+                onClick={() => setShowStageLibraryModal(false)}
+                className="px-sm py-1 hover:bg-surface-container-highest rounded text-xs font-label-caps cursor-pointer"
+              >
+                Close
               </button>
             </div>
           </div>
