@@ -11,7 +11,7 @@ interface ActingSetupViewProps {
   onNavigateStage?: (stage: WorkflowStage) => void;
 }
 
-const DEFAULT_INITIAL_ACTORS: CharacterActor[] = [
+export const DEFAULT_INITIAL_ACTORS: CharacterActor[] = [
   {
     id: 'actor_soma_alpha',
     name: 'SOMA',

@@ -28,6 +28,7 @@ interface ThreeStageProps {
   panoramaRotation?: number;
   showPanorama?: boolean;
   splatUrl?: string | null;
+  cameraFov?: number;
   onSelectAsset?: (id: string | null) => void;
   onUpdateAssetTransform?: (
     id: string,
@@ -619,6 +620,21 @@ const UnrealCameraNavigation: React.FC<{
   return null;
 };
 
+// Dynamic Camera FOV Controller for Virtual Lenses
+const CameraFovUpdater: React.FC<{ fov?: number }> = ({ fov }) => {
+  const { camera } = useThree();
+  useEffect(() => {
+    if (fov && (camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
+      const pCam = camera as THREE.PerspectiveCamera;
+      if (Math.abs(pCam.fov - fov) > 0.1) {
+        pCam.fov = fov;
+        pCam.updateProjectionMatrix();
+      }
+    }
+  }, [fov, camera]);
+  return null;
+};
+
 export const ThreeStage: React.FC<ThreeStageProps> = ({
   assets,
   selectedAssetId,
@@ -631,6 +647,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   panoramaRotation = 0,
   showPanorama = true,
   splatUrl,
+  cameraFov,
   onSelectAsset,
   onUpdateAssetTransform,
   onSelectActor,
@@ -645,7 +662,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   return (
     <div className="w-full h-full absolute inset-0 select-none overflow-hidden">
       <Canvas
-        camera={{ position: [0, 2.5, 6.5], fov: 50, near: 0.1, far: 1000 }}
+        camera={{ position: [0, 2.5, 6.5], fov: cameraFov || 50, near: 0.1, far: 1000 }}
         gl={{
           antialias: true,
           alpha: true,
@@ -660,6 +677,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           }
         }}
       >
+        <CameraFovUpdater fov={cameraFov} />
         <color attach="background" args={['#1c1c1e']} />
 
         {/* 3D Gaussian Splatting Walkable World Scene */}
