@@ -236,7 +236,7 @@ export class RoomBakeEngine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(canvas.clientWidth || 800, canvas.clientHeight || 600, false);
     this.renderer.setClearColor(0x0a0c10, 1);
-    this.renderer.outputColorSpace = THREE.NoColorSpace;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     // Scene
     this.scene = new THREE.Scene();
@@ -633,6 +633,7 @@ export class RoomBakeEngine {
         uniform float uLightIntensity;
         varying vec2 vUv;
         varying vec3 vW;
+        #include <colorspace_pars_fragment>
         void main() {
           vec4 c = texture2D(uTex, vUv);
           if (c.a > 0.5 || uShowGaps < 0.5) {
@@ -640,6 +641,7 @@ export class RoomBakeEngine {
             // 100% full even illumination without dark directional shadows
             vec3 col = c.rgb * max(0.1, uLightIntensity);
             gl_FragColor = vec4(col, 1.0);
+            #include <colorspace_fragment>
             return;
           }
           vec3 g = abs(fract(vW * 2.0 - 0.5) - 0.5) / fwidth(vW * 2.0);
@@ -647,6 +649,7 @@ export class RoomBakeEngine {
           vec3 baseGrid = mix(vec3(0.08, 0.09, 0.11), vec3(0.16, 0.18, 0.22),
                               clamp(line, 0.0, 1.0));
           gl_FragColor = vec4(baseGrid * max(0.1, uLightIntensity), 1.0);
+          #include <colorspace_fragment>
         }`,
       side: THREE.DoubleSide,
     });
@@ -1568,7 +1571,7 @@ export class RoomBakeEngine {
 
     // If model has an existing texture, blit it into the baking atlas with full alpha so it renders immediately!
     if (existingTexture) {
-      existingTexture.colorSpace = THREE.NoColorSpace;
+      existingTexture.colorSpace = THREE.SRGBColorSpace;
       existingTexture.needsUpdate = true;
       const applyTex = () => {
         if (!existingTexture) return;

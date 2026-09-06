@@ -692,7 +692,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     if (!v) return;
 
     const texture = new THREE.CanvasTexture(currentGenCanvas);
-    texture.colorSpace = THREE.NoColorSpace;
+    texture.colorSpace = THREE.SRGBColorSpace;
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
 
@@ -750,7 +750,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     setGenThumb(genCv.toDataURL());
 
     const texture = new THREE.CanvasTexture(genCv);
-    texture.colorSpace = THREE.NoColorSpace;
+    texture.colorSpace = THREE.SRGBColorSpace;
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
 
