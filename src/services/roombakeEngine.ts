@@ -1492,12 +1492,14 @@ export class RoomBakeEngine {
         for (const mat of mats) {
           const anyMat = mat as any;
           if (anyMat.map && anyMat.map.isTexture) {
-            existingTexture = anyMat.map;
-            break;
+            anyMat.map.colorSpace = THREE.LinearSRGBColorSpace;
+            anyMat.map.needsUpdate = true;
+            if (!existingTexture) {
+              existingTexture = anyMat.map;
+            }
           }
         }
       }
-      if (existingTexture) break;
     }
 
     // Default to Smart Coplanar Island Unwrapping, but preserve UVs if model already has texture
@@ -1542,9 +1544,12 @@ export class RoomBakeEngine {
 
     // If model has an existing texture, blit it into the baking atlas with full alpha so it renders immediately!
     if (existingTexture) {
+      existingTexture.colorSpace = THREE.LinearSRGBColorSpace;
       existingTexture.needsUpdate = true;
       const applyTex = () => {
         if (!existingTexture) return;
+        existingTexture.colorSpace = THREE.LinearSRGBColorSpace;
+        existingTexture.needsUpdate = true;
         this.renderer.setRenderTarget(this.RTs.bakeA);
         this.renderer.setClearColor(0x000000, 0);
         this.renderer.clear(true, true, true);
@@ -1799,12 +1804,20 @@ export class RoomBakeEngine {
   }
 
   public blitImportTexture(srcTex: THREE.Texture, dst: THREE.WebGLRenderTarget, forceAlpha = true) {
+    if (srcTex.colorSpace !== THREE.LinearSRGBColorSpace) {
+      srcTex.colorSpace = THREE.LinearSRGBColorSpace;
+      srcTex.needsUpdate = true;
+    }
     this.importTexMat.uniforms.uTex.value = srcTex;
     this.importTexMat.uniforms.uForceAlpha.value = forceAlpha ? 1.0 : 0.0;
     this.fsPass(this.importTexMat, dst);
   }
 
   public bake(view: ViewPoint, genTexture: THREE.Texture, opts: BakeOptions = {}) {
+    if (genTexture.colorSpace !== THREE.LinearSRGBColorSpace) {
+      genTexture.colorSpace = THREE.LinearSRGBColorSpace;
+      genTexture.needsUpdate = true;
+    }
     this.blit(this.RTs.bakeA.texture, this.RTs.bakeSnap);
     this.state.hasSnapshot = true;
     this.blit(this.RTs.bakeA.texture, this.RTs.bakeB);
