@@ -19,6 +19,7 @@ export interface CameraTake {
   keyframes: CameraKeyframe[];
   focalLength?: string;
   fps?: number;
+  thumbnail?: string; // Captured first frame / poster frame data URL
 }
 
 export interface Project {

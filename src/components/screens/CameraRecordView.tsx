@@ -288,6 +288,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
     const startTime = performance.now();
     const durationMs = targetTake.duration * 1000;
+    let capturedFirstFrameDataUrl: string | null = null;
 
     const renderLoop = () => {
       if (abortExportRef.current) {
@@ -317,6 +318,11 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
       ctx.drawImage(webglCanvas, sx, sy, sw, sh, 0, 0, 1920, 1080);
 
+      // Capture exact first frame (frame 0) of the video at 1080p Full HD
+      if (!capturedFirstFrameDataUrl) {
+        capturedFirstFrameDataUrl = exportCanvas.toDataURL('image/png');
+      }
+
       const elapsed = performance.now() - startTime;
       const progress = Math.min(100, Math.round((elapsed / durationMs) * 100));
       setExportProgress(progress);
@@ -332,6 +338,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             const downloadUrl = URL.createObjectURL(videoBlob);
             const a = document.createElement('a');
             const safeName = targetTake.name.toLowerCase().replace(/\s+/g, '_');
+
+            // 1. Download the 16:9 Video
             a.href = downloadUrl;
             a.download = `${safeName}_16x9.${ext}`;
             document.body.appendChild(a);
@@ -339,10 +347,32 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             a.remove();
             setTimeout(() => URL.revokeObjectURL(downloadUrl), 15000);
 
+            // 2. Download the captured first frame (frame 0) as 1080p PNG image
+            if (capturedFirstFrameDataUrl) {
+              const imgAnchor = document.createElement('a');
+              imgAnchor.href = capturedFirstFrameDataUrl;
+              imgAnchor.download = `${safeName}_frame0_poster.png`;
+              document.body.appendChild(imgAnchor);
+              imgAnchor.click();
+              imgAnchor.remove();
+
+              // 3. Save thumbnail in take metadata
+              const updatedTakes = takes.map((t) =>
+                t.id === targetTake.id ? { ...t, thumbnail: capturedFirstFrameDataUrl! } : t
+              );
+              setTakes(updatedTakes);
+              if (onUpdateProject) {
+                onUpdateProject({
+                  ...currentProject,
+                  cameraTakes: updatedTakes,
+                });
+              }
+            }
+
             setIsExportingVideo(false);
             setIsPlaying(false);
             setTimelineSec(0);
-            setToastMessage(`✅ ${targetTake.name} exported as ${ext.toUpperCase()} (${(videoBlob.size / 1024 / 1024).toFixed(1)} MB)!`);
+            setToastMessage(`✅ ${targetTake.name} exported: ${ext.toUpperCase()} video + 1080p first frame PNG captured!`);
             setTimeout(() => setToastMessage(null), 5000);
           };
           try {
@@ -357,6 +387,65 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
     // Begin render frame loop
     requestAnimationFrame(renderLoop);
+  };
+
+  // Capture Current 16:9 Viewfinder Frame as 1080p PNG Still
+  const captureFrameImage = (takeToCapture?: CameraTake | null, customFilename?: string): string | null => {
+    const targetTake = takeToCapture || activeTake;
+    const webglCanvas = webglCanvasRef.current;
+    if (!webglCanvas) {
+      setToastMessage('3D Viewport canvas not ready.');
+      setTimeout(() => setToastMessage(null), 3000);
+      return null;
+    }
+
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = 1920;
+    exportCanvas.height = 1080;
+    const ctx = exportCanvas.getContext('2d', { alpha: false });
+    if (!ctx) return null;
+
+    const srcW = webglCanvas.width;
+    const srcH = webglCanvas.height;
+    const targetAspect = 16 / 9;
+    const srcAspect = srcW / srcH;
+    let sx = 0, sy = 0, sw = srcW, sh = srcH;
+    if (srcAspect > targetAspect) {
+      sw = srcH * targetAspect;
+      sx = (srcW - sw) / 2;
+    } else {
+      sh = srcW / targetAspect;
+      sy = (srcH - sh) / 2;
+    }
+
+    ctx.drawImage(webglCanvas, sx, sy, sw, sh, 0, 0, 1920, 1080);
+    const dataUrl = exportCanvas.toDataURL('image/png');
+
+    const filename = customFilename || `${(targetTake?.name || 'still').toLowerCase().replace(/\s+/g, '_')}_frame0_poster.png`;
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    if (targetTake) {
+      const updatedTakes = takes.map((t) =>
+        t.id === targetTake.id ? { ...t, thumbnail: dataUrl } : t
+      );
+      setTakes(updatedTakes);
+      if (onUpdateProject) {
+        onUpdateProject({
+          ...currentProject,
+          cameraTakes: updatedTakes,
+        });
+      }
+    }
+
+    setToastMessage(`📸 1080p 16:9 still frame captured & downloaded as PNG!`);
+    setTimeout(() => setToastMessage(null), 4000);
+
+    return dataUrl;
   };
 
   const currentFov = LENS_FOV_MAP[focalLength] || 54;
@@ -516,12 +605,19 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                       setTimelineSec(0);
                       setIsPlaying(false);
                     }}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono cursor-pointer transition-all border ${
+                    className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-mono cursor-pointer transition-all border ${
                       activeTake?.id === t.id
                         ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500 font-semibold'
                         : 'bg-surface-container/60 text-on-surface-variant border-transparent hover:border-outline-variant/60'
                     }`}
                   >
+                    {t.thumbnail && (
+                      <img
+                        src={t.thumbnail}
+                        alt={t.name}
+                        className="w-7 h-4 rounded object-cover border border-cyan-500/40 shadow-sm"
+                      />
+                    )}
                     <span>{t.name}</span>
                     <span className="text-[10px] opacity-70">({t.duration}s)</span>
                     {activeTake?.id === t.id && (
@@ -727,10 +823,26 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                 <button
                   onClick={() => exportTakeToVideo(activeTake)}
                   className="px-6 py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-label-caps text-sm tracking-widest font-bold shadow-2xl flex items-center gap-2 hover:scale-105 active:scale-95 transition-all cursor-pointer border border-emerald-400"
-                  title="Render and download this take as a 1080p 16:9 MP4 video file"
+                  title="Render and download this take as a 1080p 16:9 MP4 video file (also auto-captures first frame PNG)"
                 >
                   <span className="material-symbols-outlined text-[22px]">download</span>
                   EXPORT 16:9 MP4
+                </button>
+
+                <button
+                  onClick={() => {
+                    setTimelineSec(0);
+                    setIsPlaying(false);
+                    setTimeout(() => {
+                      const safeName = activeTake.name.toLowerCase().replace(/\s+/g, '_');
+                      captureFrameImage(activeTake, `${safeName}_frame0_poster.png`);
+                    }, 60);
+                  }}
+                  className="px-5 py-3.5 rounded-2xl bg-surface-container-highest/90 hover:bg-surface-container-highest text-cyan-300 font-label-caps text-sm tracking-widest font-bold shadow-2xl flex items-center gap-2 hover:scale-105 active:scale-95 transition-all cursor-pointer border border-cyan-500/40 backdrop-blur-md"
+                  title="Capture first frame (frame 0) as high-res 1080p 16:9 PNG image"
+                >
+                  <span className="material-symbols-outlined text-[20px]">photo_camera</span>
+                  CAPTURE 1ST FRAME
                 </button>
               </div>
 
@@ -812,10 +924,19 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                   onClick={() => exportTakeToVideo(activeTake)}
                   disabled={isExportingVideo}
                   className="h-9 px-2.5 rounded-lg bg-emerald-700/90 hover:bg-emerald-600 text-white font-label-caps text-xs font-bold tracking-wider flex items-center gap-1 cursor-pointer shadow-lg transition-all whitespace-nowrap border border-emerald-500/40"
-                  title="Render and download this take as an MP4 video"
+                  title="Render and download this take as an MP4 video (also auto-captures first frame PNG)"
                 >
                   <span className="material-symbols-outlined text-[16px]">download</span>
                   <span>EXPORT MP4</span>
+                </button>
+                <button
+                  onClick={() => captureFrameImage(activeTake)}
+                  disabled={isExportingVideo}
+                  className="h-9 px-2 rounded-lg bg-surface-container-high hover:bg-surface-container-highest text-cyan-300 font-label-caps text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-lg transition-all whitespace-nowrap border border-cyan-500/30"
+                  title="Capture current 1080p 16:9 frame and download as PNG"
+                >
+                  <span className="material-symbols-outlined text-[15px]">photo_camera</span>
+                  <span>STILL</span>
                 </button>
               </div>
             )}
