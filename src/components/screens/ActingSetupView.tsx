@@ -14,7 +14,7 @@ interface ActingSetupViewProps {
 const DEFAULT_INITIAL_ACTORS: CharacterActor[] = [
   {
     id: 'actor_soma_alpha',
-    name: 'SOMA Lead (Alpha)',
+    name: 'SOMA',
     characterType: 'soma',
     avatar: '🏃',
     color: '#00ffcc',
@@ -28,7 +28,7 @@ const DEFAULT_INITIAL_ACTORS: CharacterActor[] = [
   },
   {
     id: 'actor_g1_unit',
-    name: 'Unit G1 Humanoid',
+    name: 'Unit G1',
     characterType: 'g1',
     avatar: '🤖',
     color: '#ff9500',
@@ -283,7 +283,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
     const isSoma = type === 'soma';
     const newActor: CharacterActor = {
       id: `actor_${type}_${Date.now()}`,
-      name: isSoma ? `SOMA Character ${count}` : `Unit G1 (${count})`,
+      name: isSoma ? `SOMA ${count}` : `G1 ${count}`,
       characterType: type,
       avatar: isSoma ? '🏃' : '🤖',
       color: isSoma ? '#00ffcc' : '#ff9500',
@@ -392,13 +392,13 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
                 <button
                   key={act.id}
                   onClick={() => setSelectedActorId(act.id)}
-                  className={`px-md py-xs rounded-lg text-xs font-label-caps tracking-wider transition-all cursor-pointer flex items-center gap-xs ${
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-label-caps tracking-wide transition-all cursor-pointer flex items-center gap-1.5 ${
                     selectedActorId === act.id
                       ? 'bg-primary text-background font-medium shadow-md'
                       : 'text-on-surface-variant hover:text-primary hover:bg-surface-variant'
                   }`}
                 >
-                  <span>{act.avatar || '🏃'}</span>
+                  <span className="text-xs">{act.avatar || '🏃'}</span>
                   <span>{act.name}</span>
                 </button>
               ))}

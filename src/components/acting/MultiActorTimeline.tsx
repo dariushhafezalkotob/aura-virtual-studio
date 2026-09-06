@@ -105,11 +105,11 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
       {/* 1. Multi-Track Sequencer Header & Ruler */}
       <div className="flex items-stretch border-b border-outline-variant/30 bg-surface-container-highest/50 select-none">
         {/* Left Column Header */}
-        <div className="w-56 shrink-0 px-md py-xs flex items-center justify-between border-r border-outline-variant/30 bg-surface-container/60">
-          <div className="flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-[16px] text-primary">view_timeline</span>
-            <span className="font-label-caps text-[11px] font-semibold tracking-wider text-primary">
-              SCENE ACTORS ({characters.length})
+        <div className="w-44 shrink-0 px-sm py-xs flex items-center justify-between border-r border-outline-variant/30 bg-surface-container/60">
+          <div className="flex items-center gap-1">
+            <span className="material-symbols-outlined text-[15px] text-primary">view_timeline</span>
+            <span className="font-label-caps text-[10px] font-semibold tracking-wider text-primary">
+              ACTORS ({characters.length})
             </span>
           </div>
           {onAddActor && (
@@ -188,13 +188,13 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
             >
               {/* Left Column: Actor Info Card */}
               <div
-                className={`w-56 shrink-0 p-xs px-sm flex items-center justify-between border-r transition-all ${
+                className={`w-44 shrink-0 p-xs px-1.5 flex items-center justify-between border-r transition-all ${
                   isSelected
                     ? 'border-primary/50 bg-primary/10'
                     : 'border-outline-variant/20 group-hover:border-outline-variant/40'
                 }`}
               >
-                <div className="flex items-center gap-xs overflow-hidden flex-1 mr-1">
+                <div className="flex items-center gap-1.5 overflow-hidden flex-1 mr-1">
                   {/* Avatar Picker Button */}
                   <div className="relative">
                     <button
@@ -205,7 +205,7 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
                         setActiveColorPickerActorId(null);
                       }}
                       title="Change Avatar Icon"
-                      className="w-7 h-7 rounded-lg flex items-center justify-center text-sm font-semibold shrink-0 shadow-sm border border-outline-variant/30 hover:scale-105 transition-transform cursor-pointer"
+                      className="w-6 h-6 rounded-md flex items-center justify-center text-xs font-semibold shrink-0 shadow-sm border border-outline-variant/30 hover:scale-105 transition-transform cursor-pointer"
                       style={{
                         backgroundColor: isSelected ? `${actor.color || '#00ffcc'}25` : '#1e242a',
                         borderColor: actor.color || '#00ffcc',
@@ -278,7 +278,7 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
                     ) : (
                       <div className="flex items-center gap-1 group/name">
                         <span
-                          className={`text-xs font-semibold truncate max-w-[100px] ${
+                          className={`text-[11px] font-semibold truncate max-w-[80px] ${
                             isSelected ? 'text-primary' : 'text-on-surface'
                           }`}
                           title={`${actor.name} (Click edit to rename)`}
@@ -296,14 +296,14 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
                             title="Rename Actor"
                             className="opacity-0 group-hover/name:opacity-100 hover:text-primary text-on-surface-variant p-0.5 rounded cursor-pointer transition-opacity"
                           >
-                            <span className="material-symbols-outlined text-[12px]">edit</span>
+                            <span className="material-symbols-outlined text-[11px]">edit</span>
                           </button>
                         )}
                       </div>
                     )}
 
                     {/* Mesh Color Swatch and Character Type */}
-                    <div className="flex items-center gap-1.5 text-[10px] font-mono text-on-surface-variant">
+                    <div className="flex items-center gap-1 text-[9px] font-mono text-on-surface-variant">
                       <div className="relative">
                         <button
                           type="button"
@@ -313,7 +313,7 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
                             setActiveAvatarPickerActorId(null);
                           }}
                           title="Change Mesh Material Color"
-                          className="w-3 h-3 rounded-full border border-white/40 shadow-sm cursor-pointer hover:scale-125 transition-transform flex items-center justify-center mt-[1px]"
+                          className="w-2.5 h-2.5 rounded-full border border-white/40 shadow-sm cursor-pointer hover:scale-125 transition-transform flex items-center justify-center mt-[1px]"
                           style={{ backgroundColor: actor.color || '#00ffcc' }}
                         />
 
@@ -418,22 +418,23 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
                     width: `${clipWidthPct}%`,
                   }}
                 >
-                  {/* Clip Header Line: Motion Prompt & Duration */}
+                  {/* Clip Header Line: Actor Name & Duration */}
                   <div className="flex items-center justify-between gap-1 overflow-hidden">
-                    <span className="text-[11px] font-medium truncate flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[13px] shrink-0">
+                    <span
+                      className="text-[10px] font-semibold truncate flex items-center gap-1 tracking-wide"
+                      title={actor.motionPrompt ? `${actor.name}: ${actor.motionPrompt}` : actor.name}
+                    >
+                      <span className="material-symbols-outlined text-[12px] shrink-0">
                         {hasKimodoMotion ? 'auto_awesome' : 'directions_walk'}
                       </span>
-                      <span className="truncate">
-                        {actor.motionPrompt || actor.currentAnimation || 'Default Stance'}
-                      </span>
+                      <span className="truncate">{actor.name}</span>
                     </span>
-                    <span className="font-mono text-[10px] bg-black/40 px-1 rounded shrink-0 border border-white/10">
+                    <span className="font-mono text-[9px] bg-black/40 px-1 py-[1px] rounded shrink-0 border border-white/10">
                       {actorDuration.toFixed(1)}s {actor.motionData ? `(${actor.motionData.num_frames}f)` : ''}
                     </span>
                   </div>
 
-                  {/* Sub-Track: Active Constraints Visualizer Pills */}
+                  {/* Sub-Track: Active Constraints Visualizer Icons (no text labels, clean compact glyphs) */}
                   {constraints.length > 0 && (
                     <div className="flex items-center gap-1 mt-0.5 overflow-hidden">
                       {constraints
@@ -451,15 +452,14 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
                           return (
                             <span
                               key={c.id}
-                              className={`text-[8px] font-mono px-1 py-[1px] rounded border flex items-center gap-0.5 truncate max-w-[120px] ${
+                              className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-all ${
                                 meta.bg
                               } ${meta.border} ${meta.text} ${
-                                isCurrentlyFiring ? 'ring-1 ring-white/50 brightness-125' : 'opacity-80'
+                                isCurrentlyFiring ? 'ring-1 ring-white/70 brightness-125 scale-105' : 'opacity-70'
                               }`}
                               title={`${c.name} (${c.startTime}s - ${c.endTime}s)`}
                             >
-                              <span className="material-symbols-outlined text-[10px]">{meta.icon}</span>
-                              <span className="truncate">{c.name}</span>
+                              <span className="material-symbols-outlined text-[9px]">{meta.icon}</span>
                             </span>
                           );
                         })}

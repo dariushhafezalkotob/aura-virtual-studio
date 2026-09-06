@@ -143,8 +143,8 @@ class ModelErrorBoundary extends Component<
             <boxGeometry args={[1, 1, 1]} />
             <meshStandardMaterial color="#444748" wireframe />
           </mesh>
-          <Html center distanceFactor={8}>
-            <div className="font-label-caps text-[9px] text-on-surface-variant bg-surface-container/90 px-xs py-[2px] border border-outline-variant/30 whitespace-nowrap">
+          <Html center>
+            <div className="font-label-caps text-[9px] text-on-surface-variant bg-surface-container/90 px-xs py-[2px] border border-outline-variant/30 whitespace-nowrap pointer-events-none select-none">
               {this.props.fallbackName}
             </div>
           </Html>
@@ -650,14 +650,6 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
                           side={THREE.DoubleSide}
                         />
                       </mesh>
-                      {isActive && (
-                        <Html center position={[0, 0.4, 0]} distanceFactor={10}>
-                          <div className="bg-purple-900/80 border border-purple-400 text-purple-200 text-[9px] font-mono px-1.5 py-0.5 rounded-full whitespace-nowrap shadow-lg flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping" />
-                            WAYPOINT: {actor.name}
-                          </div>
-                        </Html>
-                      )}
                     </group>
                   )}
 
@@ -668,13 +660,6 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
                         <sphereGeometry args={[0.08, 16, 16]} />
                         <meshBasicMaterial color={isActive ? '#00ffcc' : '#007a66'} wireframe={!isActive} />
                       </mesh>
-                      {isActive && (
-                        <Html center position={[0, 0.2, 0]} distanceFactor={10}>
-                          <div className="bg-cyan-950/80 border border-cyan-400 text-cyan-300 text-[9px] font-mono px-1.5 py-0.5 rounded-full whitespace-nowrap shadow-lg">
-                            LOOK TARGET
-                          </div>
-                        </Html>
-                      )}
                     </group>
                   )}
                 </group>

@@ -336,7 +336,7 @@ export const ActorConstraintsPanel: React.FC<ActorConstraintsPanelProps> = ({
               <div
                 key={c.id}
                 title={`${c.name} (${c.startTime}s - ${c.endTime}s)`}
-                className={`absolute h-2.5 rounded-sm transition-all text-[8px] font-mono text-black font-semibold truncate px-1 flex items-center ${
+                className={`absolute h-2.5 rounded-sm transition-all text-[8px] font-mono font-semibold truncate flex items-center justify-center ${
                   isActive ? 'opacity-100 shadow-md ring-1 ring-white' : 'opacity-40'
                 }`}
                 style={{
@@ -345,9 +345,7 @@ export const ActorConstraintsPanel: React.FC<ActorConstraintsPanelProps> = ({
                   backgroundColor: meta.color,
                   top: `${(i % 2) * 9 + 2}px`,
                 }}
-              >
-                {c.name}
-              </div>
+              />
             );
           })}
         </div>

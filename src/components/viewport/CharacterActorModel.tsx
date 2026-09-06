@@ -645,9 +645,9 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
               <ringGeometry args={[0.55, 0.62, 32]} />
               <meshBasicMaterial color={jointColor} side={THREE.DoubleSide} />
             </mesh>
-            <Html position={[0, 1.95, 0]} center distanceFactor={8}>
-              <div className="bg-surface-container/95 border border-primary/50 text-primary px-sm py-[2px] rounded font-label-caps text-[10px] tracking-wider whitespace-nowrap shadow-xl">
-                {actor.name} (SOMA 77-Bone Rigged)
+            <Html position={[0, 1.9, 0]} center>
+              <div className="bg-surface-container/90 border border-primary/40 text-primary px-1.5 py-[1px] rounded font-label-caps text-[9px] tracking-wide whitespace-nowrap shadow-lg backdrop-blur-sm pointer-events-none select-none">
+                {actor.name}
               </div>
             </Html>
           </group>
