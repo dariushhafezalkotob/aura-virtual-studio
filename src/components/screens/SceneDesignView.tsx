@@ -2073,6 +2073,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           assets.find((a) => a.category === 'environment' || a.name.toLowerCase().includes('room')) ||
           null
         }
+        lightIntensity={lightIntensity}
+        onUpdateLightIntensity={setLightIntensity}
       />
     </div>
   );

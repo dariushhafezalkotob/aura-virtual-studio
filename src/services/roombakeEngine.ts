@@ -17,6 +17,7 @@ export interface RoomBakeConfig {
   genH: number;
   panoW: number;
   panoH: number;
+  lightIntensity?: number;
 }
 
 export const DEFAULT_ROOMBAKE_CONFIG: RoomBakeConfig = {
@@ -27,6 +28,7 @@ export const DEFAULT_ROOMBAKE_CONFIG: RoomBakeConfig = {
   genH: 1024,
   panoW: 2048,
   panoH: 1024,
+  lightIntensity: 1.0,
 };
 
 export interface ViewPoint {
@@ -234,6 +236,7 @@ export class RoomBakeEngine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(canvas.clientWidth || 800, canvas.clientHeight || 600, false);
     this.renderer.setClearColor(0x0a0c10, 1);
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     // Scene
     this.scene = new THREE.Scene();
@@ -611,23 +614,56 @@ export class RoomBakeEngine {
     });
 
     this.roomMat = new THREE.ShaderMaterial({
-      uniforms: { uTex: { value: null }, uShowGaps: { value: 1.0 }, uAtlas: { value: atlas } },
+      uniforms: {
+        uTex: { value: null },
+        uShowGaps: { value: 1.0 },
+        uAtlas: { value: atlas },
+        uLightIntensity: { value: this.config.lightIntensity ?? 1.0 },
+      },
       vertexShader: `
-        varying vec2 vUv; varying vec3 vW;
+        varying vec2 vUv; varying vec3 vW; varying vec3 vN;
         void main() {
-          vUv = uv; vW = (modelMatrix * vec4(position, 1.0)).xyz;
+          vUv = uv;
+          vW = (modelMatrix * vec4(position, 1.0)).xyz;
+          vN = normalize(mat3(modelMatrix) * normal);
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }`,
       fragmentShader: `
-        uniform sampler2D uTex; uniform float uShowGaps;
-        varying vec2 vUv; varying vec3 vW;
+        uniform sampler2D uTex;
+        uniform float uShowGaps;
+        uniform float uLightIntensity;
+        varying vec2 vUv;
+        varying vec3 vW;
+        varying vec3 vN;
         void main() {
           vec4 c = texture2D(uTex, vUv);
-          if (c.a > 0.5 || uShowGaps < 0.5) { gl_FragColor = vec4(c.rgb, 1.0); return; }
+          if (c.a > 0.5 || uShowGaps < 0.5) {
+            vec3 N = normalize(vN);
+            if (!gl_FrontFacing) N = -N;
+
+            // Ambient & Hemisphere base matching Scene Design
+            float hemi = (N.y * 0.5 + 0.5) * 0.35;
+            float ambient = 0.65 + hemi;
+
+            // Key, fill, and front directional lights matching Scene Design
+            vec3 L1 = normalize(vec3(6.0, 12.0, 8.0));   // Key light
+            vec3 L2 = normalize(vec3(-8.0, 6.0, -6.0));  // Fill light
+            vec3 L3 = normalize(vec3(0.0, 4.0, 10.0));   // Front light
+
+            float diff1 = max(dot(N, L1), 0.0) * 0.55;
+            float diff2 = max(dot(N, L2), 0.0) * 0.30;
+            float diff3 = max(dot(N, L3), 0.0) * 0.20;
+
+            float lighting = clamp((ambient + diff1 + diff2 + diff3) * uLightIntensity, 0.1, 4.0);
+            vec3 col = c.rgb * lighting;
+            gl_FragColor = vec4(col, 1.0);
+            return;
+          }
           vec3 g = abs(fract(vW * 2.0 - 0.5) - 0.5) / fwidth(vW * 2.0);
           float line = 1.0 - min(min(g.x, g.y), g.z);
-          gl_FragColor = vec4(mix(vec3(0.08, 0.09, 0.11), vec3(0.16, 0.18, 0.22),
-                                  clamp(line, 0.0, 1.0)), 1.0);
+          vec3 baseGrid = mix(vec3(0.08, 0.09, 0.11), vec3(0.16, 0.18, 0.22),
+                              clamp(line, 0.0, 1.0));
+          gl_FragColor = vec4(baseGrid * uLightIntensity, 1.0);
         }`,
       side: THREE.DoubleSide,
     });
@@ -706,6 +742,13 @@ export class RoomBakeEngine {
 
   public setShowGaps(show: boolean) {
     this.roomMat.uniforms.uShowGaps.value = show ? 1.0 : 0.0;
+  }
+
+  public setLightIntensity(intensity: number) {
+    this.config.lightIntensity = intensity;
+    if (this.roomMat && this.roomMat.uniforms.uLightIntensity) {
+      this.roomMat.uniforms.uLightIntensity.value = Math.max(0.1, intensity);
+    }
   }
 
   public fsPass(material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null) {
