@@ -1,4 +1,4 @@
-import React, { useRef, useMemo, useEffect, useState } from 'react';
+import React, { useRef, useMemo, useEffect, useState, Component, ReactNode } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { TransformControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
@@ -38,55 +38,60 @@ async function loadOfficialSOMARig(): Promise<SOMARigCache> {
   if (rigLoadPromise) return rigLoadPromise;
 
   rigLoadPromise = (async () => {
-    const res = await fetch('/models/soma_official_rigged.json');
-    if (!res.ok) throw new Error('Failed to load /models/soma_official_rigged.json');
-    const data = await res.json();
+    try {
+      const res = await fetch('/models/soma_official_rigged.json');
+      if (!res.ok) throw new Error('Failed to load /models/soma_official_rigged.json');
+      const data = await res.json();
 
-    const parentMap: Record<number, number> = {};
-    data.joint_connections.forEach(([p, c]: [number, number]) => { parentMap[c] = p; });
+      const parentMap: Record<number, number> = {};
+      data.joint_connections.forEach(([p, c]: [number, number]) => { parentMap[c] = p; });
 
-    const worldMats = data.joint_transforms.map((t: number[][]) => {
-      const m = new THREE.Matrix4();
-      m.set(
-        t[0][0], t[0][1], t[0][2], t[0][3],
-        t[1][0], t[1][1], t[1][2], t[1][3],
-        t[2][0], t[2][1], t[2][2], t[2][3],
-        t[3][0], t[3][1], t[3][2], t[3][3]
-      );
-      return m;
-    });
+      const worldMats = data.joint_transforms.map((t: number[][]) => {
+        const m = new THREE.Matrix4();
+        m.set(
+          t[0][0], t[0][1], t[0][2], t[0][3],
+          t[1][0], t[1][1], t[1][2], t[1][3],
+          t[2][0], t[2][1], t[2][2], t[2][3],
+          t[3][0], t[3][1], t[3][2], t[3][3]
+        );
+        return m;
+      });
 
-    const localTransforms: { pos: THREE.Vector3; quat: THREE.Quaternion; scl: THREE.Vector3 }[] = [];
-    for (let i = 0; i < data.joint_names.length; i++) {
-      const pIdx = parentMap[i];
-      let localM: THREE.Matrix4;
-      if (pIdx === undefined) {
-        localM = worldMats[i].clone();
-      } else {
-        const invParent = worldMats[pIdx].clone().invert();
-        localM = invParent.multiply(worldMats[i]);
+      const localTransforms: { pos: THREE.Vector3; quat: THREE.Quaternion; scl: THREE.Vector3 }[] = [];
+      for (let i = 0; i < data.joint_names.length; i++) {
+        const pIdx = parentMap[i];
+        let localM: THREE.Matrix4;
+        if (pIdx === undefined) {
+          localM = worldMats[i].clone();
+        } else {
+          const invParent = worldMats[pIdx].clone().invert();
+          localM = invParent.multiply(worldMats[i]);
+        }
+        const pos = new THREE.Vector3();
+        const quat = new THREE.Quaternion();
+        const scl = new THREE.Vector3();
+        localM.decompose(pos, quat, scl);
+        localTransforms.push({ pos, quat, scl });
       }
-      const pos = new THREE.Vector3();
-      const quat = new THREE.Quaternion();
-      const scl = new THREE.Vector3();
-      localM.decompose(pos, quat, scl);
-      localTransforms.push({ pos, quat, scl });
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.vertices, 3));
+      geometry.setIndex(data.faces);
+      geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(data.skin_indices, 4));
+      geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(data.skin_weights, 4));
+      geometry.computeVertexNormals();
+
+      cachedSOMARigData = {
+        geometry,
+        jointNames: data.joint_names,
+        jointConnections: data.joint_connections,
+        localTransforms,
+      };
+      return cachedSOMARigData;
+    } catch (err) {
+      rigLoadPromise = null;
+      throw err;
     }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.vertices, 3));
-    geometry.setIndex(data.faces);
-    geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(data.skin_indices, 4));
-    geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(data.skin_weights, 4));
-    geometry.computeVertexNormals();
-
-    cachedSOMARigData = {
-      geometry,
-      jointNames: data.joint_names,
-      jointConnections: data.joint_connections,
-      localTransforms,
-    };
-    return cachedSOMARigData;
   })();
 
   return rigLoadPromise;
@@ -133,6 +138,80 @@ const TrajectoryPath: React.FC<{
   );
 };
 
+// Instant procedural mannequin proxy (used while SOMA rig is downloading or on connection fallback)
+export const ProxyMannequin: React.FC<{ color: string }> = ({ color }) => {
+  return (
+    <group position={[0, 0, 0]}>
+      {/* Head */}
+      <mesh position={[0, 1.62, 0]} castShadow>
+        <sphereGeometry args={[0.13, 16, 16]} />
+        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+      </mesh>
+      {/* Neck */}
+      <mesh position={[0, 1.46, 0]} castShadow>
+        <cylinderGeometry args={[0.045, 0.05, 0.1, 12]} />
+        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+      </mesh>
+      {/* Chest / Torso */}
+      <mesh position={[0, 1.22, 0]} castShadow>
+        <cylinderGeometry args={[0.16, 0.12, 0.42, 16]} />
+        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+      </mesh>
+      {/* Pelvis */}
+      <mesh position={[0, 0.95, 0]} castShadow>
+        <cylinderGeometry args={[0.13, 0.14, 0.18, 16]} />
+        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+      </mesh>
+      {/* Left Leg */}
+      <mesh position={[-0.1, 0.5, 0]} castShadow>
+        <cylinderGeometry args={[0.06, 0.045, 0.85, 12]} />
+        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+      </mesh>
+      {/* Right Leg */}
+      <mesh position={[0.1, 0.5, 0]} castShadow>
+        <cylinderGeometry args={[0.06, 0.045, 0.85, 12]} />
+        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+      </mesh>
+      {/* Left Arm */}
+      <mesh position={[-0.24, 1.15, 0]} rotation={[0, 0, -0.15]} castShadow>
+        <cylinderGeometry args={[0.045, 0.035, 0.65, 12]} />
+        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+      </mesh>
+      {/* Right Arm */}
+      <mesh position={[0.24, 1.15, 0]} rotation={[0, 0, 0.15]} castShadow>
+        <cylinderGeometry args={[0.045, 0.035, 0.65, 12]} />
+        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+      </mesh>
+    </group>
+  );
+};
+
+export class ActorErrorBoundary extends Component<
+  { actor: CharacterActor; children: ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error: any) {
+    console.warn('ActorErrorBoundary caught error for:', this.props.actor.name, error);
+  }
+  render() {
+    if (this.state.hasError) {
+      const { position, rotation, scale, color } = this.props.actor;
+      return (
+        <group position={position} rotation={rotation} scale={scale}>
+          <ProxyMannequin color={color || '#00ffcc'} />
+        </group>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const UPPER_BODY_POSE_PRESETS: Record<
   UpperBodyPosePreset,
@@ -633,8 +712,10 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
         {/* Animated Rigged SOMA Multi-Body Skinned Mesh */}
         <group ref={bodyGroupRef}>
           {/* Official SOMA Skinned Mesh Primitive */}
-          {isRigReady && skinnedMeshRef.current && (
+          {isRigReady && skinnedMeshRef.current ? (
             <primitive object={skinnedMeshRef.current} />
+          ) : (
+            <ProxyMannequin color={jointColor} />
           )}
         </group>
 

@@ -185,8 +185,11 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   // --- Mobile Remote Controller Integration ---
   const [remoteRoomId] = useState<string>(() => `take_${Math.random().toString(36).substring(2, 8)}`);
   const [lanIp, setLanIp] = useState<string>(() => {
-    if (typeof window !== 'undefined') return window.location.hostname || 'localhost';
-    return 'localhost';
+    if (typeof window !== 'undefined') {
+      const host = window.location.hostname;
+      if (host && host !== 'localhost' && host !== '127.0.0.1') return host;
+    }
+    return '192.168.101.246';
   });
   const [isPhoneConnected, setIsPhoneConnected] = useState<boolean>(false);
   const [phonePeerCount, setPhonePeerCount] = useState<number>(0);
@@ -202,7 +205,9 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     fetch('/api/network-ip')
       .then((r) => r.json())
       .then((data) => {
-        if (data.ip) setLanIp(data.ip);
+        if (data.ip && data.ip !== 'localhost' && data.ip !== '127.0.0.1') {
+          setLanIp(data.ip);
+        }
       })
       .catch(() => {});
   }, []);
@@ -252,6 +257,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         handleRewindRef.current();
       } else if (msg.type === 'toggle_play') {
         setIsPlaying((prev) => !prev);
+      } else if ((msg as any).type === 'request_scene') {
+        socket.sendInitScene(currentProject);
       }
     });
 
@@ -261,7 +268,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       socket.destroy();
       remoteSocketRef.current = null;
     };
-  }, [remoteRoomId]);
+  }, [remoteRoomId, currentProject]);
 
   // Sync Host State back to Phone Remote Controller
   useEffect(() => {
@@ -277,7 +284,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     }
   }, [isRecording, isPlaying, timelineSec, effectiveDuration, focalLength, activeTake, isPhoneConnected]);
 
-  const remoteUrl = `http://${lanIp}:3000/#/remote?room=${remoteRoomId}`;
+  const cleanIp = (!lanIp || lanIp === 'localhost' || lanIp === '127.0.0.1') ? '192.168.101.246' : lanIp;
+  const remoteUrl = `http://${cleanIp}:3000/#/remote?room=${remoteRoomId}&project=${currentProject.id}`;
   const qrSvgHtml = useMemo(() => {
     try {
       const qr = qrcode(0, 'M');

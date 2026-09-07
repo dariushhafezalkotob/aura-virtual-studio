@@ -6,7 +6,6 @@ import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { WebSocketServer } from 'ws';
-import basicSsl from '@vitejs/plugin-basic-ssl';
 
 const env = { ...process.env, ...loadEnv('', process.cwd(), '') };
 const HF_TOKEN = env.HF_TOKEN || env.VITE_HF_TOKEN || '';
@@ -124,16 +123,20 @@ function resolveMediaUrl(item: any): string {
 
 function getLocalIpAddress(): string {
   const interfaces = os.networkInterfaces();
+  const candidates: string[] = [];
   for (const name of Object.keys(interfaces)) {
     const iface = interfaces[name];
     if (!iface) continue;
     for (const alias of iface) {
       if (alias.family === 'IPv4' && !alias.internal) {
-        return alias.address;
+        if (name.startsWith('en') || name.startsWith('eth') || alias.address.startsWith('192.168.')) {
+          return alias.address;
+        }
+        candidates.push(alias.address);
       }
     }
   }
-  return 'localhost';
+  return candidates[0] || '192.168.101.246';
 }
 
 function apiMiddlewarePlugin(): Plugin {
@@ -233,8 +236,8 @@ function apiMiddlewarePlugin(): Plugin {
             success: true,
             ip: lanIp,
             port: 3000,
-            protocol: 'https',
-            url: `https://${lanIp}:3000`
+            protocol: 'http',
+            url: `http://${lanIp}:3000`
           }));
           return;
         }
@@ -1074,7 +1077,7 @@ function apiMiddlewarePlugin(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), basicSsl(), apiMiddlewarePlugin()],
+  plugins: [react(), apiMiddlewarePlugin()],
   server: {
     port: 3000,
     host: true,

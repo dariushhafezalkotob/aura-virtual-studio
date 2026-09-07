@@ -19,7 +19,7 @@ import {
   RemoteMoveData,
   CameraPoseData,
 } from '../../types';
-import { CharacterActorModel } from './CharacterActorModel';
+import { CharacterActorModel, ActorErrorBoundary } from './CharacterActorModel';
 import { computeDeviceQuaternion } from '../../services/cameraRemoteService';
 
 export type TransformMode = 'translate' | 'rotate' | 'scale';
@@ -1043,7 +1043,9 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         )}
 
         {/* Realistic Image-Based Environment Lighting (IBL) */}
-        <Environment preset={environmentPreset} environmentIntensity={lightIntensity * 0.6} />
+        <Suspense fallback={null}>
+          <Environment preset={environmentPreset} environmentIntensity={lightIntensity * 0.6} />
+        </Suspense>
 
         {/* Balanced Ambient & Studio Lighting */}
         <ambientLight intensity={lightIntensity * 0.4} color="#ffffff" />
@@ -1129,22 +1131,23 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
 
           {/* Render All Character Actors with Kimodo Kinematics & Trajectories */}
           {characters.map((actor) => (
-            <CharacterActorModel
-              key={actor.id}
-              actor={actor}
-              allActors={characters}
-              isSelected={actor.id === selectedActorId}
-              transformMode={transformMode}
-              currentTimelineTime={currentTimelineTime}
-              isPlaying={isPlaying}
-              showTrajectory={showTrajectories}
-              onSelect={() => {
-                onSelectAsset?.(null);
-                onSelectActor?.(actor.id);
-              }}
-              onDraggingChange={setIsTransformDragging}
-              onTransformChange={onUpdateActorTransform}
-            />
+            <ActorErrorBoundary key={actor.id} actor={actor}>
+              <CharacterActorModel
+                actor={actor}
+                allActors={characters}
+                isSelected={actor.id === selectedActorId}
+                transformMode={transformMode}
+                currentTimelineTime={currentTimelineTime}
+                isPlaying={isPlaying}
+                showTrajectory={showTrajectories}
+                onSelect={() => {
+                  onSelectAsset?.(null);
+                  onSelectActor?.(actor.id);
+                }}
+                onDraggingChange={setIsTransformDragging}
+                onTransformChange={onUpdateActorTransform}
+              />
+            </ActorErrorBoundary>
           ))}
 
           {/* 3D Visualizers for Active Constraints (Waypoints & Look-At Targets) */}

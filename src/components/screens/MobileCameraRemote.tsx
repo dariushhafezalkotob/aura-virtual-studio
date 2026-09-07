@@ -98,7 +98,6 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
   });
 
   // Gyroscope tracking state
-  const isSecureContext = typeof window !== 'undefined' && window.isSecureContext;
   const [hasGyroPermission, setHasGyroPermission] = useState<boolean>(false);
   const [gyroActive, setGyroActive] = useState<boolean>(false);
   const [gyroStatusText, setGyroStatusText] = useState<string>('Touch Drag / Gyro Standby');
@@ -118,6 +117,9 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
     const unsubStatus = socket.onStatus((connected, count) => {
       setIsConnected(connected);
       setPeerCount(count);
+      if (connected) {
+        socket.send({ type: 'request_scene' } as any);
+      }
     });
 
     const unsubMsg = socket.onMessage((msg) => {
@@ -151,27 +153,25 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           setHasGyroPermission(true);
           setGyroActive(true);
           setGyroStatusText('Gyro Active');
-          setToastMessage('✅ Gyroscope Activated! Tilt phone to aim camera.');
+          setToastMessage('✅ Gyroscope Active! Tilt phone to aim camera.');
           setTimeout(() => setToastMessage(null), 3000);
         } else {
-          setGyroStatusText('Sensor Denied — Using Touch Look');
-          alert('Motion sensor access was denied. You can still use Touch Drag on the screen to look around!');
+          setGyroStatusText('Touch-Look Swipe Active');
+          setToastMessage('💡 Sensor Denied — Swipe screen to aim camera.');
+          setTimeout(() => setToastMessage(null), 3500);
         }
       } catch (err: any) {
         console.warn('Gyro requestPermission error:', err);
-        setGyroStatusText('Sensor Error — Using Touch Drag');
-        if (!isSecureContext) {
-          alert('Apple iOS requires a secure HTTPS connection for motion sensors. Please open the HTTPS link or use the touch look controls.');
-        } else {
-          alert(`Motion error: ${err?.message || 'Could not start gyroscope'}. You can still touch-drag to look!`);
-        }
+        setGyroStatusText('Touch-Look Swipe Active');
+        setToastMessage('💡 Swipe right side of screen to pan & tilt camera!');
+        setTimeout(() => setToastMessage(null), 4000);
       }
     } else {
       // Android / Non-iOS
       setHasGyroPermission(true);
       setGyroActive(true);
       setGyroStatusText('Gyro Active');
-      setToastMessage('✅ Gyroscope Activated!');
+      setToastMessage('✅ Gyroscope Active! Tilt phone to aim camera.');
       setTimeout(() => setToastMessage(null), 2500);
     }
   };
@@ -211,8 +211,10 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
     };
 
     window.addEventListener('deviceorientation', handleOrientation, true);
+    window.addEventListener('deviceorientationabsolute', handleOrientation as any, true);
     return () => {
       window.removeEventListener('deviceorientation', handleOrientation, true);
+      window.removeEventListener('deviceorientationabsolute', handleOrientation as any, true);
     };
   }, [gyroActive]);
 
@@ -397,7 +399,7 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           cameraFov={currentFov}
           isRecordingCamera={false}
           isPlaybackTake={false}
-          showGrid={false}
+          showGrid={true}
           remoteOrientation={gyroActive ? currentAngles : null}
           remoteMove={activeMove}
           remoteLook={activeLook}
@@ -507,63 +509,42 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           </div>
         </header>
 
-        {/* Center Field: Touch Drag Look & Joystick */}
-        <div className="flex-1 flex items-center justify-between px-4 py-2">
-          {/* Left Thumb: Virtual Joystick (Dolly & Truck) */}
-          <div className="pointer-events-auto flex flex-col items-center gap-1">
-            <div
-              className="relative w-28 h-28 rounded-full bg-black/40 border-2 border-white/30 flex items-center justify-center touch-none backdrop-blur-md shadow-2xl active:border-primary"
-              onTouchStart={handleJoyStart}
-              onTouchMove={handleJoyMove}
-              onTouchEnd={handleJoyEnd}
-              onTouchCancel={handleJoyEnd}
-            >
-              <div className="w-10 h-10 rounded-full border border-white/30 pointer-events-none" />
+        {/* Center Field: Virtual Joystick, Pedestal, Timecode, and Full-Surface Touch-Look */}
+        <div className="flex-1 relative flex items-center justify-between px-4 py-2 pointer-events-none">
+          {/* Left Side: Virtual Joystick & Height Pedestal */}
+          <div className="pointer-events-auto flex items-center gap-3 z-30">
+            {/* Joystick (Dolly & Truck) */}
+            <div className="flex flex-col items-center gap-1">
               <div
-                className="absolute w-12 h-12 rounded-full bg-primary/90 shadow-[0_0_15px_rgba(74,222,128,0.5)] flex items-center justify-center pointer-events-none transition-transform duration-75"
-                style={{
-                  transform: `translate(${joyOffset.x}px, ${joyOffset.y}px)`,
-                }}
+                className="relative w-28 h-28 rounded-full bg-black/50 border-2 border-white/30 flex items-center justify-center touch-none backdrop-blur-md shadow-2xl active:border-primary"
+                onTouchStart={handleJoyStart}
+                onTouchMove={handleJoyMove}
+                onTouchEnd={handleJoyEnd}
+                onTouchCancel={handleJoyEnd}
               >
-                <span className="material-symbols-outlined text-black text-sm">
-                  drag_pan
-                </span>
+                <div className="w-10 h-10 rounded-full border border-white/30 pointer-events-none" />
+                <div
+                  className="absolute w-12 h-12 rounded-full bg-primary/90 shadow-[0_0_15px_rgba(74,222,128,0.5)] flex items-center justify-center pointer-events-none transition-transform duration-75"
+                  style={{
+                    transform: `translate(${joyOffset.x}px, ${joyOffset.y}px)`,
+                  }}
+                >
+                  <span className="material-symbols-outlined text-black text-sm">
+                    drag_pan
+                  </span>
+                </div>
               </div>
-            </div>
-            <span className="text-[9px] text-white/70 tracking-widest uppercase font-bold drop-shadow">
-              DOLLY / TRUCK
-            </span>
-          </div>
-
-          {/* Center Info / Gyro & Timecode Readout */}
-          <div className="flex flex-col items-center text-center pointer-events-none drop-shadow-md">
-            <div className="text-2xl font-black tracking-wider text-white font-mono bg-black/40 px-3 py-1 rounded-lg backdrop-blur-sm border border-white/10">
-              {formatTime(hostState.timelineSec)}
-              <span className="text-xs text-white/60 font-normal ml-1">
-                / {formatTime(hostState.effectiveDuration)}
+              <span className="text-[9px] text-white/70 tracking-widest uppercase font-bold drop-shadow">
+                DOLLY / TRUCK
               </span>
             </div>
-            <div className="text-[9px] text-primary font-mono mt-1 bg-black/50 px-2 py-0.5 rounded">
-              {gyroStatusText}
-            </div>
-            {hostState.isRecording && (
-              <div className="mt-1.5 flex items-center gap-1.5 px-3 py-1 bg-red-600/60 border border-red-500 rounded-full animate-pulse backdrop-blur-sm">
-                <span className="w-2 h-2 rounded-full bg-red-500" />
-                <span className="text-[10px] font-bold text-white tracking-wider">
-                  RECORDING TAKE LIVE
-                </span>
-              </div>
-            )}
-          </div>
 
-          {/* Right Thumb: Full Touch Drag Look Pad & Height Pedestal */}
-          <div className="pointer-events-auto flex items-center gap-3">
             {/* Elevation Pedestal Up/Down */}
             <div className="flex flex-col gap-2">
               <button
                 onTouchStart={() => handlePedestal(1)}
                 onClick={() => handlePedestal(1)}
-                className="w-10 h-11 bg-black/40 border border-white/30 rounded-lg flex items-center justify-center active:bg-primary active:text-black transition-colors backdrop-blur-md shadow-lg"
+                className="w-10 h-11 bg-black/50 border border-white/30 rounded-lg flex items-center justify-center active:bg-primary active:text-black transition-colors backdrop-blur-md shadow-lg"
                 title="Camera Up"
               >
                 <span className="material-symbols-outlined text-sm">arrow_upward</span>
@@ -571,31 +552,47 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
               <button
                 onTouchStart={() => handlePedestal(-1)}
                 onClick={() => handlePedestal(-1)}
-                className="w-10 h-11 bg-black/40 border border-white/30 rounded-lg flex items-center justify-center active:bg-primary active:text-black transition-colors backdrop-blur-md shadow-lg"
+                className="w-10 h-11 bg-black/50 border border-white/30 rounded-lg flex items-center justify-center active:bg-primary active:text-black transition-colors backdrop-blur-md shadow-lg"
                 title="Camera Down"
               >
                 <span className="material-symbols-outlined text-sm">arrow_downward</span>
               </button>
             </div>
+          </div>
 
-            {/* Touch Drag Look Pad */}
-            <div className="flex flex-col items-center gap-1">
-              <div
-                className="w-28 h-28 rounded-2xl bg-black/40 border-2 border-white/30 flex flex-col items-center justify-center touch-none backdrop-blur-md active:border-primary shadow-2xl"
-                onTouchStart={handleLookTouchStart}
-                onTouchMove={handleLookTouchMove}
-                onTouchEnd={handleLookTouchEnd}
-                onTouchCancel={handleLookTouchEnd}
-              >
-                <span className="material-symbols-outlined text-white/50 text-2xl mb-1">
-                  open_with
-                </span>
-                <span className="text-[9px] text-white/80 tracking-wider font-bold">
-                  TOUCH LOOK
+          {/* Center Info / Timecode Readout */}
+          <div className="flex flex-col items-center text-center pointer-events-none drop-shadow-md z-10">
+            <div className="text-2xl font-black tracking-wider text-white font-mono bg-black/50 px-3 py-1 rounded-lg backdrop-blur-sm border border-white/15">
+              {formatTime(hostState.timelineSec)}
+              <span className="text-xs text-white/60 font-normal ml-1">
+                / {formatTime(hostState.effectiveDuration)}
+              </span>
+            </div>
+            <div className="text-[9px] text-primary font-mono mt-1 bg-black/60 px-2 py-0.5 rounded border border-primary/20">
+              {gyroStatusText}
+            </div>
+            {hostState.isRecording && (
+              <div className="mt-1.5 flex items-center gap-1.5 px-3 py-1 bg-red-600/70 border border-red-500 rounded-full animate-pulse backdrop-blur-sm">
+                <span className="w-2 h-2 rounded-full bg-white" />
+                <span className="text-[10px] font-bold text-white tracking-wider">
+                  RECORDING TAKE LIVE
                 </span>
               </div>
-              <span className="text-[9px] text-white/70 tracking-widest uppercase font-bold drop-shadow">
-                PAN / TILT
+            )}
+          </div>
+
+          {/* Right 55% Full Screen Surface: Wide Touch-Drag Look Pad (Pan & Tilt) */}
+          <div
+            className="pointer-events-auto absolute right-0 top-0 bottom-0 w-[55%] z-20 touch-none flex flex-col justify-end items-end p-3 select-none"
+            onTouchStart={handleLookTouchStart}
+            onTouchMove={handleLookTouchMove}
+            onTouchEnd={handleLookTouchEnd}
+            onTouchCancel={handleLookTouchEnd}
+          >
+            <div className="bg-black/40 border border-white/20 rounded-full px-3 py-1 flex items-center gap-1.5 backdrop-blur-sm pointer-events-none opacity-60">
+              <span className="material-symbols-outlined text-sm text-primary">touch_app</span>
+              <span className="text-[9px] font-bold tracking-wider text-white uppercase font-mono">
+                Swipe Screen to Aim
               </span>
             </div>
           </div>
