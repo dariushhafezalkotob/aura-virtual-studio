@@ -140,24 +140,16 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
     };
   }, [roomId]);
 
-  const isHttp = typeof window !== 'undefined' && window.location.protocol === 'http:';
+  // 5. Gyroscope Permission & Multi-Sensor Listener (deviceorientation + devicemotion)
+  const hasRealOrientationRef = useRef<boolean>(false);
 
-  // 5. Gyroscope Permission & Auto-Probe
   const requestGyroPermission = async () => {
-    if (isHttp) {
-      setToastMessage('⚠️ Switching to HTTPS for sensor permissions...');
-      setTimeout(() => {
-        window.location.href = window.location.href.replace('http:', 'https:');
-      }, 400);
-      return;
-    }
-
     if (
       typeof DeviceOrientationEvent !== 'undefined' &&
       typeof (DeviceOrientationEvent as any).requestPermission === 'function'
     ) {
       try {
-        setGyroStatusText('Requesting iOS sensor permission...');
+        setGyroStatusText('Requesting sensor permission...');
         const response = await (DeviceOrientationEvent as any).requestPermission();
         if (response === 'granted') {
           setHasGyroPermission(true);
@@ -166,18 +158,22 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           setToastMessage('✅ Gyroscope Active! Tilt phone to aim camera.');
           setTimeout(() => setToastMessage(null), 3000);
         } else {
-          setGyroStatusText('Touch-Look Swipe Active');
-          setToastMessage('💡 Permission denied. Tap "aA" in Safari URL bar to allow motion.');
-          setTimeout(() => setToastMessage(null), 4000);
+          setHasGyroPermission(true);
+          setGyroActive(true);
+          setGyroStatusText('Swipe / Tilt Active');
+          setToastMessage('💡 Swipe right side of screen to pan & tilt camera.');
+          setTimeout(() => setToastMessage(null), 3500);
         }
       } catch (err: any) {
         console.warn('Gyro requestPermission error:', err);
-        setGyroStatusText('Touch-Look Swipe Active');
-        setToastMessage(`💡 ${err?.message || 'Motion access error'}. Opening via HTTPS is required.`);
-        setTimeout(() => setToastMessage(null), 4000);
+        setHasGyroPermission(true);
+        setGyroActive(true);
+        setGyroStatusText('Swipe / Tilt Active');
+        setToastMessage('💡 Swipe right side of screen to pan & tilt camera.');
+        setTimeout(() => setToastMessage(null), 3500);
       }
     } else {
-      // Android / Non-iOS
+      // Android / Standard Browsers
       setHasGyroPermission(true);
       setGyroActive(true);
       setGyroStatusText('Gyro Active');
@@ -186,7 +182,7 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
     }
   };
 
-  // Auto-probe non-iOS sensors on mount
+  // Auto-probe sensors on mount
   useEffect(() => {
     if (
       typeof DeviceOrientationEvent !== 'undefined' &&
@@ -207,16 +203,20 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
     }
   }, []);
 
-  // Device orientation streaming loop
+  // Multi-Sensor tracking loop (deviceorientation + devicemotion fallback)
   const lastGyroSendRef = useRef<number>(0);
+  const integratedYawRef = useRef<number>(180);
+  const lastMotionTimeRef = useRef<number>(0);
+
   useEffect(() => {
     if (!gyroActive) return;
 
+    // A. Primary: DeviceOrientationEvent (Absolute Euler angles from compass/gyro)
     const handleOrientation = (e: DeviceOrientationEvent) => {
-      // Filter empty dummy events
       if (e.alpha === null && e.beta === null && e.gamma === null) {
         return;
       }
+      hasRealOrientationRef.current = true;
 
       const alpha = e.alpha ?? 0;
       const beta = e.beta ?? 0;
@@ -238,7 +238,6 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
 
       setCurrentAngles(orientData);
 
-      // Throttle WebSocket send at ~60fps
       const now = performance.now();
       if (now - lastGyroSendRef.current > 16) {
         lastGyroSendRef.current = now;
@@ -246,11 +245,67 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
       }
     };
 
+    // B. Fallback: DeviceMotionEvent (Physical tilt from gravity accelerometer + rotationRate)
+    const handleMotion = (e: DeviceMotionEvent) => {
+      if (hasRealOrientationRef.current) return;
+
+      const now = performance.now();
+      const dt = lastMotionTimeRef.current > 0 ? (now - lastMotionTimeRef.current) / 1000 : 0.016;
+      lastMotionTimeRef.current = now;
+
+      const acc = e.accelerationIncludingGravity;
+      const rot = e.rotationRate;
+
+      let screenAngle = 90;
+      if (typeof window.screen?.orientation?.angle === 'number') {
+        screenAngle = window.screen.orientation.angle;
+      } else if (typeof window.orientation === 'number') {
+        screenAngle = window.orientation;
+      }
+
+      if (acc && (acc.x !== null || acc.y !== null || acc.z !== null)) {
+        const ax = acc.x ?? 0;
+        const ay = acc.y ?? 0;
+        const az = acc.z ?? 0;
+
+        // In landscape mode (90deg), ax represents forward-back tilt
+        let pitchDeg = 0;
+        const denom = Math.sqrt(ay * ay + az * az) || 0.001;
+        if (screenAngle === 90) {
+          pitchDeg = Math.atan2(ax, denom) * (180 / Math.PI);
+        } else {
+          pitchDeg = Math.atan2(-ax, denom) * (180 / Math.PI);
+        }
+
+        // Integrate yaw from rotationRate (gamma in landscape is yaw around vertical axis)
+        if (rot && rot.gamma !== null && Math.abs(rot.gamma) > 0.5) {
+          integratedYawRef.current -= (rot.gamma || 0) * dt;
+        }
+
+        const orientData: DeviceOrientationData = {
+          alpha: integratedYawRef.current,
+          beta: 90 - pitchDeg,
+          gamma: 0,
+          screenOrientation: screenAngle,
+        };
+
+        setCurrentAngles(orientData);
+
+        if (now - lastGyroSendRef.current > 16) {
+          lastGyroSendRef.current = now;
+          socketRef.current?.sendGyro(orientData);
+        }
+      }
+    };
+
     window.addEventListener('deviceorientation', handleOrientation, true);
     window.addEventListener('deviceorientationabsolute', handleOrientation as any, true);
+    window.addEventListener('devicemotion', handleMotion, true);
+
     return () => {
       window.removeEventListener('deviceorientation', handleOrientation, true);
       window.removeEventListener('deviceorientationabsolute', handleOrientation as any, true);
+      window.removeEventListener('devicemotion', handleMotion, true);
     };
   }, [gyroActive]);
 
@@ -413,21 +468,6 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
   // 10. Landscape 16:9 Live 3D Viewfinder & Director HUD
   return (
     <div className="fixed inset-0 z-50 bg-black text-white flex flex-col select-none overflow-hidden touch-none font-mono">
-      {/* Insecure HTTP Warning Banner */}
-      {isHttp && (
-        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 bg-amber-500 text-black px-4 py-1.5 rounded-full backdrop-blur-xl text-[11px] font-bold flex items-center gap-2 shadow-xl">
-          <span className="material-symbols-outlined text-sm">lock_open</span>
-          <span>HTTP Insecure: Gyro requires HTTPS.</span>
-          <button
-            onClick={() => {
-              window.location.href = window.location.href.replace('http:', 'https:');
-            }}
-            className="ml-1 px-2 py-0.5 bg-black text-white rounded text-[10px] uppercase cursor-pointer active:scale-95"
-          >
-            Switch to HTTPS
-          </button>
-        </div>
-      )}
 
       {/* Toast Alert Banner */}
       {toastMessage && (

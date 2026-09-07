@@ -237,8 +237,8 @@ function apiMiddlewarePlugin(): Plugin {
             success: true,
             ip: lanIp,
             port: 3000,
-            protocol: 'https',
-            url: `https://${lanIp}:3000`
+            protocol: 'http',
+            url: `http://${lanIp}:3000`
           }));
           return;
         }
@@ -1078,7 +1078,7 @@ function apiMiddlewarePlugin(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), basicSsl(), apiMiddlewarePlugin()],
+  plugins: [react(), apiMiddlewarePlugin()],
   server: {
     port: 3000,
     host: true,
