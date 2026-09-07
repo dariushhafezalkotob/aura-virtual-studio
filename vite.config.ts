@@ -161,6 +161,56 @@ function apiMiddlewarePlugin(): Plugin {
         }
       });
 
+      // Companion HTTPS server on port 3443 for mobile gyro sensors
+      const certPath = path.join(process.cwd(), 'node_modules/.vite/basic-ssl/_cert.pem');
+      if (fs.existsSync(certPath)) {
+        try {
+          if ((globalThis as any).__httpsServer) {
+            try {
+              (globalThis as any).__httpsServer.close();
+            } catch (_) {}
+            (globalThis as any).__httpsServer = null;
+          }
+
+          const cert = fs.readFileSync(certPath);
+          import('node:https').then((https) => {
+            const httpsServer = https.createServer({ key: cert, cert: cert }, server.middlewares);
+            (globalThis as any).__httpsServer = httpsServer;
+
+            httpsServer.on('upgrade', (req, socket, head) => {
+              try {
+                const parsedUrl = new URL(req.url || '', 'https://localhost:3443');
+                if (parsedUrl.pathname === '/ws/camera-remote') {
+                  wss.handleUpgrade(req, socket, head, (ws) => {
+                    wss.emit('connection', ws, req);
+                  });
+                }
+              } catch (err) {
+                console.error('[HTTPS WS Upgrade Error]', err);
+              }
+            });
+
+            httpsServer.on('error', (err: any) => {
+              if (err.code === 'EADDRINUSE') {
+                console.warn('[HTTPS 3443 in use, skipping secondary server]');
+              } else {
+                console.warn('[HTTPS 3443 Error]', err);
+              }
+            });
+
+            httpsServer.listen(3443, '0.0.0.0', () => {
+              console.log(`  ➜  Mobile Secure Remote (Gyro): https://${getLocalIpAddress()}:3443/`);
+            });
+
+            server.httpServer?.on('close', () => {
+              try { httpsServer.close(); } catch (_) {}
+            });
+          }).catch((e) => console.warn('[HTTPS Setup Error]', e));
+        } catch (e) {
+          console.warn('[HTTPS Cert Error]', e);
+        }
+      }
+
       wss.on('connection', (ws: any, req) => {
         try {
           const parsedUrl = new URL(req.url || '', 'http://localhost:3000');
@@ -236,9 +286,10 @@ function apiMiddlewarePlugin(): Plugin {
           res.end(JSON.stringify({
             success: true,
             ip: lanIp,
-            port: 3000,
-            protocol: 'http',
-            url: `http://${lanIp}:3000`
+            httpPort: 3000,
+            httpsPort: 3443,
+            httpUrl: `http://${lanIp}:3000`,
+            httpsUrl: `https://${lanIp}:3443`
           }));
           return;
         }

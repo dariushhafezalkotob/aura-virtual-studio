@@ -9,12 +9,15 @@ import {
 } from '../types';
 
 const DEG_TO_RAD = Math.PI / 180;
-const ZEE = new THREE.Vector3(0, 0, 1);
-const Q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -PI/2 around X
+const Q_EARTH_TO_THREE = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+const V_Z = new THREE.Vector3(0, 0, 1);
+const V_X = new THREE.Vector3(1, 0, 0);
+const V_Y = new THREE.Vector3(0, 1, 0);
 
 /**
  * Calculates a Three.js Quaternion from standard mobile DeviceOrientationEvent angles,
- * properly accounting for landscape mode (90° / -90° screen orientation).
+ * using intrinsic W3C rotation order (Z -> X -> Y) to completely avoid Euler gimbal lock,
+ * and properly mapping screen orientation for 16:9 landscape mode.
  */
 export function computeDeviceQuaternion(
   alpha: number,
@@ -22,22 +25,25 @@ export function computeDeviceQuaternion(
   gamma: number,
   screenOrientation: number = 90
 ): THREE.Quaternion {
-  const euler = new THREE.Euler();
-  const q0 = new THREE.Quaternion();
-  const quat = new THREE.Quaternion();
+  const _alpha = (alpha || 0) * DEG_TO_RAD;
+  const _beta = (beta || 0) * DEG_TO_RAD;
+  const _gamma = (gamma || 0) * DEG_TO_RAD;
+  const _orient = (screenOrientation || 90) * DEG_TO_RAD;
 
-  // In landscape mode, screen orientation is typically 90 or -90 deg
-  const _alpha = alpha ? alpha * DEG_TO_RAD : 0;
-  const _beta = beta ? beta * DEG_TO_RAD : 0;
-  const _gamma = gamma ? gamma * DEG_TO_RAD : 0;
-  const _orient = screenOrientation ? screenOrientation * DEG_TO_RAD : 0;
+  // Intrinsic W3C spec rotations: Z (alpha), X (beta), Y (gamma)
+  const qAlpha = new THREE.Quaternion().setFromAxisAngle(V_Z, _alpha);
+  const qBeta = new THREE.Quaternion().setFromAxisAngle(V_X, _beta);
+  const qGamma = new THREE.Quaternion().setFromAxisAngle(V_Y, _gamma);
 
-  euler.set(_beta, _alpha, -_gamma, 'YXZ');
-  quat.setFromEuler(euler);
-  quat.multiply(Q1); // device points out back
-  quat.multiply(q0.setFromAxisAngle(ZEE, -_orient));
+  const qDevice = qAlpha.multiply(qBeta).multiply(qGamma);
 
-  return quat;
+  // Transform from Earth frame (Z-up) to Three.js world frame (Y-up):
+  const qChassisWorld = Q_EARTH_TO_THREE.clone().multiply(qDevice);
+
+  // Adjust for screen orientation in landscape mode:
+  const qCameraFrame = new THREE.Quaternion().setFromAxisAngle(V_Z, -_orient);
+
+  return qChassisWorld.multiply(qCameraFrame);
 }
 
 export type MessageHandler = (msg: CameraRemoteMessage) => void;

@@ -284,9 +284,11 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     }
   }, [isRecording, isPlaying, timelineSec, effectiveDuration, focalLength, activeTake, isPhoneConnected]);
 
+  const [useSecurePort, setUseSecurePort] = useState<boolean>(true);
   const cleanIp = (!lanIp || lanIp === 'localhost' || lanIp === '127.0.0.1') ? '192.168.101.246' : lanIp;
-  const proto = typeof window !== 'undefined' ? window.location.protocol : 'http:';
-  const remoteUrl = `${proto}//${cleanIp}:3000/#/remote?room=${remoteRoomId}&project=${currentProject.id}`;
+  const proto = useSecurePort ? 'https:' : (typeof window !== 'undefined' ? window.location.protocol : 'http:');
+  const port = useSecurePort ? 3443 : 3000;
+  const remoteUrl = `${proto}//${cleanIp}:${port}/#/remote?room=${remoteRoomId}&project=${currentProject.id}`;
   const qrSvgHtml = useMemo(() => {
     try {
       const qr = qrcode(0, 'M');
@@ -1208,6 +1210,28 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
               </span>
             </div>
 
+            {/* Port / Connection Mode Toggle */}
+            <div className="flex items-center justify-center p-0.5 bg-surface-container-highest rounded-lg mb-3 border border-outline-variant/30 text-xs">
+              <button
+                onClick={() => setUseSecurePort(true)}
+                className={`flex-1 py-1 px-2 rounded-md font-mono text-[11px] font-bold transition-colors flex items-center justify-center gap-1 cursor-pointer ${
+                  useSecurePort ? 'bg-primary text-black shadow' : 'text-on-surface-variant hover:text-on-surface'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[13px]">lock</span>
+                HTTPS (Gyro Ready)
+              </button>
+              <button
+                onClick={() => setUseSecurePort(false)}
+                className={`flex-1 py-1 px-2 rounded-md font-mono text-[11px] font-bold transition-colors flex items-center justify-center gap-1 cursor-pointer ${
+                  !useSecurePort ? 'bg-surface-variant text-on-surface shadow' : 'text-on-surface-variant hover:text-on-surface'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[13px]">wifi</span>
+                HTTP (Port 3000)
+              </button>
+            </div>
+
             {/* Dynamic QR Code Box */}
             <div className="w-52 h-52 mx-auto bg-white p-3 rounded-xl flex flex-col items-center justify-center border border-outline-variant/40 mb-3 shadow-inner">
               {qrSvgHtml ? (
@@ -1238,20 +1262,27 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
               </span>
             </div>
 
-            <p className="text-xs text-on-surface-variant mb-3 leading-relaxed">
-              Scan with your iPhone, iPad or Android device to enable real-time 60 FPS gyroscope camera tracking in 16:9 widescreen.
-            </p>
-
-            {/* Controller Guidance */}
-            <div className="mb-3 bg-white/5 border border-white/10 rounded-lg p-2.5 text-left text-xs space-y-1">
-              <div className="font-bold text-primary flex items-center gap-1.5 text-[11px]">
-                <span className="material-symbols-outlined text-[14px]">screen_rotation</span>
-                16:9 Landscape Remote Viewfinder
+            {useSecurePort ? (
+              <div className="mb-3 bg-primary/10 border border-primary/30 rounded-lg p-2.5 text-left text-xs space-y-1">
+                <div className="font-bold text-primary flex items-center gap-1.5 text-[11px]">
+                  <span className="material-symbols-outlined text-[14px]">verified_user</span>
+                  HTTPS Recommended: Unlocks Hardware Gyroscope
+                </div>
+                <div className="text-[10px] text-on-surface-variant leading-relaxed">
+                  When opening on your phone, tap <strong>&ldquo;Show Details&rdquo; &rarr; &ldquo;Visit Website&rdquo;</strong> (iOS Safari) or <strong>&ldquo;Advanced&rdquo; &rarr; &ldquo;Proceed&rdquo;</strong> (Android Chrome) to grant hardware motion access.
+                </div>
               </div>
-              <div className="text-[10px] text-on-surface-variant leading-relaxed">
-                Connect on your phone in landscape mode. Tilt phone to aim camera, or swipe the right side of the screen anytime to pan &amp; tilt.
+            ) : (
+              <div className="mb-3 bg-white/5 border border-white/10 rounded-lg p-2.5 text-left text-xs space-y-1">
+                <div className="font-bold text-white flex items-center gap-1.5 text-[11px]">
+                  <span className="material-symbols-outlined text-[14px]">touch_app</span>
+                  HTTP Standard Connection
+                </div>
+                <div className="text-[10px] text-on-surface-variant leading-relaxed">
+                  Connect without SSL warnings. Uses touch swipe look and fallback sensors.
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Direct URL & Copy Button */}
             <div className="flex items-center gap-2 mb-4 bg-surface-container-highest/60 p-2 rounded-lg border border-outline-variant/30 text-left">

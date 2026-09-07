@@ -103,6 +103,8 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
   const [gyroStatusText, setGyroStatusText] = useState<string>('Touch Drag / Gyro Standby');
   const [currentAngles, setCurrentAngles] = useState<DeviceOrientationData | null>(null);
   const [calibrateTrigger, setCalibrateTrigger] = useState<number>(0);
+  const packetCountRef = useRef<number>(0);
+  const [livePackets, setLivePackets] = useState<number>(0);
 
   // Touch Move / Joystick state
   const [activeMove, setActiveMove] = useState<RemoteMoveData | null>(null);
@@ -237,6 +239,10 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
       };
 
       setCurrentAngles(orientData);
+      packetCountRef.current++;
+      if (packetCountRef.current % 10 === 0) {
+        setLivePackets(packetCountRef.current);
+      }
 
       const now = performance.now();
       if (now - lastGyroSendRef.current > 16) {
@@ -290,6 +296,10 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
         };
 
         setCurrentAngles(orientData);
+        packetCountRef.current++;
+        if (packetCountRef.current % 10 === 0) {
+          setLivePackets(packetCountRef.current);
+        }
 
         if (now - lastGyroSendRef.current > 16) {
           lastGyroSendRef.current = now;
@@ -660,13 +670,30 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
                 / {formatTime(hostState.effectiveDuration)}
               </span>
             </div>
-            <div className="text-[9px] text-primary font-mono mt-1 bg-black/60 px-2 py-0.5 rounded border border-primary/20 flex items-center gap-1.5">
-              <span className={`w-1.5 h-1.5 rounded-full ${gyroActive && currentAngles ? 'bg-[#4ade80]' : 'bg-white/40'}`} />
-              <span>
-                {gyroActive && currentAngles
-                  ? `PITCH ${Math.round(currentAngles.beta)}° • YAW ${Math.round(currentAngles.alpha)}°`
-                  : gyroStatusText}
-              </span>
+            <div className="flex flex-col items-center gap-1 mt-1">
+              <div className="text-[9px] text-primary font-mono bg-black/60 px-2 py-0.5 rounded border border-primary/20 flex items-center gap-1.5">
+                <span className={`w-1.5 h-1.5 rounded-full ${gyroActive && packetCountRef.current > 0 ? 'bg-[#4ade80] animate-pulse' : 'bg-amber-400'}`} />
+                <span>
+                  {gyroActive && currentAngles && packetCountRef.current > 0
+                    ? `LIVE GYRO (${livePackets > 30 ? '60fps' : `${livePackets}pkts`}): PITCH ${Math.round(currentAngles.beta)}° • YAW ${Math.round(currentAngles.alpha)}°`
+                    : gyroActive
+                    ? 'Sensors Standby (Tilt Phone or Swipe)'
+                    : gyroStatusText}
+                </span>
+              </div>
+
+              {/* If gyro is on but 0 sensor packets arrive (e.g. mobile browser blocks sensors on HTTP) */}
+              {gyroActive && packetCountRef.current === 0 && typeof window !== 'undefined' && window.location.protocol === 'http:' && (
+                <button
+                  onClick={() => {
+                    window.location.href = `https://${window.location.hostname}:3443${window.location.pathname}${window.location.search}${window.location.hash}`;
+                  }}
+                  className="pointer-events-auto px-2.5 py-1 bg-amber-400/90 hover:bg-amber-400 text-black text-[10px] font-bold rounded shadow-lg flex items-center gap-1 cursor-pointer active:scale-95"
+                >
+                  <span className="material-symbols-outlined text-xs">lock</span>
+                  Unlock Hardware Gyro (HTTPS:3443)
+                </button>
+              )}
             </div>
             {hostState.isRecording && (
               <div className="mt-1.5 flex items-center gap-1.5 px-3 py-1 bg-red-600/70 border border-red-500 rounded-full animate-pulse backdrop-blur-sm">
