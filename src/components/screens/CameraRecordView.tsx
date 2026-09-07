@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Project, CharacterActor, CameraTake, CameraKeyframe } from '../../types';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Project, CharacterActor, CameraTake, CameraKeyframe, DeviceOrientationData, RemoteMoveData } from '../../types';
 import { ThreeStage } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
+import { CameraRemoteSocket } from '../../services/cameraRemoteService';
+import qrcode from 'qrcode-generator';
 
 interface CameraRecordViewProps {
   currentProject: Project;
@@ -179,6 +181,109 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const handleRewind = () => {
     setTimelineSec(0);
   };
+
+  // --- Mobile Remote Controller Integration ---
+  const [remoteRoomId] = useState<string>(() => `take_${Math.random().toString(36).substring(2, 8)}`);
+  const [lanIp, setLanIp] = useState<string>(() => {
+    if (typeof window !== 'undefined') return window.location.hostname || 'localhost';
+    return 'localhost';
+  });
+  const [isPhoneConnected, setIsPhoneConnected] = useState<boolean>(false);
+  const [phonePeerCount, setPhonePeerCount] = useState<number>(0);
+  const [remoteOrientation, setRemoteOrientation] = useState<DeviceOrientationData | null>(null);
+  const [remoteMove, setRemoteMove] = useState<RemoteMoveData | null>(null);
+  const [remoteLook, setRemoteLook] = useState<{ deltaPitch: number; deltaYaw: number } | null>(null);
+  const [calibrateTrigger, setCalibrateTrigger] = useState<number>(0);
+  const remoteSocketRef = useRef<CameraRemoteSocket | null>(null);
+
+  // Auto-fetch LAN IP address from server endpoint
+  useEffect(() => {
+    fetch('/api/network-ip')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ip) setLanIp(data.ip);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleToggleRecordRef = useRef(handleToggleRecord);
+  handleToggleRecordRef.current = handleToggleRecord;
+
+  const handleRewindRef = useRef(handleRewind);
+  handleRewindRef.current = handleRewind;
+
+  // Connect Host WebSocket
+  useEffect(() => {
+    const socket = new CameraRemoteSocket('host', remoteRoomId);
+    remoteSocketRef.current = socket;
+
+    const unsubStatus = socket.onStatus((_connected, count) => {
+      setIsPhoneConnected(count > 1);
+      setPhonePeerCount(count);
+    });
+
+    const unsubMsg = socket.onMessage((msg) => {
+      if (msg.type === 'peer_joined' && msg.role === 'remote') {
+        setIsPhoneConnected(true);
+        setToastMessage('📱 Mobile Phone Connected! Ready for Landscape 16:9 Tracking.');
+        setTimeout(() => setToastMessage(null), 4000);
+      } else if (msg.type === 'peer_left' && msg.role === 'remote') {
+        setIsPhoneConnected(false);
+        setToastMessage('📱 Mobile Phone Disconnected.');
+        setTimeout(() => setToastMessage(null), 3000);
+      } else if (msg.type === 'gyro') {
+        setRemoteOrientation(msg.orientation);
+      } else if (msg.type === 'move') {
+        setRemoteMove(msg.move);
+      } else if (msg.type === 'look') {
+        setRemoteLook({ deltaPitch: msg.deltaPitch, deltaYaw: msg.deltaYaw });
+      } else if (msg.type === 'toggle_record') {
+        handleToggleRecordRef.current();
+      } else if (msg.type === 'set_focal_length') {
+        setFocalLength(msg.focalLength);
+      } else if (msg.type === 'calibrate') {
+        setCalibrateTrigger((prev) => prev + 1);
+      } else if (msg.type === 'rewind') {
+        handleRewindRef.current();
+      } else if (msg.type === 'toggle_play') {
+        setIsPlaying((prev) => !prev);
+      }
+    });
+
+    return () => {
+      unsubStatus();
+      unsubMsg();
+      socket.destroy();
+      remoteSocketRef.current = null;
+    };
+  }, [remoteRoomId]);
+
+  // Sync Host State back to Phone Remote Controller
+  useEffect(() => {
+    if (remoteSocketRef.current && isPhoneConnected) {
+      remoteSocketRef.current.sendHostState({
+        isRecording,
+        isPlaying,
+        timelineSec,
+        effectiveDuration,
+        focalLength,
+        activeTakeName: activeTake?.name,
+      });
+    }
+  }, [isRecording, isPlaying, timelineSec, effectiveDuration, focalLength, activeTake, isPhoneConnected]);
+
+  const remoteUrl = `http://${lanIp}:3000/#/remote?room=${remoteRoomId}`;
+  const qrSvgHtml = useMemo(() => {
+    try {
+      const qr = qrcode(0, 'M');
+      qr.addData(remoteUrl);
+      qr.make();
+      return qr.createSvgTag(6, 0);
+    } catch (e) {
+      console.warn('QR code generation error:', e);
+      return null;
+    }
+  }, [remoteUrl]);
 
   const handleDeleteTake = (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -469,6 +574,10 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         isPlaybackTake={viewMode === 'playback'}
         playbackTake={activeTake}
         showCameraTrajectory={!isExportingVideo}
+        remoteOrientation={remoteOrientation}
+        remoteMove={remoteMove}
+        remoteLook={remoteLook}
+        calibrateTrigger={calibrateTrigger}
         onCanvasReady={(canvas) => {
           webglCanvasRef.current = canvas;
         }}
@@ -872,10 +981,18 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
           {/* Left: Mobile Camera Pairing Button */}
           <button
             onClick={() => setShowQRPairing(true)}
-            className="bg-surface-container/90 border border-outline-variant/40 hover:border-primary px-3 py-2 rounded-xl backdrop-blur-md text-xs font-label-caps text-primary tracking-wider flex items-center gap-1.5 cursor-pointer shadow-lg whitespace-nowrap"
+            className={`border px-3 py-2 rounded-xl backdrop-blur-md text-xs font-label-caps tracking-wider flex items-center gap-1.5 cursor-pointer shadow-lg whitespace-nowrap transition-colors ${
+              isPhoneConnected
+                ? 'bg-[#4ade80]/15 border-[#4ade80] text-[#4ade80]'
+                : 'bg-surface-container/90 border-outline-variant/40 hover:border-primary text-primary'
+            }`}
           >
-            <span className="material-symbols-outlined text-[17px]">qr_code_scanner</span>
-            PAIR PHONE
+            <span
+              className={`w-2 h-2 rounded-full ${
+                isPhoneConnected ? 'bg-[#4ade80] shadow-[0_0_6px_#4ade80]' : 'bg-primary'
+              }`}
+            />
+            {isPhoneConnected ? '📱 PHONE SYNCED' : 'PAIR PHONE'}
           </button>
 
           {/* Center: Unified Play & Record Bar */}
@@ -1057,30 +1174,93 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       {/* QR Pairing Modal for Module 3 */}
       {showQRPairing && (
         <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-md flex items-center justify-center p-md">
-          <div className="bg-surface-container border border-outline-variant/40 p-xl max-w-sm w-full rounded-xl shadow-2xl text-center relative">
+          <div className="bg-surface-container border border-outline-variant/40 p-xl max-w-sm w-full rounded-2xl shadow-2xl text-center relative animate-in fade-in zoom-in-95 duration-200">
             <button
               onClick={() => setShowQRPairing(false)}
-              className="absolute top-md right-md text-on-surface-variant hover:text-primary cursor-pointer"
+              className="absolute top-md right-md text-on-surface-variant hover:text-primary cursor-pointer p-1"
             >
               ✕
             </button>
             <span className="font-label-caps text-[11px] text-primary tracking-widest block mb-xs">
-              MODULE 03: VIRTUAL CAMERA
+              STAGE 03: VIRTUAL CAMERA
             </span>
-            <h3 className="font-headline-sm text-primary mb-md font-semibold">
+            <h3 className="font-headline-sm text-primary mb-2 font-semibold">
               Connect Mobile Director
             </h3>
-            <div className="w-48 h-48 mx-auto bg-white p-md rounded-lg flex flex-col items-center justify-center border border-outline-variant/40 mb-md">
-              <span className="material-symbols-outlined text-background text-[110px]">
-                qr_code_2
+            <div className="inline-block px-2.5 py-0.5 bg-primary/10 border border-primary/20 rounded-full mb-3">
+              <span className="text-[10px] font-mono text-primary uppercase font-bold tracking-wider">
+                16:9 Landscape Enforced
               </span>
             </div>
-            <p className="text-xs text-on-surface-variant mb-md leading-relaxed">
-              Scan with your iPhone, iPad or Android device to enable real-time gyroscope & motion camera tracking.
+
+            {/* Dynamic QR Code Box */}
+            <div className="w-52 h-52 mx-auto bg-white p-3 rounded-xl flex flex-col items-center justify-center border border-outline-variant/40 mb-3 shadow-inner">
+              {qrSvgHtml ? (
+                <div
+                  className="w-full h-full flex items-center justify-center [&>svg]:w-full [&>svg]:h-full"
+                  dangerouslySetInnerHTML={{ __html: qrSvgHtml }}
+                />
+              ) : (
+                <span className="material-symbols-outlined text-background text-[110px]">
+                  qr_code_2
+                </span>
+              )}
+            </div>
+
+            {/* Live Pairing Status Indicator */}
+            <div className="mb-3 flex items-center justify-center gap-2">
+              <span
+                className={`w-2.5 h-2.5 rounded-full ${
+                  isPhoneConnected
+                    ? 'bg-[#4ade80] shadow-[0_0_8px_#4ade80]'
+                    : 'bg-amber-400 animate-pulse'
+                }`}
+              />
+              <span className="text-xs font-mono font-bold text-on-surface">
+                {isPhoneConnected
+                  ? `PHONE CONNECTED (${phonePeerCount - 1} ACTIVE)`
+                  : 'WAITING FOR SCAN...'}
+              </span>
+            </div>
+
+            <p className="text-xs text-on-surface-variant mb-3 leading-relaxed">
+              Scan with your iPhone, iPad or Android device to enable real-time 60 FPS gyroscope camera tracking in 16:9 widescreen.
             </p>
+
+            {/* Direct URL & Copy Button */}
+            <div className="flex items-center gap-2 mb-4 bg-surface-container-highest/60 p-2 rounded-lg border border-outline-variant/30 text-left">
+              <span className="text-[10px] font-mono text-on-surface-variant truncate flex-1 select-all">
+                {remoteUrl}
+              </span>
+              <button
+                onClick={() => {
+                  navigator.clipboard?.writeText(remoteUrl);
+                  setToastMessage('Mobile remote URL copied to clipboard!');
+                  setTimeout(() => setToastMessage(null), 2500);
+                }}
+                className="px-2 py-1 text-[10px] font-mono font-bold bg-primary/20 hover:bg-primary/30 text-primary rounded cursor-pointer whitespace-nowrap active:scale-95"
+              >
+                COPY
+              </button>
+            </div>
+
+            {isPhoneConnected && (
+              <button
+                onClick={() => {
+                  setCalibrateTrigger((p) => p + 1);
+                  setToastMessage('Forward direction re-calibrated to 0°');
+                  setTimeout(() => setToastMessage(null), 2500);
+                }}
+                className="w-full mb-2 font-mono text-xs bg-white/10 hover:bg-white/20 border border-white/20 text-white py-2 rounded-lg font-medium cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <span className="material-symbols-outlined text-sm">my_location</span>
+                CALIBRATE 0° FORWARD
+              </button>
+            )}
+
             <button
               onClick={() => setShowQRPairing(false)}
-              className="w-full font-label-caps text-xs bg-primary text-background py-sm rounded font-medium cursor-pointer"
+              className="w-full font-label-caps text-xs bg-primary text-background py-sm rounded-lg font-bold cursor-pointer hover:bg-primary/90 transition-colors"
             >
               DONE
             </button>

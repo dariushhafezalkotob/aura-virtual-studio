@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
+import { WebSocketServer } from 'ws';
 
 const env = { ...process.env, ...loadEnv('', process.cwd(), '') };
 const HF_TOKEN = env.HF_TOKEN || env.VITE_HF_TOKEN || '';
@@ -120,11 +121,122 @@ function resolveMediaUrl(item: any): string {
   return '';
 }
 
+function getLocalIpAddress(): string {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    const iface = interfaces[name];
+    if (!iface) continue;
+    for (const alias of iface) {
+      if (alias.family === 'IPv4' && !alias.internal) {
+        return alias.address;
+      }
+    }
+  }
+  return 'localhost';
+}
+
 function apiMiddlewarePlugin(): Plugin {
   return {
     name: 'api-middleware',
     configureServer(server) {
+      // Setup WebSocket relay for mobile camera controller
+      const wss = new WebSocketServer({ noServer: true });
+      const rooms = new Map<string, Set<any>>();
+
+      server.httpServer?.on('upgrade', (req, socket, head) => {
+        try {
+          const parsedUrl = new URL(req.url || '', 'http://localhost:3000');
+          if (parsedUrl.pathname === '/ws/camera-remote') {
+            wss.handleUpgrade(req, socket, head, (ws) => {
+              wss.emit('connection', ws, req);
+            });
+          }
+        } catch (err) {
+          console.error('[WS Upgrade Error]', err);
+        }
+      });
+
+      wss.on('connection', (ws: any, req) => {
+        try {
+          const parsedUrl = new URL(req.url || '', 'http://localhost:3000');
+          const roomId = parsedUrl.searchParams.get('room') || 'default';
+          const role = parsedUrl.searchParams.get('role') || 'remote';
+
+          ws.roomId = roomId;
+          ws.role = role;
+
+          if (!rooms.has(roomId)) {
+            rooms.set(roomId, new Set());
+          }
+          rooms.get(roomId)!.add(ws);
+
+          console.log(`[Camera Remote WS] ${role} joined room ${roomId} (Total in room: ${rooms.get(roomId)!.size})`);
+
+          const notifyPayload = JSON.stringify({
+            type: 'peer_joined',
+            role,
+            peerCount: rooms.get(roomId)!.size,
+            timestamp: Date.now(),
+          });
+
+          for (const client of rooms.get(roomId)!) {
+            if (client.readyState === 1) {
+              client.send(notifyPayload);
+            }
+          }
+
+          ws.on('message', (data: any, isBinary: boolean) => {
+            const clientSet = rooms.get(roomId);
+            if (clientSet) {
+              for (const client of clientSet) {
+                if (client !== ws && client.readyState === 1) {
+                  client.send(data, { binary: isBinary });
+                }
+              }
+            }
+          });
+
+          ws.on('close', () => {
+            const clientSet = rooms.get(roomId);
+            if (clientSet) {
+              clientSet.delete(ws);
+              console.log(`[Camera Remote WS] ${role} left room ${roomId} (Remaining: ${clientSet.size})`);
+              if (clientSet.size === 0) {
+                rooms.delete(roomId);
+              } else {
+                const leavePayload = JSON.stringify({
+                  type: 'peer_left',
+                  role,
+                  peerCount: clientSet.size,
+                  timestamp: Date.now(),
+                });
+                for (const client of clientSet) {
+                  if (client.readyState === 1) {
+                    client.send(leavePayload);
+                  }
+                }
+              }
+            }
+          });
+        } catch (wsErr) {
+          console.error('[Camera Remote WS Connection Error]', wsErr);
+        }
+      });
+
       server.middlewares.use(async (req, res, next) => {
+        // -1. Network Host IP Discovery for Mobile Pairing QR Code
+        if (req.url?.startsWith('/api/network-ip')) {
+          const lanIp = getLocalIpAddress();
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({
+            success: true,
+            ip: lanIp,
+            port: 3000,
+            url: `http://${lanIp}:3000`
+          }));
+          return;
+        }
+
         // 0. Local Disk File Persistence for Projects & Scenes (Bulletproof Local Dev)
         if (req.url?.startsWith('/api/projects')) {
           const dataDir = path.join(process.cwd(), 'data');

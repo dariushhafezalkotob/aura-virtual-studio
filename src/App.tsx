@@ -6,6 +6,7 @@ import { WorkflowSequenceView } from './components/screens/WorkflowSequenceView'
 import { SceneDesignView } from './components/screens/SceneDesignView';
 import { ActingSetupView } from './components/screens/ActingSetupView';
 import { CameraRecordView } from './components/screens/CameraRecordView';
+import { MobileCameraRemote } from './components/screens/MobileCameraRemote';
 import {
   getInitialProjectsFromLocalStorage,
   loadProjectsSafely,
@@ -40,6 +41,23 @@ const INITIAL_PROJECTS: Project[] = [
 ];
 
 export function App() {
+  const [isRemoteMode, setIsRemoteMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const hash = window.location.hash.toLowerCase();
+    const search = window.location.search.toLowerCase();
+    return hash.includes('remote') || search.includes('remote') || search.includes('mode=remote');
+  });
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.toLowerCase();
+      const search = window.location.search.toLowerCase();
+      setIsRemoteMode(hash.includes('remote') || search.includes('remote') || search.includes('mode=remote'));
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
   const [projects, setProjects] = useState<Project[]>(() =>
     getInitialProjectsFromLocalStorage(INITIAL_PROJECTS)
   );
@@ -115,6 +133,10 @@ export function App() {
         return 'Studio';
     }
   };
+
+  if (isRemoteMode) {
+    return <MobileCameraRemote />;
+  }
 
   return (
     <div className="h-screen w-screen bg-background text-on-background flex flex-col font-body-md relative overflow-hidden selection:bg-surface-container-high selection:text-primary">

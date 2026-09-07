@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, Suspense, Component, ReactNode } from 'react';
+import React, { useRef, useState, useEffect, useCallback, Suspense, Component, ReactNode } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
   useGLTF,
@@ -10,8 +10,16 @@ import {
   Splat,
 } from '@react-three/drei';
 import * as THREE from 'three';
-import { SceneAsset, CharacterActor, CameraTake, CameraKeyframe } from '../../types';
+import {
+  SceneAsset,
+  CharacterActor,
+  CameraTake,
+  CameraKeyframe,
+  DeviceOrientationData,
+  RemoteMoveData,
+} from '../../types';
 import { CharacterActorModel } from './CharacterActorModel';
+import { computeDeviceQuaternion } from '../../services/cameraRemoteService';
 
 export type TransformMode = 'translate' | 'rotate' | 'scale';
 export type LightingEnvironmentPreset = 'studio' | 'city' | 'sunset' | 'dawn' | 'park';
@@ -53,6 +61,10 @@ interface ThreeStageProps {
   playbackTake?: CameraTake | null;
   showCameraTrajectory?: boolean;
   onCanvasReady?: (canvas: HTMLCanvasElement) => void;
+  remoteOrientation?: DeviceOrientationData | null;
+  remoteMove?: RemoteMoveData | null;
+  remoteLook?: { deltaPitch: number; deltaYaw: number } | null;
+  calibrateTrigger?: number;
 }
 
 // 360° Equirectangular Panorama Dome (Resilient Non-Blocking Loader)
@@ -466,10 +478,14 @@ const FallbackLoader = () => (
   </Html>
 );
 
-// 60 FPS Unreal Engine First-Person Flight & Camera Navigation Controller (Identical to RoomBake)
+// 60 FPS Unreal Engine First-Person Flight & Camera Navigation Controller with Mobile Gyro Integration
 const UnrealCameraNavigation: React.FC<{
   enabled: boolean;
-}> = ({ enabled }) => {
+  remoteOrientation?: DeviceOrientationData | null;
+  remoteMove?: RemoteMoveData | null;
+  remoteLook?: { deltaPitch: number; deltaYaw: number } | null;
+  calibrateTrigger?: number;
+}> = ({ enabled, remoteOrientation, remoteMove, remoteLook, calibrateTrigger }) => {
   const { camera, gl } = useThree();
   const keysDown = useRef<Set<string>>(new Set());
   const orbitRef = useRef({
@@ -478,6 +494,85 @@ const UnrealCameraNavigation: React.FC<{
     dist: 0.01,
     target: new THREE.Vector3(0, 2.2, 6.5),
   });
+
+  // Mobile Device Orientation Tracking Refs
+  const baseDeviceQuatRef = useRef<THREE.Quaternion | null>(null);
+  const invBaseDeviceQuatRef = useRef<THREE.Quaternion>(new THREE.Quaternion());
+  const baseCameraQuatRef = useRef<THREE.Quaternion>(new THREE.Quaternion());
+  const targetCamQuatRef = useRef<THREE.Quaternion | null>(null);
+
+  // Calibration routine (re-zero forward direction to match current device pose)
+  const lastCalibrateRef = useRef<number | undefined>(calibrateTrigger);
+  const calibrateOrientation = useCallback(() => {
+    if (remoteOrientation) {
+      const devQ = computeDeviceQuaternion(
+        remoteOrientation.alpha,
+        remoteOrientation.beta,
+        remoteOrientation.gamma,
+        remoteOrientation.screenOrientation ?? 90
+      );
+      baseDeviceQuatRef.current = devQ.clone();
+      invBaseDeviceQuatRef.current.copy(devQ).invert();
+      baseCameraQuatRef.current.copy(camera.quaternion);
+      targetCamQuatRef.current = camera.quaternion.clone();
+    }
+  }, [remoteOrientation, camera]);
+
+  useEffect(() => {
+    if (calibrateTrigger !== undefined && calibrateTrigger !== lastCalibrateRef.current) {
+      lastCalibrateRef.current = calibrateTrigger;
+      calibrateOrientation();
+    }
+  }, [calibrateTrigger, calibrateOrientation]);
+
+  // Update target quaternion whenever new remoteOrientation packet arrives
+  useEffect(() => {
+    if (!remoteOrientation) {
+      targetCamQuatRef.current = null;
+      baseDeviceQuatRef.current = null;
+      return;
+    }
+
+    const currentDevQ = computeDeviceQuaternion(
+      remoteOrientation.alpha,
+      remoteOrientation.beta,
+      remoteOrientation.gamma,
+      remoteOrientation.screenOrientation ?? 90
+    );
+
+    if (!baseDeviceQuatRef.current) {
+      baseDeviceQuatRef.current = currentDevQ.clone();
+      invBaseDeviceQuatRef.current.copy(currentDevQ).invert();
+      baseCameraQuatRef.current.copy(camera.quaternion);
+    }
+
+    // Relative delta from calibration point:
+    const relDevQ = new THREE.Quaternion().multiplyQuaternions(
+      invBaseDeviceQuatRef.current,
+      currentDevQ
+    );
+
+    // Final target camera rotation:
+    targetCamQuatRef.current = new THREE.Quaternion().multiplyQuaternions(
+      baseCameraQuatRef.current,
+      relDevQ
+    );
+  }, [remoteOrientation, camera]);
+
+  // Handle mobile fine touch look deltas
+  useEffect(() => {
+    if (!remoteLook) return;
+    const orbit = orbitRef.current;
+    orbit.yaw -= remoteLook.deltaYaw;
+    orbit.pitch -= remoteLook.deltaPitch;
+    orbit.pitch = Math.max(-1.55, Math.min(1.55, orbit.pitch));
+
+    if (baseCameraQuatRef.current) {
+      const euler = new THREE.Euler(-remoteLook.deltaPitch, -remoteLook.deltaYaw, 0, 'YXZ');
+      const rotQ = new THREE.Quaternion().setFromEuler(euler);
+      baseCameraQuatRef.current.premultiply(rotQ);
+    }
+  }, [remoteLook]);
 
   // Track pointer dragging for exact Unreal Look / Pan
   useEffect(() => {
@@ -530,6 +625,12 @@ const UnrealCameraNavigation: React.FC<{
         orbit.yaw -= dx * 0.004;
         orbit.pitch -= dy * 0.004;
         orbit.pitch = Math.max(-1.55, Math.min(1.55, orbit.pitch));
+
+        if (baseCameraQuatRef.current) {
+          const euler = new THREE.Euler(-dy * 0.004, -dx * 0.004, 0, 'YXZ');
+          const rotQ = new THREE.Quaternion().setFromEuler(euler);
+          baseCameraQuatRef.current.premultiply(rotQ);
+        }
       }
     };
 
@@ -604,6 +705,7 @@ const UnrealCameraNavigation: React.FC<{
     if (!enabled) return;
     const orbit = orbitRef.current;
 
+    // Desktop Keyboard Flight Controls
     if (keysDown.current.size > 0) {
       const isShift = keysDown.current.has('shift');
       const moveSpeed = (isShift ? 9.0 : 3.8) * delta;
@@ -625,16 +727,41 @@ const UnrealCameraNavigation: React.FC<{
       if (keysDown.current.has('q')) orbit.target.addScaledVector(up, -moveSpeed);
     }
 
-    // Apply exact camera position and orientation around eye
-    const cp = Math.cos(orbit.pitch);
-    const dir = new THREE.Vector3(
-      Math.sin(orbit.yaw) * cp,
-      Math.sin(orbit.pitch),
-      Math.cos(orbit.yaw) * cp
-    );
-    camera.position.copy(orbit.target).addScaledVector(dir, orbit.dist);
-    camera.lookAt(orbit.target.clone().addScaledVector(dir, orbit.dist + 1));
-    camera.updateMatrixWorld(true);
+    // Mobile Virtual Joystick Move Controls (Dolly / Truck / Pedestal)
+    if (remoteMove && (remoteMove.moveX !== 0 || remoteMove.moveZ !== 0 || remoteMove.moveY !== 0)) {
+      const speed = 4.5 * delta;
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+      fwd.y = 0;
+      if (fwd.lengthSq() > 0.001) fwd.normalize();
+      const rgt = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+      const up = new THREE.Vector3(0, 1, 0);
+
+      orbit.target.addScaledVector(rgt, remoteMove.moveX * speed);
+      orbit.target.addScaledVector(fwd, remoteMove.moveZ * speed);
+      orbit.target.addScaledVector(up, (remoteMove.moveY || 0) * speed);
+    }
+
+    // Mobile Gyroscope Tracking or Orbit Look Update
+    if (targetCamQuatRef.current) {
+      camera.quaternion.slerp(targetCamQuatRef.current, Math.min(1.0, delta * 25.0));
+      camera.position.copy(orbit.target);
+      camera.updateMatrixWorld(true);
+
+      const fwd = new THREE.Vector3();
+      camera.getWorldDirection(fwd);
+      orbit.pitch = Math.asin(Math.max(-0.99, Math.min(0.99, fwd.y)));
+      orbit.yaw = Math.atan2(fwd.x, fwd.z);
+    } else {
+      const cp = Math.cos(orbit.pitch);
+      const dir = new THREE.Vector3(
+        Math.sin(orbit.yaw) * cp,
+        Math.sin(orbit.pitch),
+        Math.cos(orbit.yaw) * cp
+      );
+      camera.position.copy(orbit.target).addScaledVector(dir, orbit.dist);
+      camera.lookAt(orbit.target.clone().addScaledVector(dir, orbit.dist + 1));
+      camera.updateMatrixWorld(true);
+    }
   });
 
   return null;
@@ -834,6 +961,10 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   playbackTake = null,
   showCameraTrajectory = true,
   onCanvasReady,
+  remoteOrientation = null,
+  remoteMove = null,
+  remoteLook = null,
+  calibrateTrigger = 0,
 }) => {
   const [isTransformDragging, setIsTransformDragging] = useState(false);
 
@@ -1050,8 +1181,14 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           <CameraTrajectoryVisualizer take={playbackTake} />
         )}
 
-        {/* 60 FPS Continuous Unreal Engine Keyboard & Mouse Flight Controller (disabled during take playback) */}
-        <UnrealCameraNavigation enabled={!isTransformDragging && !isPlaybackTake} />
+        {/* 60 FPS Continuous Unreal Engine Keyboard & Mouse Flight Controller with Mobile Gyro Integration */}
+        <UnrealCameraNavigation
+          enabled={!isTransformDragging && !isPlaybackTake}
+          remoteOrientation={remoteOrientation}
+          remoteMove={remoteMove}
+          remoteLook={remoteLook}
+          calibrateTrigger={calibrateTrigger}
+        />
       </Canvas>
     </div>
   );

@@ -161,3 +161,40 @@ export interface TrellisGenerateParams {
   simplify?: number;
   textureSize?: number;
 }
+
+export interface DeviceOrientationData {
+  alpha: number; // yaw [0, 360)
+  beta: number;  // pitch [-180, 180)
+  gamma: number; // roll [-90, 90)
+  screenOrientation?: number; // 90, -90, 0
+  quaternion?: [number, number, number, number];
+}
+
+export interface RemoteMoveData {
+  moveX: number; // -1 to 1 (Truck Left / Right)
+  moveZ: number; // -1 to 1 (Dolly Forward / Back)
+  moveY: number; // -1 to 1 (Pedestal Down / Up)
+}
+
+export interface CameraRemoteState {
+  isRecording: boolean;
+  isPlaying: boolean;
+  timelineSec: number;
+  effectiveDuration: number;
+  focalLength: string;
+  activeTakeName?: string;
+}
+
+export type CameraRemoteMessage =
+  | { type: 'peer_joined'; role: string; peerCount: number; timestamp: number }
+  | { type: 'peer_left'; role: string; peerCount: number; timestamp: number }
+  | { type: 'gyro'; orientation: DeviceOrientationData; timestamp: number }
+  | { type: 'move'; move: RemoteMoveData; timestamp: number }
+  | { type: 'look'; deltaPitch: number; deltaYaw: number; timestamp: number }
+  | { type: 'toggle_record' }
+  | { type: 'set_focal_length'; focalLength: string }
+  | { type: 'calibrate' }
+  | { type: 'rewind' }
+  | { type: 'toggle_play' }
+  | { type: 'host_state'; state: CameraRemoteState };
+
