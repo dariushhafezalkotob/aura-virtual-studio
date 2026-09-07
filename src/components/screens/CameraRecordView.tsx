@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Project, CharacterActor, CameraTake, CameraKeyframe, DeviceOrientationData, RemoteMoveData } from '../../types';
+import { Project, CharacterActor, CameraTake, CameraKeyframe, DeviceOrientationData, RemoteMoveData, CameraPoseData } from '../../types';
 import { ThreeStage } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
 import { CameraRemoteSocket } from '../../services/cameraRemoteService';
@@ -194,6 +194,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const [remoteMove, setRemoteMove] = useState<RemoteMoveData | null>(null);
   const [remoteLook, setRemoteLook] = useState<{ deltaPitch: number; deltaYaw: number } | null>(null);
   const [calibrateTrigger, setCalibrateTrigger] = useState<number>(0);
+  const [incomingCameraPose, setIncomingCameraPose] = useState<CameraPoseData | null>(null);
   const remoteSocketRef = useRef<CameraRemoteSocket | null>(null);
 
   // Auto-fetch LAN IP address from server endpoint
@@ -225,12 +226,16 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     const unsubMsg = socket.onMessage((msg) => {
       if (msg.type === 'peer_joined' && msg.role === 'remote') {
         setIsPhoneConnected(true);
+        socket.sendInitScene(currentProject);
         setToastMessage('📱 Mobile Phone Connected! Ready for Landscape 16:9 Tracking.');
         setTimeout(() => setToastMessage(null), 4000);
       } else if (msg.type === 'peer_left' && msg.role === 'remote') {
         setIsPhoneConnected(false);
+        setIncomingCameraPose(null);
         setToastMessage('📱 Mobile Phone Disconnected.');
         setTimeout(() => setToastMessage(null), 3000);
+      } else if (msg.type === 'camera_pose') {
+        setIncomingCameraPose(msg.pose);
       } else if (msg.type === 'gyro') {
         setRemoteOrientation(msg.orientation);
       } else if (msg.type === 'move') {
@@ -578,6 +583,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         remoteMove={remoteMove}
         remoteLook={remoteLook}
         calibrateTrigger={calibrateTrigger}
+        incomingCameraPose={incomingCameraPose}
         onCanvasReady={(canvas) => {
           webglCanvasRef.current = canvas;
         }}

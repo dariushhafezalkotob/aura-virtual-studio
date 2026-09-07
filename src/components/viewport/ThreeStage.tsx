@@ -17,6 +17,7 @@ import {
   CameraKeyframe,
   DeviceOrientationData,
   RemoteMoveData,
+  CameraPoseData,
 } from '../../types';
 import { CharacterActorModel } from './CharacterActorModel';
 import { computeDeviceQuaternion } from '../../services/cameraRemoteService';
@@ -65,6 +66,8 @@ interface ThreeStageProps {
   remoteMove?: RemoteMoveData | null;
   remoteLook?: { deltaPitch: number; deltaYaw: number } | null;
   calibrateTrigger?: number;
+  incomingCameraPose?: CameraPoseData | null;
+  onCameraPose?: (pose: CameraPoseData) => void;
 }
 
 // 360° Equirectangular Panorama Dome (Resilient Non-Blocking Loader)
@@ -485,7 +488,9 @@ const UnrealCameraNavigation: React.FC<{
   remoteMove?: RemoteMoveData | null;
   remoteLook?: { deltaPitch: number; deltaYaw: number } | null;
   calibrateTrigger?: number;
-}> = ({ enabled, remoteOrientation, remoteMove, remoteLook, calibrateTrigger }) => {
+  incomingCameraPose?: CameraPoseData | null;
+  onCameraPose?: (pose: CameraPoseData) => void;
+}> = ({ enabled, remoteOrientation, remoteMove, remoteLook, calibrateTrigger, incomingCameraPose, onCameraPose }) => {
   const { camera, gl } = useThree();
   const keysDown = useRef<Set<string>>(new Set());
   const orbitRef = useRef({
@@ -705,6 +710,28 @@ const UnrealCameraNavigation: React.FC<{
     if (!enabled) return;
     const orbit = orbitRef.current;
 
+    // Direct incoming camera pose mirror (e.g. Host mirroring Remote)
+    if (incomingCameraPose) {
+      camera.position.set(
+        incomingCameraPose.position[0],
+        incomingCameraPose.position[1],
+        incomingCameraPose.position[2]
+      );
+      camera.quaternion.set(
+        incomingCameraPose.quaternion[0],
+        incomingCameraPose.quaternion[1],
+        incomingCameraPose.quaternion[2],
+        incomingCameraPose.quaternion[3]
+      );
+      camera.updateMatrixWorld(true);
+      orbit.target.copy(camera.position);
+      const fwd = new THREE.Vector3();
+      camera.getWorldDirection(fwd);
+      orbit.pitch = Math.asin(Math.max(-0.99, Math.min(0.99, fwd.y)));
+      orbit.yaw = Math.atan2(fwd.x, fwd.z);
+      return;
+    }
+
     // Desktop Keyboard Flight Controls
     if (keysDown.current.size > 0) {
       const isShift = keysDown.current.has('shift');
@@ -761,6 +788,18 @@ const UnrealCameraNavigation: React.FC<{
       camera.position.copy(orbit.target).addScaledVector(dir, orbit.dist);
       camera.lookAt(orbit.target.clone().addScaledVector(dir, orbit.dist + 1));
       camera.updateMatrixWorld(true);
+    }
+
+    // Broadcast Camera Pose if onCameraPose callback is provided
+    if (onCameraPose) {
+      const p = camera.position;
+      const q = camera.quaternion;
+      const pCam = camera as THREE.PerspectiveCamera;
+      onCameraPose({
+        position: [p.x, p.y, p.z],
+        quaternion: [q.x, q.y, q.z, q.w],
+        fov: pCam.fov,
+      });
     }
   });
 
@@ -965,6 +1004,8 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   remoteMove = null,
   remoteLook = null,
   calibrateTrigger = 0,
+  incomingCameraPose = null,
+  onCameraPose,
 }) => {
   const [isTransformDragging, setIsTransformDragging] = useState(false);
 
@@ -1188,6 +1229,8 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           remoteMove={remoteMove}
           remoteLook={remoteLook}
           calibrateTrigger={calibrateTrigger}
+          incomingCameraPose={incomingCameraPose}
+          onCameraPose={onCameraPose}
         />
       </Canvas>
     </div>

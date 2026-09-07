@@ -185,9 +185,17 @@ export interface CameraRemoteState {
   activeTakeName?: string;
 }
 
+export interface CameraPoseData {
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+  fov?: number;
+}
+
 export type CameraRemoteMessage =
   | { type: 'peer_joined'; role: string; peerCount: number; timestamp: number }
   | { type: 'peer_left'; role: string; peerCount: number; timestamp: number }
+  | { type: 'init_scene'; project: Project }
+  | { type: 'camera_pose'; pose: CameraPoseData; timestamp: number }
   | { type: 'gyro'; orientation: DeviceOrientationData; timestamp: number }
   | { type: 'move'; move: RemoteMoveData; timestamp: number }
   | { type: 'look'; deltaPitch: number; deltaYaw: number; timestamp: number }

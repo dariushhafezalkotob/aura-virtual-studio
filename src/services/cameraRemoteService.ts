@@ -4,6 +4,8 @@ import {
   DeviceOrientationData,
   RemoteMoveData,
   CameraRemoteState,
+  CameraPoseData,
+  Project,
 } from '../types';
 
 const DEG_TO_RAD = Math.PI / 180;
@@ -207,6 +209,18 @@ export class CameraRemoteSocket {
 
   public sendTogglePlay() {
     this.send({ type: 'toggle_play' });
+  }
+
+  public sendInitScene(project: Project) {
+    this.send({ type: 'init_scene', project });
+  }
+
+  public sendCameraPose(pose: CameraPoseData) {
+    this.send({
+      type: 'camera_pose',
+      pose,
+      timestamp: performance.now(),
+    });
   }
 
   public sendHostState(state: CameraRemoteState) {

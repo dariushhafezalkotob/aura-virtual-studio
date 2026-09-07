@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { WebSocketServer } from 'ws';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 
 const env = { ...process.env, ...loadEnv('', process.cwd(), '') };
 const HF_TOKEN = env.HF_TOKEN || env.VITE_HF_TOKEN || '';
@@ -232,7 +233,8 @@ function apiMiddlewarePlugin(): Plugin {
             success: true,
             ip: lanIp,
             port: 3000,
-            url: `http://${lanIp}:3000`
+            protocol: 'https',
+            url: `https://${lanIp}:3000`
           }));
           return;
         }
@@ -1072,7 +1074,7 @@ function apiMiddlewarePlugin(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), apiMiddlewarePlugin()],
+  plugins: [react(), basicSsl(), apiMiddlewarePlugin()],
   server: {
     port: 3000,
     host: true,

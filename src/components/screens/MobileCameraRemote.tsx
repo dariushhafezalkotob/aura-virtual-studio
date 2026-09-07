@@ -1,6 +1,15 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { CameraRemoteSocket } from '../../services/cameraRemoteService';
-import { CameraRemoteState } from '../../types';
+import { CameraRemoteState, Project, CharacterActor, CameraPoseData, DeviceOrientationData, RemoteMoveData } from '../../types';
+import { ThreeStage } from '../viewport/ThreeStage';
+import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
+
+const LENS_FOV_MAP: Record<string, number> = {
+  '24mm': 74,
+  '35mm': 54,
+  '50mm': 40,
+  '85mm': 24,
+};
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -9,18 +18,51 @@ function formatTime(seconds: number): string {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms}`;
 }
 
-export const MobileCameraRemote: React.FC = () => {
+interface MobileCameraRemoteProps {
+  initialProject?: Project | null;
+}
+
+export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialProject }) => {
   // 1. URL Query Extraction
   const [roomId, setRoomId] = useState<string>('default');
+  const [projectId, setProjectId] = useState<string | null>(null);
+
   useEffect(() => {
     const hash = window.location.hash;
     const search = window.location.search;
     const urlParams = new URLSearchParams(search || (hash.includes('?') ? hash.split('?')[1] : ''));
     const r = urlParams.get('room');
+    const p = urlParams.get('project');
     if (r) setRoomId(r);
+    if (p) setProjectId(p);
   }, []);
 
-  // 2. Landscape Orientation Check
+  // 2. Project & Scene Data (Loaded from prop, WebSocket init_scene, or /api/projects)
+  const [project, setProject] = useState<Project | null>(initialProject || null);
+
+  useEffect(() => {
+    if (project) return;
+    fetch('/api/projects')
+      .then((res) => res.json())
+      .then((data) => {
+        const projs: Project[] = Array.isArray(data) ? data : data?.projects || [];
+        if (projs.length > 0) {
+          const match = projectId ? projs.find((p) => p.id === projectId) : null;
+          setProject(match || projs[0]);
+        }
+      })
+      .catch(() => {});
+  }, [project, projectId]);
+
+  // Synchronize actors from project or default initial actors
+  const characters: CharacterActor[] = useMemo(() => {
+    if (project?.characters && project.characters.length > 0) {
+      return project.characters;
+    }
+    return DEFAULT_INITIAL_ACTORS;
+  }, [project]);
+
+  // 3. Landscape Orientation Check
   const [isLandscape, setIsLandscape] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       return window.innerWidth >= window.innerHeight;
@@ -40,10 +82,11 @@ export const MobileCameraRemote: React.FC = () => {
     };
   }, []);
 
-  // 3. WebSocket Connection
+  // 4. WebSocket Connection
   const socketRef = useRef<CameraRemoteSocket | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [peerCount, setPeerCount] = useState<number>(0);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Host state mirrored
   const [hostState, setHostState] = useState<CameraRemoteState>({
@@ -55,15 +98,18 @@ export const MobileCameraRemote: React.FC = () => {
   });
 
   // Gyroscope tracking state
+  const isSecureContext = typeof window !== 'undefined' && window.isSecureContext;
   const [hasGyroPermission, setHasGyroPermission] = useState<boolean>(false);
   const [gyroActive, setGyroActive] = useState<boolean>(false);
-  const [currentAngles, setCurrentAngles] = useState<{ alpha: number; beta: number; gamma: number }>({
-    alpha: 0,
-    beta: 0,
-    gamma: 0,
-  });
+  const [gyroStatusText, setGyroStatusText] = useState<string>('Touch Drag / Gyro Standby');
+  const [currentAngles, setCurrentAngles] = useState<DeviceOrientationData | null>(null);
+  const [calibrateTrigger, setCalibrateTrigger] = useState<number>(0);
 
-  // Initialize socket
+  // Touch Move / Joystick state
+  const [activeMove, setActiveMove] = useState<RemoteMoveData | null>(null);
+  const [activeLook, setActiveLook] = useState<{ deltaPitch: number; deltaYaw: number } | null>(null);
+
+  // Initialize WebSocket
   useEffect(() => {
     if (!roomId) return;
     const socket = new CameraRemoteSocket('remote', roomId);
@@ -75,7 +121,11 @@ export const MobileCameraRemote: React.FC = () => {
     });
 
     const unsubMsg = socket.onMessage((msg) => {
-      if (msg.type === 'host_state') {
+      if (msg.type === 'init_scene') {
+        if (msg.project) {
+          setProject(msg.project);
+        }
+      } else if (msg.type === 'host_state') {
         setHostState(msg.state);
       }
     });
@@ -88,45 +138,54 @@ export const MobileCameraRemote: React.FC = () => {
     };
   }, [roomId]);
 
-  // Request Motion Permission on iOS 13+ & Setup DeviceOrientation listener
+  // 5. Gyroscope Permission & Event Listener
   const requestGyroPermission = async () => {
     if (
       typeof DeviceOrientationEvent !== 'undefined' &&
       typeof (DeviceOrientationEvent as any).requestPermission === 'function'
     ) {
       try {
+        setGyroStatusText('Requesting iOS sensor permission...');
         const response = await (DeviceOrientationEvent as any).requestPermission();
         if (response === 'granted') {
           setHasGyroPermission(true);
           setGyroActive(true);
+          setGyroStatusText('Gyro Active');
+          setToastMessage('✅ Gyroscope Activated! Tilt phone to aim camera.');
+          setTimeout(() => setToastMessage(null), 3000);
         } else {
-          alert('Gyroscope permission was denied. Camera orientation tracking requires motion sensors.');
+          setGyroStatusText('Sensor Denied — Using Touch Look');
+          alert('Motion sensor access was denied. You can still use Touch Drag on the screen to look around!');
         }
       } catch (err: any) {
-        console.error('Error requesting gyro permission:', err);
+        console.warn('Gyro requestPermission error:', err);
+        setGyroStatusText('Sensor Error — Using Touch Drag');
+        if (!isSecureContext) {
+          alert('Apple iOS requires a secure HTTPS connection for motion sensors. Please open the HTTPS link or use the touch look controls.');
+        } else {
+          alert(`Motion error: ${err?.message || 'Could not start gyroscope'}. You can still touch-drag to look!`);
+        }
       }
     } else {
-      // Android or Non-iOS browsers do not require explicit requestPermission
+      // Android / Non-iOS
       setHasGyroPermission(true);
       setGyroActive(true);
+      setGyroStatusText('Gyro Active');
+      setToastMessage('✅ Gyroscope Activated!');
+      setTimeout(() => setToastMessage(null), 2500);
     }
   };
 
-  // Device orientation streaming loop (throttled at ~60fps)
-  const lastGyroTime = useRef<number>(0);
+  // Device orientation streaming loop
+  const lastGyroSendRef = useRef<number>(0);
   useEffect(() => {
     if (!gyroActive) return;
 
     const handleOrientation = (e: DeviceOrientationEvent) => {
-      const now = performance.now();
-      if (now - lastGyroTime.current < 15) return; // ~60fps throttle
-      lastGyroTime.current = now;
-
       const alpha = e.alpha ?? 0;
       const beta = e.beta ?? 0;
       const gamma = e.gamma ?? 0;
 
-      // In landscape mode, determine screen orientation angle
       let screenAngle = 90;
       if (typeof window.screen?.orientation?.angle === 'number') {
         screenAngle = window.screen.orientation.angle;
@@ -134,15 +193,20 @@ export const MobileCameraRemote: React.FC = () => {
         screenAngle = window.orientation;
       }
 
-      setCurrentAngles({ alpha, beta, gamma });
+      const orientData: DeviceOrientationData = {
+        alpha,
+        beta,
+        gamma,
+        screenOrientation: screenAngle,
+      };
 
-      if (socketRef.current) {
-        socketRef.current.sendGyro({
-          alpha,
-          beta,
-          gamma,
-          screenOrientation: screenAngle,
-        });
+      setCurrentAngles(orientData);
+
+      // Throttle WebSocket send at ~60fps
+      const now = performance.now();
+      if (now - lastGyroSendRef.current > 16) {
+        lastGyroSendRef.current = now;
+        socketRef.current?.sendGyro(orientData);
       }
     };
 
@@ -152,7 +216,16 @@ export const MobileCameraRemote: React.FC = () => {
     };
   }, [gyroActive]);
 
-  // Touch Drag Pad (Right thumb: Pan / Tilt Look)
+  // 6. Camera Pose Streaming: as local camera moves in ThreeStage, stream pose to desktop!
+  const lastPoseSendRef = useRef<number>(0);
+  const handleLocalCameraPose = useCallback((pose: CameraPoseData) => {
+    const now = performance.now();
+    if (now - lastPoseSendRef.current < 16) return; // ~60 FPS
+    lastPoseSendRef.current = now;
+    socketRef.current?.sendCameraPose(pose);
+  }, []);
+
+  // 7. Touch Drag Look (Right half of viewfinder: Pan & Tilt)
   const lookTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const handleLookTouchStart = (e: React.TouchEvent) => {
     const t = e.touches[0];
@@ -166,17 +239,17 @@ export const MobileCameraRemote: React.FC = () => {
     const dy = t.clientY - lookTouchStartRef.current.y;
     lookTouchStartRef.current = { x: t.clientX, y: t.clientY };
 
-    if (socketRef.current) {
-      // Send fine look deltas
-      socketRef.current.sendLook(dy * 0.005, dx * 0.005);
-    }
+    const lookDelta = { deltaPitch: dy * 0.005, deltaYaw: dx * 0.005 };
+    setActiveLook(lookDelta);
+    socketRef.current?.sendLook(lookDelta.deltaPitch, lookDelta.deltaYaw);
   };
 
   const handleLookTouchEnd = () => {
     lookTouchStartRef.current = null;
+    setActiveLook(null);
   };
 
-  // Virtual Joystick (Left thumb: Dolly & Truck move)
+  // 8. Virtual Joystick (Left thumb: Dolly & Truck move)
   const joyStartRef = useRef<{ x: number; y: number } | null>(null);
   const [joyOffset, setJoyOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const moveIntervalRef = useRef<any>(null);
@@ -186,12 +259,10 @@ export const MobileCameraRemote: React.FC = () => {
     if (moveIntervalRef.current) return;
     moveIntervalRef.current = setInterval(() => {
       const { x, z, y } = activeMoveRef.current;
-      if ((x !== 0 || z !== 0 || y !== 0) && socketRef.current) {
-        socketRef.current.sendMove({
-          moveX: x,
-          moveZ: z,
-          moveY: y,
-        });
+      if (x !== 0 || z !== 0 || y !== 0) {
+        const moveData = { moveX: x, moveZ: z, moveY: y };
+        setActiveMove(moveData);
+        socketRef.current?.sendMove(moveData);
       }
     }, 16);
   }, []);
@@ -202,6 +273,8 @@ export const MobileCameraRemote: React.FC = () => {
       moveIntervalRef.current = null;
     }
     activeMoveRef.current = { x: 0, z: 0, y: 0 };
+    setActiveMove(null);
+    socketRef.current?.sendMove({ moveX: 0, moveZ: 0, moveY: 0 });
   }, []);
 
   const handleJoyStart = (e: React.TouchEvent) => {
@@ -225,7 +298,6 @@ export const MobileCameraRemote: React.FC = () => {
 
     setJoyOffset({ x: dx, y: dy });
 
-    // Normalized move: dx -> Truck (moveX), -dy -> Dolly (moveZ forward is negative or positive depending on camera)
     activeMoveRef.current.x = dx / maxRadius;
     activeMoveRef.current.z = -dy / maxRadius;
   };
@@ -234,16 +306,14 @@ export const MobileCameraRemote: React.FC = () => {
     joyStartRef.current = null;
     setJoyOffset({ x: 0, y: 0 });
     stopMoveLoop();
-    if (socketRef.current) {
-      socketRef.current.sendMove({ moveX: 0, moveZ: 0, moveY: 0 });
-    }
   };
 
   // Elevation (Pedestal Up / Down)
   const handlePedestal = (dir: 1 | -1) => {
-    if (socketRef.current) {
-      socketRef.current.sendMove({ moveX: 0, moveZ: 0, moveY: dir * 0.4 });
-    }
+    const moveData = { moveX: 0, moveZ: 0, moveY: dir * 0.4 };
+    setActiveMove(moveData);
+    socketRef.current?.sendMove(moveData);
+    setTimeout(() => setActiveMove(null), 100);
   };
 
   // Actions
@@ -260,14 +330,19 @@ export const MobileCameraRemote: React.FC = () => {
   };
 
   const calibrateZero = () => {
+    setCalibrateTrigger((p) => p + 1);
     socketRef.current?.sendCalibrate();
+    setToastMessage('Forward direction zeroed (0°)');
+    setTimeout(() => setToastMessage(null), 2000);
   };
 
   const selectFocalLength = (fl: string) => {
     socketRef.current?.sendFocalLength(fl);
   };
 
-  // 4. Portrait Warning Overlay
+  const currentFov = LENS_FOV_MAP[hostState.focalLength] || 54;
+
+  // 9. Portrait Warning Overlay
   if (!isLandscape) {
     return (
       <div className="fixed inset-0 z-50 bg-[#0c0d0e] text-[#d6e3ff] flex flex-col items-center justify-center p-8 select-none text-center">
@@ -291,29 +366,60 @@ export const MobileCameraRemote: React.FC = () => {
           AURA Virtual Director controller operates exclusively in 16:9 widescreen orientation for accurate camera framing.
         </p>
         <div className="text-[11px] font-mono text-outline uppercase tracking-wider">
-          Turn your phone sideways to unlock the director HUD
+          Turn your phone sideways to unlock the 3D director HUD
         </div>
       </div>
     );
   }
 
-  // 5. Landscape 16:9 Director HUD
+  // 10. Landscape 16:9 Live 3D Viewfinder & Director HUD
   return (
     <div className="fixed inset-0 z-50 bg-black text-white flex flex-col select-none overflow-hidden touch-none font-mono">
-      {/* 16:9 Aspect Ratio Director Frame */}
-      <div className="relative w-full h-full flex flex-col justify-between p-3">
-        {/* Background Subtle Letterbox Matte & Grid */}
-        <div className="absolute inset-0 pointer-events-none border-2 border-primary/20 m-2 rounded-lg flex flex-col justify-between">
-          {/* Rule of Thirds Guide Overlay */}
+      {/* Toast Alert Banner */}
+      {toastMessage && (
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-black/85 border border-primary text-primary px-4 py-1.5 rounded-full backdrop-blur-xl text-xs flex items-center gap-2 animate-in fade-in duration-150">
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* LIVE 3D SCENE VIEWPORT (Renders Stage & Characters on Phone!) */}
+      <div className="absolute inset-0 z-0">
+        <ThreeStage
+          assets={project?.scenes || []}
+          selectedAssetId={null}
+          characters={characters}
+          currentTimelineTime={hostState.timelineSec}
+          isPlaying={hostState.isPlaying}
+          showTrajectories={false}
+          panoramaUrl={project?.panoramaUrl}
+          panoramaRotation={project?.panoramaRotation || 0}
+          splatUrl={project?.splatUrl}
+          cameraFov={currentFov}
+          isRecordingCamera={false}
+          isPlaybackTake={false}
+          showGrid={false}
+          remoteOrientation={gyroActive ? currentAngles : null}
+          remoteMove={activeMove}
+          remoteLook={activeLook}
+          calibrateTrigger={calibrateTrigger}
+          onCameraPose={handleLocalCameraPose}
+        />
+      </div>
+
+      {/* 16:9 Transparent Director HUD Overlay */}
+      <div className="relative z-10 w-full h-full flex flex-col justify-between p-3 pointer-events-none">
+        {/* Subtle 16:9 Frame Brackets & Center Reticle */}
+        <div className="absolute inset-0 pointer-events-none m-2 rounded-lg flex flex-col justify-between">
+          {/* Rule of Thirds Guide Lines */}
           <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none opacity-15">
-            <div className="border-r border-b border-primary" />
-            <div className="border-r border-b border-primary" />
-            <div className="border-b border-primary" />
-            <div className="border-r border-b border-primary" />
-            <div className="border-r border-b border-primary" />
-            <div className="border-b border-primary" />
-            <div className="border-r border-primary" />
-            <div className="border-r border-primary" />
+            <div className="border-r border-b border-white" />
+            <div className="border-r border-b border-white" />
+            <div className="border-b border-white" />
+            <div className="border-r border-b border-white" />
+            <div className="border-r border-b border-white" />
+            <div className="border-b border-white" />
+            <div className="border-r border-white" />
+            <div className="border-r border-white" />
             <div />
           </div>
 
@@ -332,9 +438,9 @@ export const MobileCameraRemote: React.FC = () => {
         </div>
 
         {/* Top Header Bar */}
-        <header className="relative z-20 flex items-center justify-between px-3 py-1 bg-black/60 backdrop-blur-md rounded-lg border border-white/10">
+        <header className="pointer-events-auto flex items-center justify-between px-3 py-1 bg-black/60 backdrop-blur-md rounded-lg border border-white/15 shadow-lg">
           {/* Left: Connection & Room */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <div className="flex items-center gap-1.5">
               <span
                 className={`w-2.5 h-2.5 rounded-full ${
@@ -345,13 +451,13 @@ export const MobileCameraRemote: React.FC = () => {
                 {isConnected ? 'LIVE SYNCED' : 'CONNECTING...'}
               </span>
             </div>
-            <span className="text-[10px] text-white/50 bg-white/5 px-2 py-0.5 rounded border border-white/10">
-              ROOM: {roomId.slice(0, 10)} {peerCount > 1 ? '• LINKED' : ''}
+            <span className="text-[10px] text-white/60 bg-white/10 px-2 py-0.5 rounded border border-white/10">
+              ROOM: {roomId.slice(0, 8)} {peerCount > 1 ? '• 2/2' : ''}
             </span>
           </div>
 
           {/* Center: Lens Focal Length Selector */}
-          <div className="flex items-center gap-1 bg-white/5 p-0.5 rounded-md border border-white/10">
+          <div className="flex items-center gap-1 bg-white/10 p-0.5 rounded-md border border-white/10">
             {['24mm', '35mm', '50mm', '85mm'].map((fl) => (
               <button
                 key={fl}
@@ -367,13 +473,14 @@ export const MobileCameraRemote: React.FC = () => {
             ))}
           </div>
 
-          {/* Right: Gyroscope Status & Calibrate */}
+          {/* Right: Gyro Activation & Zero Calibration */}
           <div className="flex items-center gap-2">
             {!hasGyroPermission ? (
               <button
                 onClick={requestGyroPermission}
-                className="px-2.5 py-1 text-[10px] font-bold bg-primary text-black rounded animate-pulse cursor-pointer shadow"
+                className="px-2.5 py-1 text-[10px] font-bold bg-primary text-black rounded animate-pulse cursor-pointer shadow flex items-center gap-1"
               >
+                <span className="material-symbols-outlined text-[14px]">screen_rotation</span>
                 ENABLE GYRO
               </button>
             ) : (
@@ -391,7 +498,7 @@ export const MobileCameraRemote: React.FC = () => {
 
             <button
               onClick={calibrateZero}
-              className="px-2.5 py-1 text-[10px] font-bold bg-white/10 hover:bg-white/20 border border-white/20 rounded active:scale-95 text-white flex items-center gap-1 cursor-pointer"
+              className="px-2.5 py-1 text-[10px] font-bold bg-white/15 hover:bg-white/25 border border-white/20 rounded active:scale-95 text-white flex items-center gap-1 cursor-pointer"
               title="Calibrate forward zero direction"
             >
               <span className="material-symbols-outlined text-[14px]">my_location</span>
@@ -400,21 +507,18 @@ export const MobileCameraRemote: React.FC = () => {
           </div>
         </header>
 
-        {/* Center Touch Control Field */}
-        <div className="relative z-10 flex-1 flex items-center justify-between px-6">
+        {/* Center Field: Touch Drag Look & Joystick */}
+        <div className="flex-1 flex items-center justify-between px-4 py-2">
           {/* Left Thumb: Virtual Joystick (Dolly & Truck) */}
-          <div className="flex flex-col items-center gap-2">
+          <div className="pointer-events-auto flex flex-col items-center gap-1">
             <div
-              className="relative w-28 h-28 rounded-full bg-white/5 border border-white/20 flex items-center justify-center touch-none backdrop-blur-sm"
+              className="relative w-28 h-28 rounded-full bg-black/40 border-2 border-white/30 flex items-center justify-center touch-none backdrop-blur-md shadow-2xl active:border-primary"
               onTouchStart={handleJoyStart}
               onTouchMove={handleJoyMove}
               onTouchEnd={handleJoyEnd}
               onTouchCancel={handleJoyEnd}
             >
-              {/* Center Rest Indicator */}
-              <div className="w-10 h-10 rounded-full border border-white/20 pointer-events-none" />
-
-              {/* Thumb Stick Knob */}
+              <div className="w-10 h-10 rounded-full border border-white/30 pointer-events-none" />
               <div
                 className="absolute w-12 h-12 rounded-full bg-primary/90 shadow-[0_0_15px_rgba(74,222,128,0.5)] flex items-center justify-center pointer-events-none transition-transform duration-75"
                 style={{
@@ -426,47 +530,40 @@ export const MobileCameraRemote: React.FC = () => {
                 </span>
               </div>
             </div>
-            <span className="text-[9px] text-white/50 tracking-widest uppercase">
-              Dolly / Truck
+            <span className="text-[9px] text-white/70 tracking-widest uppercase font-bold drop-shadow">
+              DOLLY / TRUCK
             </span>
           </div>
 
-          {/* Center Info / Gyro Angles Live Readout */}
-          <div className="flex flex-col items-center text-center opacity-80 pointer-events-none">
-            <div className="text-[10px] text-primary/80 font-mono tracking-widest mb-1">
-              VIRTUAL CAMERA CONTROLLER
-            </div>
-            <div className="text-2xl font-black tracking-wider text-white font-mono">
+          {/* Center Info / Gyro & Timecode Readout */}
+          <div className="flex flex-col items-center text-center pointer-events-none drop-shadow-md">
+            <div className="text-2xl font-black tracking-wider text-white font-mono bg-black/40 px-3 py-1 rounded-lg backdrop-blur-sm border border-white/10">
               {formatTime(hostState.timelineSec)}
-              <span className="text-xs text-white/50 font-normal ml-1">
+              <span className="text-xs text-white/60 font-normal ml-1">
                 / {formatTime(hostState.effectiveDuration)}
               </span>
             </div>
-            {gyroActive && (
-              <div className="flex items-center gap-2 text-[9px] text-white/60 font-mono mt-1">
-                <span>YAW: {Math.round(currentAngles.alpha)}°</span>
-                <span>PITCH: {Math.round(currentAngles.beta)}°</span>
-                <span>ROLL: {Math.round(currentAngles.gamma)}°</span>
-              </div>
-            )}
+            <div className="text-[9px] text-primary font-mono mt-1 bg-black/50 px-2 py-0.5 rounded">
+              {gyroStatusText}
+            </div>
             {hostState.isRecording && (
-              <div className="mt-2 flex items-center gap-1.5 px-3 py-1 bg-red-600/30 border border-red-500 rounded-full animate-pulse">
+              <div className="mt-1.5 flex items-center gap-1.5 px-3 py-1 bg-red-600/60 border border-red-500 rounded-full animate-pulse backdrop-blur-sm">
                 <span className="w-2 h-2 rounded-full bg-red-500" />
-                <span className="text-[10px] font-bold text-red-400 tracking-wider">
+                <span className="text-[10px] font-bold text-white tracking-wider">
                   RECORDING TAKE LIVE
                 </span>
               </div>
             )}
           </div>
 
-          {/* Right Thumb: Touch Look Pad & Height Pedestal */}
-          <div className="flex items-center gap-4">
-            {/* Height Elevation (Pedestal) */}
+          {/* Right Thumb: Full Touch Drag Look Pad & Height Pedestal */}
+          <div className="pointer-events-auto flex items-center gap-3">
+            {/* Elevation Pedestal Up/Down */}
             <div className="flex flex-col gap-2">
               <button
                 onTouchStart={() => handlePedestal(1)}
                 onClick={() => handlePedestal(1)}
-                className="w-10 h-11 bg-white/10 border border-white/20 rounded flex items-center justify-center active:bg-primary active:text-black transition-colors"
+                className="w-10 h-11 bg-black/40 border border-white/30 rounded-lg flex items-center justify-center active:bg-primary active:text-black transition-colors backdrop-blur-md shadow-lg"
                 title="Camera Up"
               >
                 <span className="material-symbols-outlined text-sm">arrow_upward</span>
@@ -474,39 +571,39 @@ export const MobileCameraRemote: React.FC = () => {
               <button
                 onTouchStart={() => handlePedestal(-1)}
                 onClick={() => handlePedestal(-1)}
-                className="w-10 h-11 bg-white/10 border border-white/20 rounded flex items-center justify-center active:bg-primary active:text-black transition-colors"
+                className="w-10 h-11 bg-black/40 border border-white/30 rounded-lg flex items-center justify-center active:bg-primary active:text-black transition-colors backdrop-blur-md shadow-lg"
                 title="Camera Down"
               >
                 <span className="material-symbols-outlined text-sm">arrow_downward</span>
               </button>
             </div>
 
-            {/* Pan / Tilt Look Touch Pad */}
-            <div className="flex flex-col items-center gap-2">
+            {/* Touch Drag Look Pad */}
+            <div className="flex flex-col items-center gap-1">
               <div
-                className="w-28 h-28 rounded-2xl bg-white/5 border border-white/20 flex flex-col items-center justify-center touch-none backdrop-blur-sm active:border-primary/50"
+                className="w-28 h-28 rounded-2xl bg-black/40 border-2 border-white/30 flex flex-col items-center justify-center touch-none backdrop-blur-md active:border-primary shadow-2xl"
                 onTouchStart={handleLookTouchStart}
                 onTouchMove={handleLookTouchMove}
                 onTouchEnd={handleLookTouchEnd}
                 onTouchCancel={handleLookTouchEnd}
               >
-                <span className="material-symbols-outlined text-white/30 text-2xl mb-1">
+                <span className="material-symbols-outlined text-white/50 text-2xl mb-1">
                   open_with
                 </span>
-                <span className="text-[9px] text-white/40 tracking-wider">
-                  DRAG LOOK
+                <span className="text-[9px] text-white/80 tracking-wider font-bold">
+                  TOUCH LOOK
                 </span>
               </div>
-              <span className="text-[9px] text-white/50 tracking-widest uppercase">
-                Pan / Tilt
+              <span className="text-[9px] text-white/70 tracking-widest uppercase font-bold drop-shadow">
+                PAN / TILT
               </span>
             </div>
           </div>
         </div>
 
         {/* Bottom Master Transport Bar */}
-        <footer className="relative z-20 flex items-center justify-between px-4 py-2 bg-black/70 backdrop-blur-md rounded-lg border border-white/10">
-          {/* Left: Timeline Rewind & Play Controls */}
+        <footer className="pointer-events-auto flex items-center justify-between px-4 py-2 bg-black/60 backdrop-blur-md rounded-lg border border-white/15 shadow-lg">
+          {/* Left: Rewind & Play Controls */}
           <div className="flex items-center gap-2">
             <button
               onClick={rewind}
@@ -519,7 +616,7 @@ export const MobileCameraRemote: React.FC = () => {
               onClick={togglePlay}
               className={`px-3 py-1.5 rounded text-[11px] font-bold flex items-center gap-1 active:scale-95 border ${
                 hostState.isPlaying
-                  ? 'bg-primary/20 border-primary text-primary'
+                  ? 'bg-primary/30 border-primary text-primary'
                   : 'bg-white/10 border-white/20 text-white'
               }`}
             >
@@ -534,7 +631,7 @@ export const MobileCameraRemote: React.FC = () => {
           <div className="flex items-center justify-center">
             <button
               onClick={toggleRecord}
-              className={`px-6 py-2.5 rounded-full font-black text-xs tracking-widest flex items-center gap-2 shadow-lg transition-all active:scale-95 ${
+              className={`px-6 py-2.5 rounded-full font-black text-xs tracking-widest flex items-center gap-2 shadow-xl transition-all active:scale-95 ${
                 hostState.isRecording
                   ? 'bg-red-600 text-white shadow-red-600/50 animate-pulse border-2 border-white'
                   : 'bg-red-600 hover:bg-red-500 text-white shadow-red-600/30'
@@ -549,11 +646,11 @@ export const MobileCameraRemote: React.FC = () => {
             </button>
           </div>
 
-          {/* Right: Take Info */}
+          {/* Right: Scene / Take Info */}
           <div className="flex items-center gap-2 text-right">
-            <div className="text-[10px] text-white/60">
-              <span>{hostState.activeTakeName || 'READY FOR TAKE'}</span>
-              <div className="text-white/40 text-[9px]">16:9 FULL HD</div>
+            <div className="text-[10px] text-white/80">
+              <span className="font-bold">{project?.name || 'AURA STAGE'}</span>
+              <div className="text-white/50 text-[9px]">16:9 LIVE MONITOR</div>
             </div>
           </div>
         </footer>
