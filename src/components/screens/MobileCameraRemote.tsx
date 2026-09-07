@@ -140,8 +140,18 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
     };
   }, [roomId]);
 
-  // 5. Gyroscope Permission & Event Listener
+  const isHttp = typeof window !== 'undefined' && window.location.protocol === 'http:';
+
+  // 5. Gyroscope Permission & Auto-Probe
   const requestGyroPermission = async () => {
+    if (isHttp) {
+      setToastMessage('⚠️ Switching to HTTPS for sensor permissions...');
+      setTimeout(() => {
+        window.location.href = window.location.href.replace('http:', 'https:');
+      }, 400);
+      return;
+    }
+
     if (
       typeof DeviceOrientationEvent !== 'undefined' &&
       typeof (DeviceOrientationEvent as any).requestPermission === 'function'
@@ -157,13 +167,13 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           setTimeout(() => setToastMessage(null), 3000);
         } else {
           setGyroStatusText('Touch-Look Swipe Active');
-          setToastMessage('💡 Sensor Denied — Swipe screen to aim camera.');
-          setTimeout(() => setToastMessage(null), 3500);
+          setToastMessage('💡 Permission denied. Tap "aA" in Safari URL bar to allow motion.');
+          setTimeout(() => setToastMessage(null), 4000);
         }
       } catch (err: any) {
         console.warn('Gyro requestPermission error:', err);
         setGyroStatusText('Touch-Look Swipe Active');
-        setToastMessage('💡 Swipe right side of screen to pan & tilt camera!');
+        setToastMessage(`💡 ${err?.message || 'Motion access error'}. Opening via HTTPS is required.`);
         setTimeout(() => setToastMessage(null), 4000);
       }
     } else {
@@ -176,12 +186,38 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
     }
   };
 
+  // Auto-probe non-iOS sensors on mount
+  useEffect(() => {
+    if (
+      typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof (DeviceOrientationEvent as any).requestPermission !== 'function'
+    ) {
+      const probeHandler = (e: DeviceOrientationEvent) => {
+        if (e.alpha !== null || e.beta !== null || e.gamma !== null) {
+          setHasGyroPermission(true);
+          setGyroActive(true);
+          setGyroStatusText('Gyro Active');
+          window.removeEventListener('deviceorientation', probeHandler);
+        }
+      };
+      window.addEventListener('deviceorientation', probeHandler, { once: true });
+      return () => {
+        window.removeEventListener('deviceorientation', probeHandler);
+      };
+    }
+  }, []);
+
   // Device orientation streaming loop
   const lastGyroSendRef = useRef<number>(0);
   useEffect(() => {
     if (!gyroActive) return;
 
     const handleOrientation = (e: DeviceOrientationEvent) => {
+      // Filter empty dummy events
+      if (e.alpha === null && e.beta === null && e.gamma === null) {
+        return;
+      }
+
       const alpha = e.alpha ?? 0;
       const beta = e.beta ?? 0;
       const gamma = e.gamma ?? 0;
@@ -377,6 +413,22 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
   // 10. Landscape 16:9 Live 3D Viewfinder & Director HUD
   return (
     <div className="fixed inset-0 z-50 bg-black text-white flex flex-col select-none overflow-hidden touch-none font-mono">
+      {/* Insecure HTTP Warning Banner */}
+      {isHttp && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 bg-amber-500 text-black px-4 py-1.5 rounded-full backdrop-blur-xl text-[11px] font-bold flex items-center gap-2 shadow-xl">
+          <span className="material-symbols-outlined text-sm">lock_open</span>
+          <span>HTTP Insecure: Gyro requires HTTPS.</span>
+          <button
+            onClick={() => {
+              window.location.href = window.location.href.replace('http:', 'https:');
+            }}
+            className="ml-1 px-2 py-0.5 bg-black text-white rounded text-[10px] uppercase cursor-pointer active:scale-95"
+          >
+            Switch to HTTPS
+          </button>
+        </div>
+      )}
+
       {/* Toast Alert Banner */}
       {toastMessage && (
         <div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-black/85 border border-primary text-primary px-4 py-1.5 rounded-full backdrop-blur-xl text-xs flex items-center gap-2 animate-in fade-in duration-150">
@@ -568,8 +620,13 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
                 / {formatTime(hostState.effectiveDuration)}
               </span>
             </div>
-            <div className="text-[9px] text-primary font-mono mt-1 bg-black/60 px-2 py-0.5 rounded border border-primary/20">
-              {gyroStatusText}
+            <div className="text-[9px] text-primary font-mono mt-1 bg-black/60 px-2 py-0.5 rounded border border-primary/20 flex items-center gap-1.5">
+              <span className={`w-1.5 h-1.5 rounded-full ${gyroActive && currentAngles ? 'bg-[#4ade80]' : 'bg-white/40'}`} />
+              <span>
+                {gyroActive && currentAngles
+                  ? `PITCH ${Math.round(currentAngles.beta)}° • YAW ${Math.round(currentAngles.alpha)}°`
+                  : gyroStatusText}
+              </span>
             </div>
             {hostState.isRecording && (
               <div className="mt-1.5 flex items-center gap-1.5 px-3 py-1 bg-red-600/70 border border-red-500 rounded-full animate-pulse backdrop-blur-sm">

@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv, Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 import { Client, handle_file } from '@gradio/client';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -236,8 +237,8 @@ function apiMiddlewarePlugin(): Plugin {
             success: true,
             ip: lanIp,
             port: 3000,
-            protocol: 'http',
-            url: `http://${lanIp}:3000`
+            protocol: 'https',
+            url: `https://${lanIp}:3000`
           }));
           return;
         }
@@ -1077,7 +1078,7 @@ function apiMiddlewarePlugin(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), apiMiddlewarePlugin()],
+  plugins: [react(), basicSsl(), apiMiddlewarePlugin()],
   server: {
     port: 3000,
     host: true,

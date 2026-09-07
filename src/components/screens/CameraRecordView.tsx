@@ -285,7 +285,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   }, [isRecording, isPlaying, timelineSec, effectiveDuration, focalLength, activeTake, isPhoneConnected]);
 
   const cleanIp = (!lanIp || lanIp === 'localhost' || lanIp === '127.0.0.1') ? '192.168.101.246' : lanIp;
-  const remoteUrl = `http://${cleanIp}:3000/#/remote?room=${remoteRoomId}&project=${currentProject.id}`;
+  const proto = typeof window !== 'undefined' && window.location.protocol === 'http:' ? 'http:' : 'https:';
+  const remoteUrl = `${proto}//${cleanIp}:3000/#/remote?room=${remoteRoomId}&project=${currentProject.id}`;
   const qrSvgHtml = useMemo(() => {
     try {
       const qr = qrcode(0, 'M');
@@ -1240,6 +1241,17 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             <p className="text-xs text-on-surface-variant mb-3 leading-relaxed">
               Scan with your iPhone, iPad or Android device to enable real-time 60 FPS gyroscope camera tracking in 16:9 widescreen.
             </p>
+
+            {/* HTTPS Guidance for Gyroscope */}
+            <div className="mb-3 bg-primary/10 border border-primary/30 rounded-lg p-2.5 text-left text-xs space-y-1">
+              <div className="font-bold text-primary flex items-center gap-1.5 text-[11px]">
+                <span className="material-symbols-outlined text-[14px]">lock</span>
+                HTTPS Required for Mobile Gyroscope
+              </div>
+              <div className="text-[10px] text-on-surface-variant leading-relaxed">
+                Mobile browsers require HTTPS to unlock motion sensors. When opening the link, tap <strong>&ldquo;Show Details&rdquo; &rarr; &ldquo;Visit Website&rdquo;</strong> (iOS Safari) or <strong>&ldquo;Advanced&rdquo; &rarr; &ldquo;Proceed&rdquo;</strong> (Android Chrome) to accept the local dev SSL certificate.
+              </div>
+            </div>
 
             {/* Direct URL & Copy Button */}
             <div className="flex items-center gap-2 mb-4 bg-surface-container-highest/60 p-2 rounded-lg border border-outline-variant/30 text-left">

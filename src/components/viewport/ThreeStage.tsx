@@ -474,32 +474,43 @@ const UnrealCameraNavigation: React.FC<{
     target: new THREE.Vector3(0, 2.2, 6.5),
   });
 
-  // Mobile Device Orientation Tracking Refs
-  const baseDeviceQuatRef = useRef<THREE.Quaternion | null>(null);
-  const invBaseDeviceQuatRef = useRef<THREE.Quaternion>(new THREE.Quaternion());
-  const baseCameraQuatRef = useRef<THREE.Quaternion>(new THREE.Quaternion());
+  // Mobile Gyroscope Device Orientation Tracking & Heading Alignment
+  const alignYawOffsetRef = useRef<number>(0);
+  const alignPitchOffsetRef = useRef<number>(0);
+  const isCalibratedRef = useRef<boolean>(false);
   const targetCamQuatRef = useRef<THREE.Quaternion | null>(null);
 
-  // Calibration routine (re-zero forward direction to match current device pose)
+  // Calibration routine: aligns phone forward direction with virtual camera line-of-sight
   const lastCalibrateRef = useRef<number | undefined>(calibrateTrigger);
-  const calibrateOrientation = useCallback(() => {
-    if (remoteOrientation) {
-      const devQ = computeDeviceQuaternion(
+  const calibrateOrientation = useCallback((devQ?: THREE.Quaternion) => {
+    let q = devQ;
+    if (!q && remoteOrientation) {
+      q = computeDeviceQuaternion(
         remoteOrientation.alpha,
         remoteOrientation.beta,
         remoteOrientation.gamma,
         remoteOrientation.screenOrientation ?? 90
       );
-      baseDeviceQuatRef.current = devQ.clone();
-      invBaseDeviceQuatRef.current.copy(devQ).invert();
-      baseCameraQuatRef.current.copy(camera.quaternion);
-      targetCamQuatRef.current = camera.quaternion.clone();
     }
-  }, [remoteOrientation, camera]);
+    if (q) {
+      // 1. Physical forward vector of the device in room space:
+      const fwdRoom = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+      // 2. Physical room heading (yaw angle around vertical Y axis):
+      const roomYaw = Math.atan2(fwdRoom.x, fwdRoom.z);
+      // 3. Desired camera yaw in virtual studio (facing stage actors):
+      const targetYaw = orbitRef.current.yaw;
+      // 4. Align offset:
+      alignYawOffsetRef.current = targetYaw - roomYaw;
+      alignPitchOffsetRef.current = 0;
+      isCalibratedRef.current = true;
+    }
+  }, [remoteOrientation]);
 
   useEffect(() => {
     if (calibrateTrigger !== undefined && calibrateTrigger !== lastCalibrateRef.current) {
       lastCalibrateRef.current = calibrateTrigger;
+      orbitRef.current.yaw = Math.PI; // Center on actors along -Z
+      orbitRef.current.pitch = -0.15;
       calibrateOrientation();
     }
   }, [calibrateTrigger, calibrateOrientation]);
@@ -508,7 +519,7 @@ const UnrealCameraNavigation: React.FC<{
   useEffect(() => {
     if (!remoteOrientation) {
       targetCamQuatRef.current = null;
-      baseDeviceQuatRef.current = null;
+      isCalibratedRef.current = false;
       return;
     }
 
@@ -519,26 +530,29 @@ const UnrealCameraNavigation: React.FC<{
       remoteOrientation.screenOrientation ?? 90
     );
 
-    if (!baseDeviceQuatRef.current) {
-      baseDeviceQuatRef.current = currentDevQ.clone();
-      invBaseDeviceQuatRef.current.copy(currentDevQ).invert();
-      baseCameraQuatRef.current.copy(camera.quaternion);
+    if (!isCalibratedRef.current) {
+      calibrateOrientation(currentDevQ);
     }
 
-    // Relative delta from calibration point:
-    const relDevQ = new THREE.Quaternion().multiplyQuaternions(
-      invBaseDeviceQuatRef.current,
-      currentDevQ
+    // 1. Pure vertical heading alignment around world Y (preserves true gravity & pitch):
+    const qYawAlign = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0),
+      alignYawOffsetRef.current
     );
+    const alignedQ = qYawAlign.multiply(currentDevQ);
 
-    // Final target camera rotation:
-    targetCamQuatRef.current = new THREE.Quaternion().multiplyQuaternions(
-      baseCameraQuatRef.current,
-      relDevQ
-    );
-  }, [remoteOrientation, camera]);
+    // 2. Apply fine touch pitch offset around camera horizontal right axis if swiped:
+    if (Math.abs(alignPitchOffsetRef.current) > 0.001) {
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(alignedQ);
+      const rgt = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+      const qPitchAlign = new THREE.Quaternion().setFromAxisAngle(rgt, alignPitchOffsetRef.current);
+      targetCamQuatRef.current = qPitchAlign.multiply(alignedQ);
+    } else {
+      targetCamQuatRef.current = alignedQ;
+    }
+  }, [remoteOrientation, calibrateOrientation]);
 
-  // Handle mobile fine touch look deltas
+  // Handle mobile fine touch look deltas (pan & tilt swipe adjustments)
   useEffect(() => {
     if (!remoteLook) return;
     const orbit = orbitRef.current;
@@ -546,11 +560,10 @@ const UnrealCameraNavigation: React.FC<{
     orbit.pitch -= remoteLook.deltaPitch;
     orbit.pitch = Math.max(-1.55, Math.min(1.55, orbit.pitch));
 
-    if (baseCameraQuatRef.current) {
-      const euler = new THREE.Euler(-remoteLook.deltaPitch, -remoteLook.deltaYaw, 0, 'YXZ');
-      const rotQ = new THREE.Quaternion().setFromEuler(euler);
-      baseCameraQuatRef.current.premultiply(rotQ);
-    }
+    // Seamlessly update gyro offsets so orientation tracking maintains the swipe adjustment:
+    alignYawOffsetRef.current -= remoteLook.deltaYaw;
+    alignPitchOffsetRef.current -= remoteLook.deltaPitch;
+    alignPitchOffsetRef.current = Math.max(-1.4, Math.min(1.4, alignPitchOffsetRef.current));
   }, [remoteLook]);
 
   // Track pointer dragging for exact Unreal Look / Pan
@@ -605,11 +618,8 @@ const UnrealCameraNavigation: React.FC<{
         orbit.pitch -= dy * 0.004;
         orbit.pitch = Math.max(-1.55, Math.min(1.55, orbit.pitch));
 
-        if (baseCameraQuatRef.current) {
-          const euler = new THREE.Euler(-dy * 0.004, -dx * 0.004, 0, 'YXZ');
-          const rotQ = new THREE.Quaternion().setFromEuler(euler);
-          baseCameraQuatRef.current.premultiply(rotQ);
-        }
+        alignYawOffsetRef.current -= dx * 0.004;
+        alignPitchOffsetRef.current -= dy * 0.004;
       }
     };
 
