@@ -1083,4 +1083,10 @@ export default defineConfig({
     host: true,
     allowedHosts: true,
   },
+  resolve: {
+    dedupe: ['@react-three/fiber', '@react-three/drei', 'three', 'react', 'react-dom'],
+  },
+  optimizeDeps: {
+    include: ['@react-three/fiber', '@react-three/drei', 'three', 'react', 'react-dom'],
+  },
 });

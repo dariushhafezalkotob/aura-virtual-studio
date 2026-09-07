@@ -236,7 +236,14 @@ export class CameraRemoteSocket {
     }
     if (this.ws) {
       try {
-        this.ws.close();
+        if (this.ws.readyState === WebSocket.OPEN) {
+          this.ws.close();
+        } else if (this.ws.readyState === WebSocket.CONNECTING) {
+          const wsToClose = this.ws;
+          wsToClose.onopen = () => {
+            try { wsToClose.close(); } catch (_) {}
+          };
+        }
       } catch (_) {}
       this.ws = null;
     }

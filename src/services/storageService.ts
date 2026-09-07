@@ -195,8 +195,10 @@ export async function persistProjectsSafely(projects: Project[]): Promise<void> 
   try {
     const serialized = sanitizeProjectsForLocalStorage(projects);
     localStorage.setItem(LOCAL_STORAGE_KEY, serialized);
-  } catch (err) {
-    console.warn('[StorageService] LocalStorage quota exceeded, safely saved to disk and IndexedDB:', err);
+  } catch (err: any) {
+    if (err?.name !== 'QuotaExceededError') {
+      console.warn('[StorageService] LocalStorage setItem error:', err);
+    }
   }
 }
 

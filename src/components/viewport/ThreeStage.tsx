@@ -3,7 +3,6 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
   useGLTF,
   Center,
-  Html,
   TransformControls,
   Environment,
   ContactShadows,
@@ -276,22 +275,6 @@ class ModelErrorBoundary extends Component<
                 <meshBasicMaterial color="#00ffcc" side={THREE.DoubleSide} />
               </mesh>
             )}
-
-            <Html center position={[0, isRoomOrEnv ? 3.6 : 1.2, 0]}>
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelect?.();
-                }}
-                className={`font-label-caps text-[9px] px-2 py-0.5 rounded border backdrop-blur-md cursor-pointer whitespace-nowrap transition-all shadow-md select-none ${
-                  isSelected
-                    ? 'bg-primary/20 text-primary border-primary font-bold'
-                    : 'bg-surface-container/90 text-amber-400 border-amber-500/40 hover:border-amber-400'
-                }`}
-              >
-                {displayName} {isRoomOrEnv ? '(Studio Room)' : '(Click to Select)'}
-              </div>
-            </Html>
           </group>
 
           {isSelected && this.groupRef.current && (
@@ -471,15 +454,6 @@ const GLTFModel: React.FC<{
     </>
   );
 };
-
-const FallbackLoader = () => (
-  <Html center>
-    <div className="flex items-center gap-xs font-label-caps text-[11px] text-primary tracking-widest bg-surface-container/90 px-md py-sm border border-outline-variant/40 backdrop-blur-md whitespace-nowrap">
-      <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
-      LOADING 3D SCENE...
-    </div>
-  </Html>
-);
 
 // 60 FPS Unreal Engine First-Person Flight & Camera Navigation Controller with Mobile Gyro Integration
 const UnrealCameraNavigation: React.FC<{
@@ -1092,7 +1066,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           color="#000000"
         />
 
-        <Suspense fallback={<FallbackLoader />}>
+        <Suspense fallback={null}>
           {/* Ground Grid Helper */}
           {showGrid && (
             <gridHelper

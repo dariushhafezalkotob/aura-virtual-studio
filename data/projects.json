@@ -30,8 +30,8 @@
       {
         "id": "asset_1788716253915",
         "name": "old leader sofa",
-        "glbUrl": "https://dariushh-trellis-3d-engine.hf.space/gradio_api/file=/tmp/gradio/31bce9ca778aaebe153cc2a38a9eb54d896ae0e23d0658ae9acef7ec7227105a/sample.glb",
-        "previewUrl": "https://dariushh-trellis-3d-engine.hf.space/gradio_api/file=/tmp/gradio/ec5b5421de972953d330a09eaf684035789d4f1e6251f72bf3485d57289faec8/sample.mp4",
+        "glbUrl": "",
+        "previewUrl": "",
         "position": [
           -2.6337099751057873,
           0,
@@ -55,8 +55,8 @@
       {
         "id": "asset_1788716458385",
         "name": "shelve full of books",
-        "glbUrl": "https://dariushh-trellis-3d-engine.hf.space/gradio_api/file=/tmp/gradio/17e835ff3c8568aa2f37d49665d2023502fe7a6ce98c500728f6b465aee6b330/sample.glb",
-        "previewUrl": "https://dariushh-trellis-3d-engine.hf.space/gradio_api/file=/tmp/gradio/dff8bbc28e67cbdc24625a71b27df945e9d63a6b2ba035c39f3526fa433688ea/sample.mp4",
+        "glbUrl": "",
+        "previewUrl": "",
         "position": [
           -1.4472604833222253,
           0,
