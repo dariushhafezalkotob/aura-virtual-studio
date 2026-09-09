@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import * as THREE from 'three';
 import { CameraRemoteSocket } from '../../services/cameraRemoteService';
 import { CameraRemoteState, Project, CharacterActor, CameraPoseData, DeviceOrientationData, RemoteMoveData } from '../../types';
 import { ThreeStage } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
+
+/** Which hardware stream is currently driving the aim filter. */
+type SensorSource = 'deviceorientation' | 'deviceorientationabsolute' | 'sensor';
 
 const LENS_FOV_MAP: Record<string, number> = {
   '24mm': 74,
@@ -23,9 +27,27 @@ interface MobileCameraRemoteProps {
 }
 
 export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialProject }) => {
-  // 1. URL Query Extraction
-  const [roomId, setRoomId] = useState<string>('default');
-  const [projectId, setProjectId] = useState<string | null>(null);
+  // 1. URL Query Extraction (Synchronous initialization on first mount)
+  const [roomId, setRoomId] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'aura_main';
+    const hash = window.location.hash;
+    const search = window.location.search;
+    const urlParams = new URLSearchParams(search || (hash.includes('?') ? hash.split('?')[1] : ''));
+    const r = urlParams.get('room');
+    if (r) {
+      try { localStorage.setItem('aura_remote_room_id', r); } catch (_) {}
+      return r;
+    }
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('aura_remote_room_id') : null;
+    return saved || 'aura_main';
+  });
+  const [projectId, setProjectId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const hash = window.location.hash;
+    const search = window.location.search;
+    const urlParams = new URLSearchParams(search || (hash.includes('?') ? hash.split('?')[1] : ''));
+    return urlParams.get('project');
+  });
 
   useEffect(() => {
     const hash = window.location.hash;
@@ -37,22 +59,33 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
     if (p) setProjectId(p);
   }, []);
 
-  // 2. Project & Scene Data (Loaded from prop, WebSocket init_scene, or /api/projects)
-  const [project, setProject] = useState<Project | null>(initialProject || null);
+  // 2. Project & Scene Data (Loaded from /api/projects, WebSocket init_scene, or prop)
+  const [project, setProject] = useState<Project | null>(() => {
+    if (initialProject && (!projectId || initialProject.id === projectId)) {
+      return initialProject;
+    }
+    return null;
+  });
 
   useEffect(() => {
-    if (project) return;
+    // Always fetch projects from server to get full scene geometry & baked room assets
     fetch('/api/projects')
       .then((res) => res.json())
       .then((data) => {
         const projs: Project[] = Array.isArray(data) ? data : data?.projects || [];
         if (projs.length > 0) {
           const match = projectId ? projs.find((p) => p.id === projectId) : null;
-          setProject(match || projs[0]);
+          const chosen = match || projs[0];
+          setProject((prev) => {
+            if (prev && prev.id === chosen.id && prev.scenes && prev.scenes.length > 0) {
+              return prev;
+            }
+            return chosen;
+          });
         }
       })
-      .catch(() => {});
-  }, [project, projectId]);
+      .catch((err) => console.warn('[MobileRemote] Failed to load projects from server:', err));
+  }, [projectId]);
 
   // Synchronize actors from project or default initial actors
   const characters: CharacterActor[] = useMemo(() => {
@@ -97,11 +130,26 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
     focalLength: '35mm',
   });
 
-  // Gyroscope tracking state
-  const [hasGyroPermission, setHasGyroPermission] = useState<boolean>(false);
-  const [gyroActive, setGyroActive] = useState<boolean>(false);
-  const [gyroStatusText, setGyroStatusText] = useState<string>('Touch Drag / Gyro Standby');
+  // Gyroscope tracking state.
+  // DeviceOrientationEvent, DeviceMotionEvent and the Generic Sensor API are all gated behind a
+  // secure context. Over plain http:// the listeners attach without error and simply never fire,
+  // so detect that up front rather than reporting a gyro that can never deliver a reading.
+  const isSecure = typeof window !== 'undefined' && window.isSecureContext;
+  const isIosPermissionRequired =
+    typeof window !== 'undefined' &&
+    typeof DeviceOrientationEvent !== 'undefined' &&
+    typeof (DeviceOrientationEvent as any).requestPermission === 'function';
+
+  const [hasGyroPermission, setHasGyroPermission] = useState<boolean>(() => isSecure && !isIosPermissionRequired);
+  const [gyroActive, setGyroActive] = useState<boolean>(() => isSecure && !isIosPermissionRequired);
+  const [showGyroHelp, setShowGyroHelp] = useState<boolean>(false);
+  const [gyroStatusText, setGyroStatusText] = useState<string>(() => {
+    if (!isSecure) return 'Gyro Blocked — Page Not HTTPS';
+    return isIosPermissionRequired ? 'Touch Drag / Gyro Standby' : 'Gyro Starting...';
+  });
   const [currentAngles, setCurrentAngles] = useState<DeviceOrientationData | null>(null);
+  const orientationRef = useRef<DeviceOrientationData | null>(null);
+  const lastHudUpdateRef = useRef<number>(0);
   const [calibrateTrigger, setCalibrateTrigger] = useState<number>(0);
   const packetCountRef = useRef<number>(0);
   const [livePackets, setLivePackets] = useState<number>(0);
@@ -109,6 +157,7 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
   // Touch Move / Joystick state
   const [activeMove, setActiveMove] = useState<RemoteMoveData | null>(null);
   const [activeLook, setActiveLook] = useState<{ deltaPitch: number; deltaYaw: number } | null>(null);
+  const activeLookRef = useRef<{ deltaPitch: number; deltaYaw: number } | null>(null);
 
   // Initialize WebSocket
   useEffect(() => {
@@ -142,10 +191,20 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
     };
   }, [roomId]);
 
-  // 5. Gyroscope Permission & Multi-Sensor Listener (deviceorientation + devicemotion)
-  const hasRealOrientationRef = useRef<boolean>(false);
+  // 5. Gyroscope Permission & Multi-Sensor Listener
 
   const requestGyroPermission = async () => {
+    // No secure context means no sensor will ever fire, whatever the user taps.
+    if (!isSecure) {
+      setHasGyroPermission(false);
+      setGyroActive(false);
+      setGyroStatusText('Gyro Blocked — Page Not HTTPS');
+      setToastMessage(
+        `⚠️ Motion sensors require HTTPS. Reopen this page as https://${typeof window !== 'undefined' ? window.location.host : ''}`
+      );
+      setTimeout(() => setToastMessage(null), 6000);
+      return;
+    }
     if (
       typeof DeviceOrientationEvent !== 'undefined' &&
       typeof (DeviceOrientationEvent as any).requestPermission === 'function'
@@ -160,170 +219,227 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           setToastMessage('✅ Gyroscope Active! Tilt phone to aim camera.');
           setTimeout(() => setToastMessage(null), 3000);
         } else {
-          setHasGyroPermission(true);
-          setGyroActive(true);
-          setGyroStatusText('Swipe / Tilt Active');
-          setToastMessage('💡 Swipe right side of screen to pan & tilt camera.');
+          // Denied: leave the enable button in place so it can be retried, and fall back to touch.
+          setHasGyroPermission(false);
+          setGyroActive(false);
+          setGyroStatusText('Gyro Denied — Touch Aim Active');
+          setToastMessage('💡 Motion access denied. Swipe right side of screen to pan & tilt.');
           setTimeout(() => setToastMessage(null), 3500);
         }
       } catch (err: any) {
+        // requestPermission throws outside a user gesture, and on insecure origins.
         console.warn('Gyro requestPermission error:', err);
-        setHasGyroPermission(true);
-        setGyroActive(true);
-        setGyroStatusText('Swipe / Tilt Active');
-        setToastMessage('💡 Swipe right side of screen to pan & tilt camera.');
+        setHasGyroPermission(false);
+        setGyroActive(false);
+        setGyroStatusText('Gyro Unavailable — Touch Aim Active');
+        setToastMessage('💡 Could not reach motion sensors. Swipe right side of screen to aim.');
         setTimeout(() => setToastMessage(null), 3500);
       }
     } else {
-      // Android / Standard Browsers
+      // Android / Standard Browsers. The watchdog below downgrades this if nothing reports.
       setHasGyroPermission(true);
       setGyroActive(true);
-      setGyroStatusText('Gyro Active');
-      setToastMessage('✅ Gyroscope Active! Tilt phone to aim camera.');
-      setTimeout(() => setToastMessage(null), 2500);
+      setGyroStatusText('Gyro Starting...');
     }
   };
 
-  // Auto-probe sensors on mount
+  // Auto-probe sensors on mount (Android / Chrome)
   useEffect(() => {
-    if (
-      typeof DeviceOrientationEvent !== 'undefined' &&
-      typeof (DeviceOrientationEvent as any).requestPermission !== 'function'
-    ) {
+    if (isSecure && !isIosPermissionRequired && typeof window !== 'undefined') {
       const probeHandler = (e: DeviceOrientationEvent) => {
         if (e.alpha !== null || e.beta !== null || e.gamma !== null) {
           setHasGyroPermission(true);
           setGyroActive(true);
           setGyroStatusText('Gyro Active');
           window.removeEventListener('deviceorientation', probeHandler);
+          window.removeEventListener('deviceorientationabsolute' as any, probeHandler);
         }
       };
-      window.addEventListener('deviceorientation', probeHandler, { once: true });
+      window.addEventListener('deviceorientation', probeHandler);
+      window.addEventListener('deviceorientationabsolute' as any, probeHandler);
       return () => {
         window.removeEventListener('deviceorientation', probeHandler);
+        window.removeEventListener('deviceorientationabsolute' as any, probeHandler);
       };
     }
-  }, []);
+  }, [isSecure, isIosPermissionRequired]);
 
-  // Multi-Sensor tracking loop (deviceorientation + devicemotion fallback)
+  // 5. Gyroscope Tracking with Angle Unwrapping and Low-Pass Filtering
   const lastGyroSendRef = useRef<number>(0);
-  const integratedYawRef = useRef<number>(180);
-  const lastMotionTimeRef = useRef<number>(0);
+  const smoothAnglesRef = useRef<{ alpha: number; beta: number; gamma: number } | null>(null);
+  const lastRawAlphaRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!gyroActive) return;
+    if (!gyroActive) {
+      smoothAnglesRef.current = null;
+      lastRawAlphaRef.current = null;
+      return;
+    }
 
-    // A. Primary: DeviceOrientationEvent (Absolute Euler angles from compass/gyro)
-    const handleOrientation = (e: DeviceOrientationEvent) => {
-      if (e.alpha === null && e.beta === null && e.gamma === null) {
-        return;
+    let isDisposed = false;
+    let lastEventTime = 0;
+    const baselinePackets = packetCountRef.current;
+
+    // Only one hardware stream may drive the filter. Android Chrome fires both `deviceorientation`
+    // (relative) and `deviceorientationabsolute` (magnetometer-referenced), and the Generic Sensor
+    // API reports a third convention — pushing all of them through one low-pass filter makes yaw
+    // fight itself. The highest-priority source that actually reports wins, and the filter restarts
+    // on handover so the new reference frame is not blended into the old one.
+    const SOURCE_PRIORITY: Record<SensorSource, number> = {
+      sensor: 1,
+      deviceorientation: 2,
+      deviceorientationabsolute: 3,
+    };
+    let activeSource: SensorSource | null = null;
+
+    // Helper to process raw angles from any hardware sensor source
+    const processAngles = (
+      source: SensorSource,
+      rawAlpha: number,
+      rawBeta: number,
+      rawGamma: number,
+      screenAngle: number
+    ) => {
+      if (isDisposed) return;
+      if (activeSource === null) {
+        activeSource = source;
+      } else if (activeSource !== source) {
+        if (SOURCE_PRIORITY[source] <= SOURCE_PRIORITY[activeSource]) return;
+        activeSource = source;
+        smoothAnglesRef.current = null;
+        lastRawAlphaRef.current = null;
       }
-      hasRealOrientationRef.current = true;
+      const now = performance.now();
+      // Drop duplicate events that fire within 4ms
+      if (now - lastEventTime < 4) return;
+      lastEventTime = now;
 
-      const alpha = e.alpha ?? 0;
-      const beta = e.beta ?? 0;
-      const gamma = e.gamma ?? 0;
+      // Angle Unwrapping on Yaw (alpha) across 0° / 360° discontinuity
+      if (lastRawAlphaRef.current === null || !smoothAnglesRef.current) {
+        lastRawAlphaRef.current = rawAlpha;
+        smoothAnglesRef.current = {
+          alpha: rawAlpha,
+          beta: rawBeta,
+          gamma: rawGamma,
+        };
+      } else {
+        let diff = rawAlpha - lastRawAlphaRef.current;
+        while (diff < -180) diff += 360;
+        while (diff > 180) diff -= 360;
+        lastRawAlphaRef.current = rawAlpha;
 
-      let screenAngle = 90;
-      if (typeof window.screen?.orientation?.angle === 'number') {
-        screenAngle = window.screen.orientation.angle;
-      } else if (typeof window.orientation === 'number') {
-        screenAngle = window.orientation;
+        // Smooth low-pass accumulation for silky 60 FPS aiming without jitter or drift
+        const factor = 0.5;
+        const nextAlpha = ((smoothAnglesRef.current.alpha + diff * factor) % 360 + 360) % 360;
+        const nextBeta = smoothAnglesRef.current.beta + (rawBeta - smoothAnglesRef.current.beta) * factor;
+        const nextGamma = smoothAnglesRef.current.gamma + (rawGamma - smoothAnglesRef.current.gamma) * factor;
+
+        smoothAnglesRef.current.alpha = nextAlpha;
+        smoothAnglesRef.current.beta = nextBeta;
+        smoothAnglesRef.current.gamma = nextGamma;
       }
 
       const orientData: DeviceOrientationData = {
-        alpha,
-        beta,
-        gamma,
+        alpha: smoothAnglesRef.current.alpha,
+        beta: smoothAnglesRef.current.beta,
+        gamma: smoothAnglesRef.current.gamma,
         screenOrientation: screenAngle,
       };
 
-      setCurrentAngles(orientData);
-      packetCountRef.current++;
-      if (packetCountRef.current % 10 === 0) {
-        setLivePackets(packetCountRef.current);
+      orientationRef.current = orientData;
+      if (packetCountRef.current === baselinePackets) {
+        setGyroStatusText('Gyro Active');
       }
+      packetCountRef.current++;
 
-      const now = performance.now();
-      if (now - lastGyroSendRef.current > 16) {
+      // Realtime 60 FPS gyro packet streaming to Host Studio
+      if (now - lastGyroSendRef.current >= 15) {
         lastGyroSendRef.current = now;
         socketRef.current?.sendGyro(orientData);
       }
-    };
 
-    // B. Fallback: DeviceMotionEvent (Physical tilt from gravity accelerometer + rotationRate)
-    const handleMotion = (e: DeviceMotionEvent) => {
-      if (hasRealOrientationRef.current) return;
-
-      const now = performance.now();
-      const dt = lastMotionTimeRef.current > 0 ? (now - lastMotionTimeRef.current) / 1000 : 0.016;
-      lastMotionTimeRef.current = now;
-
-      const acc = e.accelerationIncludingGravity;
-      const rot = e.rotationRate;
-
-      let screenAngle = 90;
-      if (typeof window.screen?.orientation?.angle === 'number') {
-        screenAngle = window.screen.orientation.angle;
-      } else if (typeof window.orientation === 'number') {
-        screenAngle = window.orientation;
-      }
-
-      if (acc && (acc.x !== null || acc.y !== null || acc.z !== null)) {
-        const ax = acc.x ?? 0;
-        const ay = acc.y ?? 0;
-        const az = acc.z ?? 0;
-
-        // In landscape mode (90deg), ax represents forward-back tilt
-        let pitchDeg = 0;
-        const denom = Math.sqrt(ay * ay + az * az) || 0.001;
-        if (screenAngle === 90) {
-          pitchDeg = Math.atan2(ax, denom) * (180 / Math.PI);
-        } else {
-          pitchDeg = Math.atan2(-ax, denom) * (180 / Math.PI);
-        }
-
-        // Integrate yaw from rotationRate (gamma in landscape is yaw around vertical axis)
-        if (rot && rot.gamma !== null && Math.abs(rot.gamma) > 0.5) {
-          integratedYawRef.current -= (rot.gamma || 0) * dt;
-        }
-
-        const orientData: DeviceOrientationData = {
-          alpha: integratedYawRef.current,
-          beta: 90 - pitchDeg,
-          gamma: 0,
-          screenOrientation: screenAngle,
-        };
-
+      // Throttle React state HUD update to ~4 Hz (every 250ms) to eliminate main-thread stutter
+      if (now - lastHudUpdateRef.current > 250) {
+        lastHudUpdateRef.current = now;
+        setLivePackets(packetCountRef.current);
         setCurrentAngles(orientData);
-        packetCountRef.current++;
-        if (packetCountRef.current % 10 === 0) {
-          setLivePackets(packetCountRef.current);
-        }
-
-        if (now - lastGyroSendRef.current > 16) {
-          lastGyroSendRef.current = now;
-          socketRef.current?.sendGyro(orientData);
-        }
       }
     };
+
+    const readScreenAngle = (): number => {
+      if (typeof window.screen?.orientation?.angle === 'number') return window.screen.orientation.angle;
+      if (typeof window.orientation === 'number') return window.orientation;
+      return 90;
+    };
+
+    // 1. Standard W3C DeviceOrientation listeners
+    const makeOrientationHandler = (source: SensorSource) => (e: DeviceOrientationEvent) => {
+      if (e.alpha === null && e.beta === null && e.gamma === null) return;
+      processAngles(source, e.alpha ?? 0, e.beta ?? 0, e.gamma ?? 0, readScreenAngle());
+    };
+    const handleOrientation = makeOrientationHandler('deviceorientation');
+    const handleOrientationAbsolute = makeOrientationHandler('deviceorientationabsolute');
 
     window.addEventListener('deviceorientation', handleOrientation, true);
-    window.addEventListener('deviceorientationabsolute', handleOrientation as any, true);
-    window.addEventListener('devicemotion', handleMotion, true);
+    window.addEventListener('deviceorientationabsolute' as any, handleOrientationAbsolute, true);
+
+    // 2. Modern W3C Generic Sensor API (RelativeOrientationSensor / AbsoluteOrientationSensor)
+    let genericSensor: any = null;
+    try {
+      const SensorClass = (window as any).RelativeOrientationSensor || (window as any).AbsoluteOrientationSensor;
+      if (SensorClass) {
+        genericSensor = new SensorClass({ frequency: 60, referenceFrame: 'device' });
+        genericSensor.addEventListener('reading', () => {
+          const q = genericSensor.quaternion;
+          if (!q || q.length < 4) return;
+          // Calculate Euler angles from sensor quaternion
+          const qObj = new THREE.Quaternion(q[0], q[1], q[2], q[3]);
+          const euler = new THREE.Euler().setFromQuaternion(qObj, 'YXZ');
+          const a = ((euler.y * 180 / Math.PI) % 360 + 360) % 360;
+          const b = euler.x * 180 / Math.PI;
+          const g = euler.z * 180 / Math.PI;
+          processAngles('sensor', a, b, g, readScreenAngle());
+        });
+        genericSensor.addEventListener('error', (event: any) => {
+          console.warn('[GenericSensor error]', event.error);
+        });
+        genericSensor.start();
+      }
+    } catch (_) {}
+
+    // 3. User Gesture Touch to Wake Sensors
+    const handleUserTouchWake = () => {
+      if (packetCountRef.current === 0) {
+        requestGyroPermission();
+        try { genericSensor?.start(); } catch (_) {}
+      }
+    };
+    window.addEventListener('touchstart', handleUserTouchWake, { passive: true });
+    window.addEventListener('click', handleUserTouchWake, { passive: true });
+
+    // 4. Sensor watchdog. Listeners attach without error on platforms that will never deliver a
+    // reading, so downgrade the badge instead of leaving a green "Gyro Active" claim standing.
+    const watchdog = setTimeout(() => {
+      if (isDisposed || packetCountRef.current > baselinePackets) return;
+      setGyroStatusText(isSecure ? 'No Sensor Data — Touch Aim Active' : 'Gyro Blocked — Page Not HTTPS');
+    }, 2500);
 
     return () => {
+      isDisposed = true;
+      clearTimeout(watchdog);
       window.removeEventListener('deviceorientation', handleOrientation, true);
-      window.removeEventListener('deviceorientationabsolute', handleOrientation as any, true);
-      window.removeEventListener('devicemotion', handleMotion, true);
+      window.removeEventListener('deviceorientationabsolute' as any, handleOrientationAbsolute, true);
+      window.removeEventListener('touchstart', handleUserTouchWake);
+      window.removeEventListener('click', handleUserTouchWake);
+      try { genericSensor?.stop(); } catch (_) {}
     };
-  }, [gyroActive]);
+  }, [gyroActive, isSecure]);
 
   // 6. Camera Pose Streaming: as local camera moves in ThreeStage, stream pose to desktop!
   const lastPoseSendRef = useRef<number>(0);
   const handleLocalCameraPose = useCallback((pose: CameraPoseData) => {
     const now = performance.now();
-    if (now - lastPoseSendRef.current < 16) return; // ~60 FPS
+    if (now - lastPoseSendRef.current < 15) return; // ~60 FPS
     lastPoseSendRef.current = now;
     socketRef.current?.sendCameraPose(pose);
   }, []);
@@ -343,6 +459,7 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
     lookTouchStartRef.current = { x: t.clientX, y: t.clientY };
 
     const lookDelta = { deltaPitch: dy * 0.005, deltaYaw: dx * 0.005 };
+    activeLookRef.current = lookDelta;
     setActiveLook(lookDelta);
     socketRef.current?.sendLook(lookDelta.deltaPitch, lookDelta.deltaYaw);
   };
@@ -356,16 +473,15 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
   const joyStartRef = useRef<{ x: number; y: number } | null>(null);
   const [joyOffset, setJoyOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const moveIntervalRef = useRef<any>(null);
-  const activeMoveRef = useRef<{ x: number; z: number; y: number }>({ x: 0, z: 0, y: 0 });
+  const activeMoveRef = useRef<RemoteMoveData | null>({ moveX: 0, moveZ: 0, moveY: 0 });
 
   const startMoveLoop = useCallback(() => {
     if (moveIntervalRef.current) return;
     moveIntervalRef.current = setInterval(() => {
-      const { x, z, y } = activeMoveRef.current;
-      if (x !== 0 || z !== 0 || y !== 0) {
-        const moveData = { moveX: x, moveZ: z, moveY: y };
-        setActiveMove(moveData);
-        socketRef.current?.sendMove(moveData);
+      const cur = activeMoveRef.current;
+      if (cur && (cur.moveX !== 0 || cur.moveZ !== 0 || cur.moveY !== 0)) {
+        setActiveMove({ ...cur });
+        socketRef.current?.sendMove(cur);
       }
     }, 16);
   }, []);
@@ -375,7 +491,7 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
       clearInterval(moveIntervalRef.current);
       moveIntervalRef.current = null;
     }
-    activeMoveRef.current = { x: 0, z: 0, y: 0 };
+    activeMoveRef.current = { moveX: 0, moveZ: 0, moveY: 0 };
     setActiveMove(null);
     socketRef.current?.sendMove({ moveX: 0, moveZ: 0, moveY: 0 });
   }, []);
@@ -401,8 +517,11 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
 
     setJoyOffset({ x: dx, y: dy });
 
-    activeMoveRef.current.x = dx / maxRadius;
-    activeMoveRef.current.z = -dy / maxRadius;
+    if (!activeMoveRef.current) {
+      activeMoveRef.current = { moveX: 0, moveZ: 0, moveY: 0 };
+    }
+    activeMoveRef.current.moveX = dx / maxRadius;
+    activeMoveRef.current.moveZ = -dy / maxRadius;
   };
 
   const handleJoyEnd = () => {
@@ -413,10 +532,80 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
 
   // Elevation (Pedestal Up / Down)
   const handlePedestal = (dir: 1 | -1) => {
-    const moveData = { moveX: 0, moveZ: 0, moveY: dir * 0.4 };
+    if (!activeMoveRef.current) {
+      activeMoveRef.current = { moveX: 0, moveZ: 0, moveY: 0 };
+    }
+    activeMoveRef.current.moveY = dir * 0.4;
+    const moveData: RemoteMoveData = { moveX: 0, moveZ: 0, moveY: dir * 0.4 };
     setActiveMove(moveData);
     socketRef.current?.sendMove(moveData);
-    setTimeout(() => setActiveMove(null), 100);
+    setTimeout(() => {
+      if (activeMoveRef.current) activeMoveRef.current.moveY = 0;
+      setActiveMove(null);
+    }, 120);
+  };
+
+  // 8.2 Virtual Aim Joystick (Right thumb: Pan & Tilt continuous rotation)
+  const lookJoyStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [lookJoyOffset, setLookJoyOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const lookJoyIntervalRef = useRef<any>(null);
+  const activeLookJoyRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0 });
+
+  const startLookJoyLoop = useCallback(() => {
+    if (lookJoyIntervalRef.current) return;
+    lookJoyIntervalRef.current = setInterval(() => {
+      const { yaw, pitch } = activeLookJoyRef.current;
+      if (yaw !== 0 || pitch !== 0) {
+        const deltaYaw = yaw * 0.035;
+        const deltaPitch = pitch * 0.025;
+        const lookData = { deltaPitch, deltaYaw };
+        activeLookRef.current = lookData;
+        setActiveLook(lookData);
+        socketRef.current?.sendLook(deltaPitch, deltaYaw);
+      }
+    }, 16);
+  }, []);
+
+  const stopLookJoyLoop = useCallback(() => {
+    if (lookJoyIntervalRef.current) {
+      clearInterval(lookJoyIntervalRef.current);
+      lookJoyIntervalRef.current = null;
+    }
+    activeLookJoyRef.current = { yaw: 0, pitch: 0 };
+    setActiveLook(null);
+  }, []);
+
+  const handleLookJoyStart = (e: React.TouchEvent) => {
+    e.stopPropagation();
+    const t = e.touches[0];
+    lookJoyStartRef.current = { x: t.clientX, y: t.clientY };
+    startLookJoyLoop();
+  };
+
+  const handleLookJoyMove = (e: React.TouchEvent) => {
+    e.stopPropagation();
+    if (!lookJoyStartRef.current) return;
+    const t = e.touches[0];
+    const maxRadius = 45;
+    let dx = t.clientX - lookJoyStartRef.current.x;
+    let dy = t.clientY - lookJoyStartRef.current.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist > maxRadius) {
+      dx = (dx / dist) * maxRadius;
+      dy = (dy / dist) * maxRadius;
+    }
+
+    setLookJoyOffset({ x: dx, y: dy });
+    activeLookJoyRef.current.yaw = dx / maxRadius;
+    activeLookJoyRef.current.pitch = dy / maxRadius;
+  };
+
+  const handleLookJoyEnd = (e: React.TouchEvent) => {
+    e.stopPropagation();
+    lookJoyStartRef.current = null;
+    setLookJoyOffset({ x: 0, y: 0 });
+    stopLookJoyLoop();
   };
 
   // Actions
@@ -489,6 +678,7 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
       {/* LIVE 3D SCENE VIEWPORT (Renders Stage & Characters on Phone!) */}
       <div className="absolute inset-0 z-0">
         <ThreeStage
+          isMobileViewfinder={true}
           assets={project?.scenes || []}
           selectedAssetId={null}
           characters={characters}
@@ -503,8 +693,11 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           isPlaybackTake={false}
           showGrid={true}
           remoteOrientation={gyroActive ? currentAngles : null}
+          remoteOrientationRef={gyroActive ? orientationRef : undefined}
           remoteMove={activeMove}
+          remoteMoveRef={activeMoveRef}
           remoteLook={activeLook}
+          remoteLookRef={activeLookRef}
           calibrateTrigger={calibrateTrigger}
           onCameraPose={handleLocalCameraPose}
         />
@@ -672,28 +865,20 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
             </div>
             <div className="flex flex-col items-center gap-1 mt-1">
               <div className="text-[9px] text-primary font-mono bg-black/60 px-2 py-0.5 rounded border border-primary/20 flex items-center gap-1.5">
-                <span className={`w-1.5 h-1.5 rounded-full ${gyroActive && packetCountRef.current > 0 ? 'bg-[#4ade80] animate-pulse' : 'bg-amber-400'}`} />
+                <span className={`w-1.5 h-1.5 rounded-full ${gyroActive && packetCountRef.current > 0 ? 'bg-[#4ade80] animate-pulse' : 'bg-cyan-400'}`} />
                 <span>
                   {gyroActive && currentAngles && packetCountRef.current > 0
-                    ? `LIVE GYRO (${livePackets > 30 ? '60fps' : `${livePackets}pkts`}): PITCH ${Math.round(currentAngles.beta)}° • YAW ${Math.round(currentAngles.alpha)}°`
-                    : gyroActive
-                    ? 'Sensors Standby (Tilt Phone or Swipe)'
-                    : gyroStatusText}
+                    ? `HARDWARE GYRO (${livePackets > 30 ? '60fps' : `${livePackets}pkts`}): PITCH ${Math.round(currentAngles.beta)}° • YAW ${Math.round(currentAngles.alpha)}°`
+                    : gyroStatusText || 'GIMBAL JOYSTICKS & TOUCH AIM ACTIVE'}
                 </span>
-              </div>
-
-              {/* If gyro is on but 0 sensor packets arrive (e.g. mobile browser blocks sensors on HTTP) */}
-              {gyroActive && packetCountRef.current === 0 && typeof window !== 'undefined' && window.location.protocol === 'http:' && (
                 <button
-                  onClick={() => {
-                    window.location.href = `https://${window.location.hostname}:3443${window.location.pathname}${window.location.search}${window.location.hash}`;
-                  }}
-                  className="pointer-events-auto px-2.5 py-1 bg-amber-400/90 hover:bg-amber-400 text-black text-[10px] font-bold rounded shadow-lg flex items-center gap-1 cursor-pointer active:scale-95"
+                  onClick={() => setShowGyroHelp(true)}
+                  className="pointer-events-auto ml-1 w-4 h-4 rounded-full bg-white/10 hover:bg-white/20 text-white/70 text-[9px] flex items-center justify-center font-bold cursor-pointer"
+                  title="Gyro & Aiming Info"
                 >
-                  <span className="material-symbols-outlined text-xs">lock</span>
-                  Unlock Hardware Gyro (HTTPS:3443)
+                  ?
                 </button>
-              )}
+              </div>
             </div>
             {hostState.isRecording && (
               <div className="mt-1.5 flex items-center gap-1.5 px-3 py-1 bg-red-600/70 border border-red-500 rounded-full animate-pulse backdrop-blur-sm">
@@ -705,18 +890,37 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
             )}
           </div>
 
-          {/* Right 55% Full Screen Surface: Wide Touch-Drag Look Pad (Pan & Tilt) */}
+          {/* Right Side: Virtual Aim Joystick (Pan & Tilt) + Wide Touch-Drag Look Pad */}
           <div
-            className="pointer-events-auto absolute right-0 top-0 bottom-0 w-[55%] z-20 touch-none flex flex-col justify-end items-end p-3 select-none"
+            className="pointer-events-auto absolute right-0 top-0 bottom-0 w-[55%] z-20 touch-none flex items-center justify-end px-4 py-2 select-none"
             onTouchStart={handleLookTouchStart}
             onTouchMove={handleLookTouchMove}
             onTouchEnd={handleLookTouchEnd}
             onTouchCancel={handleLookTouchEnd}
           >
-            <div className="bg-black/40 border border-white/20 rounded-full px-3 py-1 flex items-center gap-1.5 backdrop-blur-sm pointer-events-none opacity-60">
-              <span className="material-symbols-outlined text-sm text-primary">touch_app</span>
-              <span className="text-[9px] font-bold tracking-wider text-white uppercase font-mono">
-                Swipe Screen to Aim
+            {/* Pan & Tilt Aim Joystick */}
+            <div className="flex flex-col items-center gap-1 z-30 pointer-events-auto">
+              <div
+                className="relative w-28 h-28 rounded-full bg-black/50 border-2 border-white/30 flex items-center justify-center touch-none backdrop-blur-md shadow-2xl active:border-cyan-400"
+                onTouchStart={handleLookJoyStart}
+                onTouchMove={handleLookJoyMove}
+                onTouchEnd={handleLookJoyEnd}
+                onTouchCancel={handleLookJoyEnd}
+              >
+                <div className="w-10 h-10 rounded-full border border-white/30 pointer-events-none" />
+                <div
+                  className="absolute w-12 h-12 rounded-full bg-cyan-400/90 shadow-[0_0_15px_rgba(34,211,238,0.5)] flex items-center justify-center pointer-events-none transition-transform duration-75"
+                  style={{
+                    transform: `translate(${lookJoyOffset.x}px, ${lookJoyOffset.y}px)`,
+                  }}
+                >
+                  <span className="material-symbols-outlined text-black text-sm">
+                    videocam
+                  </span>
+                </div>
+              </div>
+              <span className="text-[9px] text-cyan-400/90 tracking-widest uppercase font-bold drop-shadow">
+                PAN / TILT AIM
               </span>
             </div>
           </div>
@@ -776,6 +980,55 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           </div>
         </footer>
       </div>
+
+      {/* Gyro & Chrome Settings Diagnostic Modal */}
+      {showGyroHelp && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#16181c] border border-white/20 rounded-2xl p-5 max-w-sm w-full text-left space-y-3 font-sans shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <div className="flex items-center gap-2 font-bold text-white text-xs">
+                <span className="material-symbols-outlined text-primary text-base">screen_rotation</span>
+                Mobile Gyroscope & Aiming
+              </div>
+              <button
+                onClick={() => setShowGyroHelp(false)}
+                className="w-6 h-6 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="text-[11px] text-white/80 space-y-2 leading-relaxed">
+              <p>
+                <strong className="text-white">Dual Joysticks:</strong> Use the left stick to Dolly/Truck (walk), and the right stick (or swipe screen) to Pan/Tilt aim.
+              </p>
+              <p>
+                <strong className="text-white">Enable Physical Phone Tilt:</strong>{' '}
+                {isSecure
+                  ? 'This page is on a secure origin, so the motion sensors are allowed. If the badge still reads "No Sensor Data", the browser or device is not reporting orientation — use touch aim instead.'
+                  : 'iOS and Android only expose the motion sensors on a secure origin. This page is loaded over plain HTTP, so no reading will ever arrive. Reopen it over HTTPS:'}
+              </p>
+              {!isSecure && (
+                <>
+                  <div className="bg-black/60 p-2 rounded border border-white/15 font-mono text-[9px] text-primary select-all break-all">
+                    https://{typeof window !== 'undefined' ? window.location.host : '192.168.100.38:3000'}
+                  </div>
+                  <p className="text-[10px] text-white/60">
+                    The dev server uses a self-signed certificate, so tap <strong>Advanced</strong> then{' '}
+                    <strong>Proceed</strong> on the warning once. Re-scan the pairing QR code from the desktop
+                    to get the correct link.
+                  </p>
+                </>
+              )}
+            </div>
+            <button
+              onClick={() => setShowGyroHelp(false)}
+              className="w-full py-2 bg-primary text-black font-bold rounded-lg text-xs cursor-pointer active:scale-95"
+            >
+              GOT IT
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

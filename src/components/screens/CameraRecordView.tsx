@@ -183,21 +183,34 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   };
 
   // --- Mobile Remote Controller Integration ---
-  const [remoteRoomId] = useState<string>(() => `take_${Math.random().toString(36).substring(2, 8)}`);
+  const [remoteRoomId] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash;
+      const search = window.location.search;
+      const urlParams = new URLSearchParams(search || (hash.includes('?') ? hash.split('?')[1] : ''));
+      const r = urlParams.get('room');
+      if (r) return r;
+    }
+    return 'aura_main';
+  });
   const [lanIp, setLanIp] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const host = window.location.hostname;
       if (host && host !== 'localhost' && host !== '127.0.0.1') return host;
     }
-    return '192.168.101.246';
+    return '192.168.100.38';
   });
   const [isPhoneConnected, setIsPhoneConnected] = useState<boolean>(false);
   const [phonePeerCount, setPhonePeerCount] = useState<number>(0);
   const [remoteOrientation, setRemoteOrientation] = useState<DeviceOrientationData | null>(null);
+  const remoteOrientationRef = useRef<DeviceOrientationData | null>(null);
   const [remoteMove, setRemoteMove] = useState<RemoteMoveData | null>(null);
+  const remoteMoveRef = useRef<RemoteMoveData | null>(null);
   const [remoteLook, setRemoteLook] = useState<{ deltaPitch: number; deltaYaw: number } | null>(null);
+  const remoteLookRef = useRef<{ deltaPitch: number; deltaYaw: number } | null>(null);
   const [calibrateTrigger, setCalibrateTrigger] = useState<number>(0);
   const [incomingCameraPose, setIncomingCameraPose] = useState<CameraPoseData | null>(null);
+  const incomingCameraPoseRef = useRef<CameraPoseData | null>(null);
   const remoteSocketRef = useRef<CameraRemoteSocket | null>(null);
 
   // Auto-fetch LAN IP address from server endpoint
@@ -236,16 +249,27 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         setTimeout(() => setToastMessage(null), 4000);
       } else if (msg.type === 'peer_left' && msg.role === 'remote') {
         setIsPhoneConnected(false);
+        incomingCameraPoseRef.current = null;
         setIncomingCameraPose(null);
+        remoteOrientationRef.current = null;
+        setRemoteOrientation(null);
+        remoteMoveRef.current = null;
+        setRemoteMove(null);
         setToastMessage('📱 Mobile Phone Disconnected.');
         setTimeout(() => setToastMessage(null), 3000);
       } else if (msg.type === 'camera_pose') {
-        setIncomingCameraPose(msg.pose);
+        incomingCameraPoseRef.current = msg.pose;
+        if (!incomingCameraPose) {
+          setIncomingCameraPose(msg.pose);
+        }
       } else if (msg.type === 'gyro') {
+        remoteOrientationRef.current = msg.orientation;
         setRemoteOrientation(msg.orientation);
       } else if (msg.type === 'move') {
+        remoteMoveRef.current = msg.move;
         setRemoteMove(msg.move);
       } else if (msg.type === 'look') {
+        remoteLookRef.current = { deltaPitch: msg.deltaPitch, deltaYaw: msg.deltaYaw };
         setRemoteLook({ deltaPitch: msg.deltaPitch, deltaYaw: msg.deltaYaw });
       } else if (msg.type === 'toggle_record') {
         handleToggleRecordRef.current();
@@ -284,11 +308,12 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     }
   }, [isRecording, isPlaying, timelineSec, effectiveDuration, focalLength, activeTake, isPhoneConnected]);
 
-  const [useSecurePort, setUseSecurePort] = useState<boolean>(true);
-  const cleanIp = (!lanIp || lanIp === 'localhost' || lanIp === '127.0.0.1') ? '192.168.101.246' : lanIp;
-  const proto = useSecurePort ? 'https:' : (typeof window !== 'undefined' ? window.location.protocol : 'http:');
-  const port = useSecurePort ? 3443 : 3000;
-  const remoteUrl = `${proto}//${cleanIp}:${port}/#/remote?room=${remoteRoomId}&project=${currentProject.id}`;
+  const cleanIp = (!lanIp || lanIp === 'localhost' || lanIp === '127.0.0.1') ? '192.168.100.38' : lanIp;
+  // The phone's gyro only reports in a secure context, so pair over whatever scheme the dev server
+  // is actually serving (https) rather than a hardcoded http:// that silently kills the sensors.
+  const remoteScheme = typeof window !== 'undefined' ? window.location.protocol.replace(':', '') : 'https';
+  const remotePort = (typeof window !== 'undefined' && window.location.port) || '3000';
+  const remoteUrl = `${remoteScheme}://${cleanIp}:${remotePort}/#/remote?room=${remoteRoomId}&project=${currentProject.id}`;
   const qrSvgHtml = useMemo(() => {
     try {
       const qr = qrcode(0, 'M');
@@ -591,10 +616,14 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         playbackTake={activeTake}
         showCameraTrajectory={!isExportingVideo}
         remoteOrientation={remoteOrientation}
+        remoteOrientationRef={remoteOrientationRef}
         remoteMove={remoteMove}
+        remoteMoveRef={remoteMoveRef}
         remoteLook={remoteLook}
+        remoteLookRef={remoteLookRef}
         calibrateTrigger={calibrateTrigger}
         incomingCameraPose={incomingCameraPose}
+        incomingCameraPoseRef={incomingCameraPoseRef}
         onCanvasReady={(canvas) => {
           webglCanvasRef.current = canvas;
         }}
@@ -1210,30 +1239,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
               </span>
             </div>
 
-            {/* Port / Connection Mode Toggle */}
-            <div className="flex items-center justify-center p-0.5 bg-surface-container-highest rounded-lg mb-3 border border-outline-variant/30 text-xs">
-              <button
-                onClick={() => setUseSecurePort(true)}
-                className={`flex-1 py-1 px-2 rounded-md font-mono text-[11px] font-bold transition-colors flex items-center justify-center gap-1 cursor-pointer ${
-                  useSecurePort ? 'bg-primary text-black shadow' : 'text-on-surface-variant hover:text-on-surface'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[13px]">lock</span>
-                HTTPS (Gyro Ready)
-              </button>
-              <button
-                onClick={() => setUseSecurePort(false)}
-                className={`flex-1 py-1 px-2 rounded-md font-mono text-[11px] font-bold transition-colors flex items-center justify-center gap-1 cursor-pointer ${
-                  !useSecurePort ? 'bg-surface-variant text-on-surface shadow' : 'text-on-surface-variant hover:text-on-surface'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[13px]">wifi</span>
-                HTTP (Port 3000)
-              </button>
-            </div>
-
             {/* Dynamic QR Code Box */}
-            <div className="w-52 h-52 mx-auto bg-white p-3 rounded-xl flex flex-col items-center justify-center border border-outline-variant/40 mb-3 shadow-inner">
+            <div className="w-52 h-52 mx-auto bg-white p-3 rounded-xl flex flex-col items-center justify-center border border-outline-variant/40 my-3 shadow-inner">
               {qrSvgHtml ? (
                 <div
                   className="w-full h-full flex items-center justify-center [&>svg]:w-full [&>svg]:h-full"
@@ -1262,27 +1269,15 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
               </span>
             </div>
 
-            {useSecurePort ? (
-              <div className="mb-3 bg-primary/10 border border-primary/30 rounded-lg p-2.5 text-left text-xs space-y-1">
-                <div className="font-bold text-primary flex items-center gap-1.5 text-[11px]">
-                  <span className="material-symbols-outlined text-[14px]">verified_user</span>
-                  HTTPS Recommended: Unlocks Hardware Gyroscope
-                </div>
-                <div className="text-[10px] text-on-surface-variant leading-relaxed">
-                  When opening on your phone, tap <strong>&ldquo;Show Details&rdquo; &rarr; &ldquo;Visit Website&rdquo;</strong> (iOS Safari) or <strong>&ldquo;Advanced&rdquo; &rarr; &ldquo;Proceed&rdquo;</strong> (Android Chrome) to grant hardware motion access.
-                </div>
+            <div className="mb-3 bg-white/5 border border-white/10 rounded-lg p-2.5 text-left text-xs space-y-1">
+              <div className="font-bold text-white flex items-center gap-1.5 text-[11px]">
+                <span className="material-symbols-outlined text-[14px]">photo_camera</span>
+                Scan to Open Mobile Viewfinder
               </div>
-            ) : (
-              <div className="mb-3 bg-white/5 border border-white/10 rounded-lg p-2.5 text-left text-xs space-y-1">
-                <div className="font-bold text-white flex items-center gap-1.5 text-[11px]">
-                  <span className="material-symbols-outlined text-[14px]">touch_app</span>
-                  HTTP Standard Connection
-                </div>
-                <div className="text-[10px] text-on-surface-variant leading-relaxed">
-                  Connect without SSL warnings. Uses touch swipe look and fallback sensors.
-                </div>
+              <div className="text-[10px] text-on-surface-variant leading-relaxed">
+                Aim phone to track virtual camera. Use joystick on left to dolly/truck and swipe screen to aim.
               </div>
-            )}
+            </div>
 
             {/* Direct URL & Copy Button */}
             <div className="flex items-center gap-2 mb-4 bg-surface-container-highest/60 p-2 rounded-lg border border-outline-variant/30 text-left">

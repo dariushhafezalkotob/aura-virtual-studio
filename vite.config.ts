@@ -1,12 +1,12 @@
 import { defineConfig, loadEnv, Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
-import basicSsl from '@vitejs/plugin-basic-ssl';
 import { Client, handle_file } from '@gradio/client';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { WebSocketServer } from 'ws';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 
 const env = { ...process.env, ...loadEnv('', process.cwd(), '') };
 const HF_TOKEN = env.HF_TOKEN || env.VITE_HF_TOKEN || '';
@@ -144,6 +144,11 @@ function apiMiddlewarePlugin(): Plugin {
   return {
     name: 'api-middleware',
     configureServer(server) {
+      // The phone remote's motion sensors are secure-context only, so the dev server runs over
+      // TLS and every URL we hand out has to match the scheme it is actually served on.
+      const scheme = server.config.server.https ? 'https' : 'http';
+      const devPort = server.config.server.port ?? 3000;
+
       // Setup WebSocket relay for mobile camera controller
       const wss = new WebSocketServer({ noServer: true });
       const rooms = new Map<string, Set<any>>();
@@ -160,56 +165,6 @@ function apiMiddlewarePlugin(): Plugin {
           console.error('[WS Upgrade Error]', err);
         }
       });
-
-      // Companion HTTPS server on port 3443 for mobile gyro sensors
-      const certPath = path.join(process.cwd(), 'node_modules/.vite/basic-ssl/_cert.pem');
-      if (fs.existsSync(certPath)) {
-        try {
-          if ((globalThis as any).__httpsServer) {
-            try {
-              (globalThis as any).__httpsServer.close();
-            } catch (_) {}
-            (globalThis as any).__httpsServer = null;
-          }
-
-          const cert = fs.readFileSync(certPath);
-          import('node:https').then((https) => {
-            const httpsServer = https.createServer({ key: cert, cert: cert }, server.middlewares);
-            (globalThis as any).__httpsServer = httpsServer;
-
-            httpsServer.on('upgrade', (req, socket, head) => {
-              try {
-                const parsedUrl = new URL(req.url || '', 'https://localhost:3443');
-                if (parsedUrl.pathname === '/ws/camera-remote') {
-                  wss.handleUpgrade(req, socket, head, (ws) => {
-                    wss.emit('connection', ws, req);
-                  });
-                }
-              } catch (err) {
-                console.error('[HTTPS WS Upgrade Error]', err);
-              }
-            });
-
-            httpsServer.on('error', (err: any) => {
-              if (err.code === 'EADDRINUSE') {
-                console.warn('[HTTPS 3443 in use, skipping secondary server]');
-              } else {
-                console.warn('[HTTPS 3443 Error]', err);
-              }
-            });
-
-            httpsServer.listen(3443, '0.0.0.0', () => {
-              console.log(`  ➜  Mobile Secure Remote (Gyro): https://${getLocalIpAddress()}:3443/`);
-            });
-
-            server.httpServer?.on('close', () => {
-              try { httpsServer.close(); } catch (_) {}
-            });
-          }).catch((e) => console.warn('[HTTPS Setup Error]', e));
-        } catch (e) {
-          console.warn('[HTTPS Cert Error]', e);
-        }
-      }
 
       wss.on('connection', (ws: any, req) => {
         try {
@@ -286,10 +241,9 @@ function apiMiddlewarePlugin(): Plugin {
           res.end(JSON.stringify({
             success: true,
             ip: lanIp,
-            httpPort: 3000,
-            httpsPort: 3443,
-            httpUrl: `http://${lanIp}:3000`,
-            httpsUrl: `https://${lanIp}:3443`
+            protocol: scheme,
+            port: devPort,
+            url: `${scheme}://${lanIp}:${devPort}`
           }));
           return;
         }
@@ -1129,11 +1083,20 @@ function apiMiddlewarePlugin(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), apiMiddlewarePlugin()],
+  // basicSsl serves the dev server over TLS. DeviceOrientationEvent, DeviceMotionEvent and the
+  // Generic Sensor API are all gated behind a secure context, so the phone remote's gyro cannot
+  // work at all when the LAN pairing URL is plain http://.
+  plugins: [react(), basicSsl(), apiMiddlewarePlugin()],
   server: {
     port: 3000,
+    strictPort: true,
     host: true,
     allowedHosts: true,
+    // With TLS on, Vite only builds a plain HTTP/1.1 server when `server.proxy` is set; otherwise
+    // it builds an http2 server. The camera-remote relay is a plain `ws` upgrade, which HTTP/2 has
+    // no route for, so this empty proxy map keeps the server on HTTP/1.1 and leaves the WebSocket
+    // handshake exactly as it was before TLS. basicSsl supplies server.https (cert + key).
+    proxy: {},
   },
   resolve: {
     dedupe: ['@react-three/fiber', '@react-three/drei', 'three', 'react', 'react-dom'],

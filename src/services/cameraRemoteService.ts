@@ -82,15 +82,26 @@ export class CameraRemoteSocket {
       }
 
       this.ws = new WebSocket(this.url);
+      this.ws.binaryType = 'arraybuffer';
 
       this.ws.onopen = () => {
         this.notifyStatus(true, this.peerCount);
         this.startHeartbeat();
       };
 
-      this.ws.onmessage = (event) => {
+      this.ws.onmessage = async (event) => {
         try {
-          const data: CameraRemoteMessage = JSON.parse(event.data);
+          let rawText: string;
+          if (typeof event.data === 'string') {
+            rawText = event.data;
+          } else if (event.data instanceof ArrayBuffer) {
+            rawText = new TextDecoder().decode(event.data);
+          } else if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
+            rawText = await event.data.text();
+          } else {
+            rawText = String(event.data);
+          }
+          const data: CameraRemoteMessage = JSON.parse(rawText);
           if (data.type === 'peer_joined' || data.type === 'peer_left') {
             this.peerCount = data.peerCount;
             this.notifyStatus(this.isConnected(), this.peerCount);
@@ -218,7 +229,17 @@ export class CameraRemoteSocket {
   }
 
   public sendInitScene(project: Project) {
-    this.send({ type: 'init_scene', project });
+    if (!project) return;
+    const lightweightProject: Partial<Project> = {
+      id: project.id,
+      name: project.name,
+      scenes: project.scenes || [],
+      characters: project.characters || [],
+      panoramaUrl: project.panoramaUrl,
+      panoramaRotation: project.panoramaRotation,
+      splatUrl: project.splatUrl,
+    };
+    this.send({ type: 'init_scene', project: lightweightProject as Project });
   }
 
   public sendCameraPose(pose: CameraPoseData) {

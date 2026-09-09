@@ -135,7 +135,7 @@ export function App() {
   };
 
   if (isRemoteMode) {
-    return <MobileCameraRemote initialProject={currentProject || projects[0]} />;
+    return <MobileCameraRemote />;
   }
 
   return (

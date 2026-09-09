@@ -25,6 +25,7 @@ export type TransformMode = 'translate' | 'rotate' | 'scale';
 export type LightingEnvironmentPreset = 'studio' | 'city' | 'sunset' | 'dawn' | 'park';
 
 interface ThreeStageProps {
+  isMobileViewfinder?: boolean;
   assets: SceneAsset[];
   selectedAssetId: string | null;
   characters?: CharacterActor[];
@@ -62,10 +63,14 @@ interface ThreeStageProps {
   showCameraTrajectory?: boolean;
   onCanvasReady?: (canvas: HTMLCanvasElement) => void;
   remoteOrientation?: DeviceOrientationData | null;
+  remoteOrientationRef?: React.MutableRefObject<DeviceOrientationData | null>;
   remoteMove?: RemoteMoveData | null;
+  remoteMoveRef?: React.MutableRefObject<RemoteMoveData | null>;
   remoteLook?: { deltaPitch: number; deltaYaw: number } | null;
+  remoteLookRef?: React.MutableRefObject<{ deltaPitch: number; deltaYaw: number } | null>;
   calibrateTrigger?: number;
   incomingCameraPose?: CameraPoseData | null;
+  incomingCameraPoseRef?: React.MutableRefObject<CameraPoseData | null>;
   onCameraPose?: (pose: CameraPoseData) => void;
 }
 
@@ -459,12 +464,28 @@ const GLTFModel: React.FC<{
 const UnrealCameraNavigation: React.FC<{
   enabled: boolean;
   remoteOrientation?: DeviceOrientationData | null;
+  remoteOrientationRef?: React.MutableRefObject<DeviceOrientationData | null>;
   remoteMove?: RemoteMoveData | null;
+  remoteMoveRef?: React.MutableRefObject<RemoteMoveData | null>;
   remoteLook?: { deltaPitch: number; deltaYaw: number } | null;
+  remoteLookRef?: React.MutableRefObject<{ deltaPitch: number; deltaYaw: number } | null>;
   calibrateTrigger?: number;
   incomingCameraPose?: CameraPoseData | null;
+  incomingCameraPoseRef?: React.MutableRefObject<CameraPoseData | null>;
   onCameraPose?: (pose: CameraPoseData) => void;
-}> = ({ enabled, remoteOrientation, remoteMove, remoteLook, calibrateTrigger, incomingCameraPose, onCameraPose }) => {
+}> = ({
+  enabled,
+  remoteOrientation,
+  remoteOrientationRef,
+  remoteMove,
+  remoteMoveRef,
+  remoteLook,
+  remoteLookRef,
+  calibrateTrigger,
+  incomingCameraPose,
+  incomingCameraPoseRef,
+  onCameraPose,
+}) => {
   const { camera, gl } = useThree();
   const keysDown = useRef<Set<string>>(new Set());
   const orbitRef = useRef({
@@ -484,12 +505,13 @@ const UnrealCameraNavigation: React.FC<{
   const lastCalibrateRef = useRef<number | undefined>(calibrateTrigger);
   const calibrateOrientation = useCallback((devQ?: THREE.Quaternion) => {
     let q = devQ;
-    if (!q && remoteOrientation) {
+    const activeOrient = remoteOrientationRef?.current || remoteOrientation;
+    if (!q && activeOrient) {
       q = computeDeviceQuaternion(
-        remoteOrientation.alpha,
-        remoteOrientation.beta,
-        remoteOrientation.gamma,
-        remoteOrientation.screenOrientation ?? 90
+        activeOrient.alpha,
+        activeOrient.beta,
+        activeOrient.gamma,
+        activeOrient.screenOrientation ?? 90
       );
     }
     if (q) {
@@ -497,26 +519,27 @@ const UnrealCameraNavigation: React.FC<{
       const fwdRoom = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
       // 2. Physical room heading (yaw angle around vertical Y axis):
       const roomYaw = Math.atan2(fwdRoom.x, fwdRoom.z);
-      // 3. Desired camera yaw in virtual studio (facing stage actors):
-      const targetYaw = orbitRef.current.yaw;
+      // 3. Desired camera yaw in virtual studio (facing stage actors along -Z):
+      const targetYaw = Math.PI;
       // 4. Align offset:
       alignYawOffsetRef.current = targetYaw - roomYaw;
       alignPitchOffsetRef.current = 0;
+      orbitRef.current.yaw = targetYaw;
+      orbitRef.current.pitch = -0.15;
       isCalibratedRef.current = true;
     }
-  }, [remoteOrientation]);
+  }, [remoteOrientation, remoteOrientationRef]);
 
   useEffect(() => {
     if (calibrateTrigger !== undefined && calibrateTrigger !== lastCalibrateRef.current) {
       lastCalibrateRef.current = calibrateTrigger;
-      orbitRef.current.yaw = Math.PI; // Center on actors along -Z
-      orbitRef.current.pitch = -0.15;
       calibrateOrientation();
     }
   }, [calibrateTrigger, calibrateOrientation]);
 
-  // Update target quaternion whenever new remoteOrientation packet arrives
+  // Update target quaternion whenever new remoteOrientation packet arrives (prop-based fallback)
   useEffect(() => {
+    if (remoteOrientationRef) return; // Computed per-frame in useFrame if ref provided
     if (!remoteOrientation) {
       targetCamQuatRef.current = null;
       isCalibratedRef.current = false;
@@ -550,7 +573,7 @@ const UnrealCameraNavigation: React.FC<{
     } else {
       targetCamQuatRef.current = alignedQ;
     }
-  }, [remoteOrientation, calibrateOrientation]);
+  }, [remoteOrientation, calibrateOrientation, remoteOrientationRef]);
 
   // Handle mobile fine touch look deltas (pan & tilt swipe adjustments)
   useEffect(() => {
@@ -695,25 +718,34 @@ const UnrealCameraNavigation: React.FC<{
     const orbit = orbitRef.current;
 
     // Direct incoming camera pose mirror (e.g. Host mirroring Remote)
-    if (incomingCameraPose) {
-      camera.position.set(
-        incomingCameraPose.position[0],
-        incomingCameraPose.position[1],
-        incomingCameraPose.position[2]
+    const activeIncomingPose = incomingCameraPoseRef?.current || incomingCameraPose;
+    const hasActiveGyro = Boolean((remoteOrientationRef && remoteOrientationRef.current) || remoteOrientation);
+
+    if (activeIncomingPose) {
+      orbit.target.set(
+        activeIncomingPose.position[0],
+        activeIncomingPose.position[1],
+        activeIncomingPose.position[2]
       );
-      camera.quaternion.set(
-        incomingCameraPose.quaternion[0],
-        incomingCameraPose.quaternion[1],
-        incomingCameraPose.quaternion[2],
-        incomingCameraPose.quaternion[3]
-      );
-      camera.updateMatrixWorld(true);
-      orbit.target.copy(camera.position);
-      const fwd = new THREE.Vector3();
-      camera.getWorldDirection(fwd);
-      orbit.pitch = Math.asin(Math.max(-0.99, Math.min(0.99, fwd.y)));
-      orbit.yaw = Math.atan2(fwd.x, fwd.z);
-      return;
+      if (!hasActiveGyro) {
+        camera.position.set(
+          activeIncomingPose.position[0],
+          activeIncomingPose.position[1],
+          activeIncomingPose.position[2]
+        );
+        camera.quaternion.set(
+          activeIncomingPose.quaternion[0],
+          activeIncomingPose.quaternion[1],
+          activeIncomingPose.quaternion[2],
+          activeIncomingPose.quaternion[3]
+        );
+        camera.updateMatrixWorld(true);
+        const fwd = new THREE.Vector3();
+        camera.getWorldDirection(fwd);
+        orbit.pitch = Math.asin(Math.max(-0.99, Math.min(0.99, fwd.y)));
+        orbit.yaw = Math.atan2(fwd.x, fwd.z);
+        return;
+      }
     }
 
     // Desktop Keyboard Flight Controls
@@ -739,7 +771,8 @@ const UnrealCameraNavigation: React.FC<{
     }
 
     // Mobile Virtual Joystick Move Controls (Dolly / Truck / Pedestal)
-    if (remoteMove && (remoteMove.moveX !== 0 || remoteMove.moveZ !== 0 || remoteMove.moveY !== 0)) {
+    const activeMove = remoteMoveRef?.current || remoteMove;
+    if (activeMove && (activeMove.moveX !== 0 || activeMove.moveZ !== 0 || activeMove.moveY !== 0)) {
       const speed = 4.5 * delta;
       const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
       fwd.y = 0;
@@ -747,14 +780,61 @@ const UnrealCameraNavigation: React.FC<{
       const rgt = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
       const up = new THREE.Vector3(0, 1, 0);
 
-      orbit.target.addScaledVector(rgt, remoteMove.moveX * speed);
-      orbit.target.addScaledVector(fwd, remoteMove.moveZ * speed);
-      orbit.target.addScaledVector(up, (remoteMove.moveY || 0) * speed);
+      orbit.target.addScaledVector(rgt, activeMove.moveX * speed);
+      orbit.target.addScaledVector(fwd, activeMove.moveZ * speed);
+      orbit.target.addScaledVector(up, (activeMove.moveY || 0) * speed);
+    }
+
+    // Mobile Fine Touch Look Swipe Adjustments (from ref if available)
+    if (remoteLookRef && remoteLookRef.current) {
+      const lk = remoteLookRef.current;
+      if (lk.deltaPitch !== 0 || lk.deltaYaw !== 0) {
+        orbit.yaw -= lk.deltaYaw;
+        orbit.pitch -= lk.deltaPitch;
+        orbit.pitch = Math.max(-1.55, Math.min(1.55, orbit.pitch));
+        alignYawOffsetRef.current -= lk.deltaYaw;
+        alignPitchOffsetRef.current -= lk.deltaPitch;
+        alignPitchOffsetRef.current = Math.max(-1.4, Math.min(1.4, alignPitchOffsetRef.current));
+      }
+      remoteLookRef.current = null;
+    }
+
+    // Mobile Gyroscope Tracking: compute directly in useFrame if ref provided
+    if (remoteOrientationRef && remoteOrientationRef.current) {
+      const orient = remoteOrientationRef.current;
+      const currentDevQ = computeDeviceQuaternion(
+        orient.alpha,
+        orient.beta,
+        orient.gamma,
+        orient.screenOrientation ?? 90
+      );
+
+      if (!isCalibratedRef.current) {
+        calibrateOrientation(currentDevQ);
+      }
+
+      const qYawAlign = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        alignYawOffsetRef.current
+      );
+      const alignedQ = qYawAlign.multiply(currentDevQ);
+
+      if (Math.abs(alignPitchOffsetRef.current) > 0.001) {
+        const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(alignedQ);
+        const rgt = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+        const qPitchAlign = new THREE.Quaternion().setFromAxisAngle(rgt, alignPitchOffsetRef.current);
+        targetCamQuatRef.current = qPitchAlign.multiply(alignedQ);
+      } else {
+        targetCamQuatRef.current = alignedQ;
+      }
+    } else if (remoteOrientationRef && !remoteOrientationRef.current && !remoteOrientation) {
+      targetCamQuatRef.current = null;
+      isCalibratedRef.current = false;
     }
 
     // Mobile Gyroscope Tracking or Orbit Look Update
     if (targetCamQuatRef.current) {
-      camera.quaternion.slerp(targetCamQuatRef.current, Math.min(1.0, delta * 25.0));
+      camera.quaternion.slerp(targetCamQuatRef.current, Math.min(1.0, delta * 35.0));
       camera.position.copy(orbit.target);
       camera.updateMatrixWorld(true);
 
@@ -958,6 +1038,7 @@ const CanvasPublisher: React.FC<{ onCanvasReady?: (canvas: HTMLCanvasElement) =>
 };
 
 export const ThreeStage: React.FC<ThreeStageProps> = ({
+  isMobileViewfinder = false,
   assets,
   selectedAssetId,
   characters = [],
@@ -985,10 +1066,14 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   showCameraTrajectory = true,
   onCanvasReady,
   remoteOrientation = null,
+  remoteOrientationRef,
   remoteMove = null,
+  remoteMoveRef,
   remoteLook = null,
+  remoteLookRef,
   calibrateTrigger = 0,
   incomingCameraPose = null,
+  incomingCameraPoseRef,
   onCameraPose,
 }) => {
   const [isTransformDragging, setIsTransformDragging] = useState(false);
@@ -997,10 +1082,14 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
     <div className="w-full h-full absolute inset-0 select-none overflow-hidden">
       <Canvas
         camera={{ position: [0, 2.5, 6.5], fov: cameraFov || 50, near: 0.1, far: 1000 }}
+        dpr={isMobileViewfinder ? [1, 1.25] : [1, 2]}
+        shadows={!isMobileViewfinder}
         gl={{
-          antialias: true,
+          antialias: !isMobileViewfinder,
           alpha: true,
-          preserveDrawingBuffer: true,
+          preserveDrawingBuffer: !isMobileViewfinder,
+          powerPreference: 'high-performance',
+          precision: isMobileViewfinder ? 'mediump' : 'highp',
           toneMapping: THREE.ACESFilmicToneMapping,
           toneMappingExposure: 1.0,
           outputColorSpace: THREE.SRGBColorSpace,
@@ -1043,9 +1132,9 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           position={[8, 14, 8]}
           intensity={lightIntensity * 1.0}
           color="#ffffff"
-          castShadow
-          shadow-mapSize-width={2048}
-          shadow-mapSize-height={2048}
+          castShadow={!isMobileViewfinder}
+          shadow-mapSize-width={isMobileViewfinder ? 512 : 2048}
+          shadow-mapSize-height={isMobileViewfinder ? 512 : 2048}
         />
         
         {/* Front Direct Camera Fill Light */}
@@ -1066,39 +1155,46 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         <pointLight position={[0, 6, 0]} intensity={lightIntensity * 0.25} distance={25} />
 
         {/* Realistic Ground Contact Shadows */}
-        <ContactShadows
-          position={[0, 0, 0]}
-          opacity={0.65}
-          scale={30}
-          blur={1.8}
-          far={10}
-          resolution={512}
-          color="#000000"
-        />
+        {!isMobileViewfinder && (
+          <ContactShadows
+            position={[0, 0, 0]}
+            opacity={0.65}
+            scale={30}
+            blur={1.8}
+            far={10}
+            resolution={512}
+            color="#000000"
+          />
+        )}
 
-        <Suspense fallback={null}>
-          {/* Ground Grid Helper */}
-          {showGrid && (
-            <gridHelper
-              args={[30, 30, '#8e8e93', '#48484a']}
-              position={[0, 0.001, 0]}
-            />
-          )}
+        {/* Permanent Studio Ground Stage Floor & Grid (Always Visible Instantly) */}
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.005, 0]} receiveShadow={!isMobileViewfinder}>
+          <circleGeometry args={[25, isMobileViewfinder ? 32 : 64]} />
+          <meshStandardMaterial color="#14161a" roughness={0.75} metalness={0.15} />
+        </mesh>
 
-          {/* Render All Scene Assets with Transform Controls */}
-          {assets.map((asset) => (
-            <ModelErrorBoundary
-              key={asset.id}
-              asset={asset}
-              isSelected={asset.id === selectedAssetId}
-              transformMode={transformMode}
-              onSelect={() => {
-                onSelectActor?.(null);
-                onSelectAsset?.(asset.id);
-              }}
-              onDraggingChange={setIsTransformDragging}
-              onTransformChange={onUpdateAssetTransform}
-            >
+        {showGrid && (
+          <gridHelper
+            args={[30, 30, '#8e8e93', '#33353b']}
+            position={[0, 0.001, 0]}
+          />
+        )}
+
+        {/* Render All Scene Assets with Individual Suspense Boundaries */}
+        {assets.map((asset) => (
+          <ModelErrorBoundary
+            key={asset.id}
+            asset={asset}
+            isSelected={asset.id === selectedAssetId}
+            transformMode={transformMode}
+            onSelect={() => {
+              onSelectActor?.(null);
+              onSelectAsset?.(asset.id);
+            }}
+            onDraggingChange={setIsTransformDragging}
+            onTransformChange={onUpdateAssetTransform}
+          >
+            <Suspense fallback={null}>
               <GLTFModel
                 asset={asset}
                 isSelected={asset.id === selectedAssetId}
@@ -1110,12 +1206,14 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
                 onDraggingChange={setIsTransformDragging}
                 onTransformChange={onUpdateAssetTransform}
               />
-            </ModelErrorBoundary>
-          ))}
+            </Suspense>
+          </ModelErrorBoundary>
+        ))}
 
-          {/* Render All Character Actors with Kimodo Kinematics & Trajectories */}
-          {characters.map((actor) => (
-            <ActorErrorBoundary key={actor.id} actor={actor}>
+        {/* Render All Character Actors with Kimodo Kinematics & Trajectories */}
+        {characters.map((actor) => (
+          <ActorErrorBoundary key={actor.id} actor={actor}>
+            <Suspense fallback={null}>
               <CharacterActorModel
                 actor={actor}
                 allActors={characters}
@@ -1131,8 +1229,9 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
                 onDraggingChange={setIsTransformDragging}
                 onTransformChange={onUpdateActorTransform}
               />
-            </ActorErrorBoundary>
-          ))}
+            </Suspense>
+          </ActorErrorBoundary>
+        ))}
 
           {/* 3D Visualizers for Active Constraints (Waypoints & Look-At Targets) */}
           {characters.map((actor) => {
@@ -1190,7 +1289,6 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
               </mesh>
             </group>
           )}
-        </Suspense>
 
         {/* Continuous Camera Keyframe Recorder */}
         <CameraRecorder
@@ -1213,10 +1311,14 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         <UnrealCameraNavigation
           enabled={!isTransformDragging && !isPlaybackTake}
           remoteOrientation={remoteOrientation}
+          remoteOrientationRef={remoteOrientationRef}
           remoteMove={remoteMove}
+          remoteMoveRef={remoteMoveRef}
           remoteLook={remoteLook}
+          remoteLookRef={remoteLookRef}
           calibrateTrigger={calibrateTrigger}
           incomingCameraPose={incomingCameraPose}
+          incomingCameraPoseRef={incomingCameraPoseRef}
           onCameraPose={onCameraPose}
         />
       </Canvas>
