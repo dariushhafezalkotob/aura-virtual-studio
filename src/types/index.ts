@@ -22,6 +22,29 @@ export interface CameraTake {
   thumbnail?: string; // Captured first frame / poster frame data URL
 }
 
+export interface StagePointLight {
+  id: string;
+  name: string;
+  color: string;
+  intensity: number;
+  distance: number; // falloff radius in meters (default ~15)
+  decay: number; // physical attenuation falloff exponent (default 2.0)
+  position: [number, number, number];
+  enabled?: boolean;
+}
+
+export interface DepthOfFieldConfig {
+  enabled: boolean;
+  aperture: number; // f-number (e.g. 1.4, 2.8, 5.6)
+  focusDistance: number; // focus plane in meters (e.g. 3.5m)
+  focalLengthMm: number; // lens focal length in mm (e.g. 35, 50, 85)
+  autoFocus?: boolean; // dynamic center raycast autofocus
+  focusPeaking?: boolean; // high-contrast edge assist for in-focus subjects
+  bokehScale?: number; // max bokeh blur radius multiplier
+}
+
+export type LightingEnvironmentPreset = 'studio' | 'city' | 'sunset' | 'dawn' | 'park';
+
 export interface Project {
   id: string;
   name: string;
@@ -31,11 +54,15 @@ export interface Project {
   scenes?: SceneAsset[];
   characters?: CharacterActor[];
   cameraTakes?: CameraTake[];
+  pointLights?: StagePointLight[];
   panoramaUrl?: string;
   panoramaRotation?: number;
   panoramaBlur?: number;
+  showPanorama?: boolean;
   splatUrl?: string;
   stageSpecularity?: number;
+  lightIntensity?: number;
+  environmentPreset?: LightingEnvironmentPreset;
 }
 
 export interface SavedStageTemplate {
@@ -43,6 +70,7 @@ export interface SavedStageTemplate {
   name: string;
   createdAt: string;
   scenes: SceneAsset[];
+  pointLights?: StagePointLight[];
   panoramaUrl?: string;
   panoramaRotation?: number;
   splatUrl?: string;

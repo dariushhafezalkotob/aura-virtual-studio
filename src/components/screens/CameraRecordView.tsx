@@ -1,5 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Project, CharacterActor, CameraTake, CameraKeyframe, DeviceOrientationData, RemoteMoveData, CameraPoseData } from '../../types';
+import {
+  Project,
+  CharacterActor,
+  CameraTake,
+  CameraKeyframe,
+  DeviceOrientationData,
+  RemoteMoveData,
+  CameraPoseData,
+  DepthOfFieldConfig,
+} from '../../types';
 import { ThreeStage } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
 import { CameraRemoteSocket } from '../../services/cameraRemoteService';
@@ -11,10 +20,12 @@ interface CameraRecordViewProps {
 }
 
 const LENS_FOV_MAP: Record<string, number> = {
+  '18mm': 90,
   '24mm': 74,
   '35mm': 54,
   '50mm': 40,
   '85mm': 24,
+  '135mm': 15,
 };
 
 function formatTime(seconds: number): string {
@@ -32,6 +43,24 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const [showQRPairing, setShowQRPairing] = useState(false);
   const [focalLength, setFocalLength] = useState('35mm');
   const [iso, setIso] = useState('800');
+
+  // Cinematic Depth of Field & Optics State
+  const [aperture, setAperture] = useState<string>('f/2.8');
+  const [focusMode, setFocusMode] = useState<'auto' | 'manual'>('auto');
+  const [focusDistance, setFocusDistance] = useState<number>(3.5);
+  const [autoFocusReadout, setAutoFocusReadout] = useState<number>(3.5);
+  const [focusPeaking, setFocusPeaking] = useState<boolean>(false);
+  const [showFocusPullerMenu, setShowFocusPullerMenu] = useState<boolean>(false);
+
+  const dofConfig = useMemo<DepthOfFieldConfig>(() => ({
+    enabled: aperture !== 'OFF',
+    aperture: aperture === 'OFF' ? 999.0 : parseFloat(aperture.replace('f/', '')) || 2.8,
+    focusDistance: focusDistance,
+    focalLengthMm: parseInt(focalLength.replace('mm', '')) || 35,
+    autoFocus: focusMode === 'auto',
+    focusPeaking: focusPeaking,
+    bokehScale: 1.0,
+  }), [aperture, focusDistance, focalLength, focusMode, focusPeaking]);
 
   // Video Export State
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -602,13 +631,17 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       <ThreeStage
         assets={assets}
         selectedAssetId={null}
+        pointLights={currentProject.pointLights}
         characters={characters}
+        lightIntensity={(currentProject.lightIntensity !== undefined ? currentProject.lightIntensity : 1.0) * ((parseInt(iso, 10) || 800) / 800)}
         stageSpecularity={currentProject.stageSpecularity}
+        environmentPreset={currentProject.environmentPreset || 'studio'}
         currentTimelineTime={timelineSec}
         isPlaying={isPlaying}
         showTrajectories={false}
         panoramaUrl={currentProject.panoramaUrl}
         panoramaRotation={currentProject.panoramaRotation || 0}
+        showPanorama={currentProject.showPanorama !== false}
         splatUrl={currentProject.splatUrl}
         cameraFov={currentFov}
         isRecordingCamera={isRecording}
@@ -625,6 +658,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         calibrateTrigger={calibrateTrigger}
         incomingCameraPose={incomingCameraPose}
         incomingCameraPoseRef={incomingCameraPoseRef}
+        dofConfig={dofConfig}
+        onAutoFocusDistance={(dist) => setAutoFocusReadout(dist)}
         onCanvasReady={(canvas) => {
           webglCanvasRef.current = canvas;
         }}
@@ -842,6 +877,20 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
           <div className="flex flex-col gap-2 items-end pointer-events-auto">
             <div className="flex items-center gap-sm font-label-caps text-xs text-on-surface-variant bg-background/85 backdrop-blur-md px-md py-xs rounded border border-outline-variant/30 shadow-md">
               <span className="text-primary font-medium">LENS: {focalLength} ({currentFov}°)</span>
+              <span className="text-outline-variant">|</span>
+              <span className={aperture !== 'OFF' ? 'text-amber-300 font-medium' : ''}>IRIS: {aperture}</span>
+              <span className="text-outline-variant">|</span>
+              <span className="text-cyan-400 font-mono">
+                {focusMode === 'auto' ? `AF ${(autoFocusReadout || focusDistance).toFixed(2)}m` : `MF ${focusDistance.toFixed(2)}m`}
+              </span>
+              {focusPeaking && (
+                <>
+                  <span className="text-outline-variant">|</span>
+                  <span className="text-emerald-400 font-bold text-[10px] bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/40 animate-pulse">
+                    PEAKING
+                  </span>
+                </>
+              )}
               <span className="text-outline-variant">|</span>
               <span>ISO: {iso}</span>
               <span className="text-outline-variant">|</span>
@@ -1184,15 +1233,159 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             )}
           </div>
 
-          {/* Right: Lens & ISO Preset Selectors */}
+          {/* Right: Focus Puller, Iris (DoF), Lens & ISO Selectors */}
           <div className="flex items-center gap-2">
+            {/* Focus Puller & Depth of Field Controls */}
+            <div className="relative">
+              <button
+                onClick={() => setShowFocusPullerMenu(!showFocusPullerMenu)}
+                className={`px-2 py-1 text-[11px] font-label-caps rounded-xl border flex items-center gap-1.5 cursor-pointer transition-all shadow-md ${
+                  showFocusPullerMenu || focusMode === 'manual' || focusPeaking
+                    ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/60 font-semibold'
+                    : 'bg-surface-container/90 text-on-surface-variant border-outline-variant/40 hover:text-on-surface'
+                }`}
+                title="Focus Puller & Depth of Field Engine"
+              >
+                <span className="material-symbols-outlined text-[15px] text-cyan-400">center_focus_strong</span>
+                <span>{focusMode === 'auto' ? `AF ${(autoFocusReadout || focusDistance).toFixed(1)}m` : `MF ${focusDistance.toFixed(1)}m`}</span>
+              </button>
+
+              {/* Floating Focus Puller HUD Box */}
+              {showFocusPullerMenu && (
+                <div className="absolute bottom-12 right-0 w-64 bg-surface-container/95 backdrop-blur-xl border border-outline-variant/50 p-3 rounded-2xl shadow-2xl flex flex-col gap-2.5 z-40 animate-in fade-in slide-in-from-bottom-2 duration-150">
+                  <div className="flex justify-between items-center pb-1.5 border-b border-outline-variant/20">
+                    <div className="flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-[16px] text-cyan-400">tune</span>
+                      <span className="font-label-caps text-[11px] text-cyan-300 font-bold uppercase tracking-wider">
+                        Cinema Focus Puller
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setShowFocusPullerMenu(false)}
+                      className="text-on-surface-variant hover:text-on-surface text-[12px] cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {/* Mode Toggle: Auto (Center Raycast) vs Manual (Rack Focus) */}
+                  <div className="flex items-center bg-surface-container-high/60 p-0.5 rounded-lg border border-outline-variant/30">
+                    <button
+                      onClick={() => setFocusMode('auto')}
+                      className={`flex-1 py-1 rounded text-[10px] font-label-caps transition-all cursor-pointer ${
+                        focusMode === 'auto'
+                          ? 'bg-cyan-500 text-black font-bold shadow'
+                          : 'text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      AUTOFOCUS (CENTER)
+                    </button>
+                    <button
+                      onClick={() => setFocusMode('manual')}
+                      className={`flex-1 py-1 rounded text-[10px] font-label-caps transition-all cursor-pointer ${
+                        focusMode === 'manual'
+                          ? 'bg-cyan-500 text-black font-bold shadow'
+                          : 'text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      MANUAL FOCUS
+                    </button>
+                  </div>
+
+                  {/* Focus Distance Slider (Manual Mode) */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-center text-[10px] font-mono">
+                      <span className="text-on-surface-variant">Focus Plane Distance:</span>
+                      <span className="text-cyan-300 font-bold">
+                        {(focusMode === 'auto' ? autoFocusReadout || focusDistance : focusDistance).toFixed(2)}m
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.5}
+                      max={25.0}
+                      step={0.1}
+                      disabled={focusMode === 'auto'}
+                      value={focusDistance}
+                      onChange={(e) => {
+                        setFocusDistance(parseFloat(e.target.value));
+                        if (focusMode === 'auto') setFocusMode('manual');
+                      }}
+                      className="w-full h-1.5 bg-surface-variant rounded-lg appearance-none cursor-pointer accent-cyan-400 disabled:opacity-40"
+                    />
+                    {/* Quick Rack Focus Distance Presets */}
+                    <div className="flex items-center justify-between gap-1 pt-0.5">
+                      {[
+                        { label: 'Close', dist: 1.5 },
+                        { label: 'Med', dist: 3.0 },
+                        { label: 'Body', dist: 5.0 },
+                        { label: 'Stage', dist: 10.0 },
+                        { label: 'Inf', dist: 25.0 },
+                      ].map((p) => (
+                        <button
+                          key={p.label}
+                          onClick={() => {
+                            setFocusDistance(p.dist);
+                            setFocusMode('manual');
+                          }}
+                          className={`px-1.5 py-0.5 rounded text-[9px] font-mono border transition-colors cursor-pointer ${
+                            focusMode === 'manual' && Math.abs(focusDistance - p.dist) < 0.2
+                              ? 'bg-cyan-400/20 text-cyan-300 border-cyan-400/50'
+                              : 'text-on-surface-variant border-outline-variant/30 hover:text-on-surface'
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Focus Peaking Assist Toggle */}
+                  <div className="flex items-center justify-between pt-1.5 border-t border-outline-variant/20">
+                    <span className="text-[10px] text-on-surface-variant flex items-center gap-1 font-mono">
+                      <span className="material-symbols-outlined text-[13px] text-emerald-400">filter_center_focus</span>
+                      Focus Peaking (Assist)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setFocusPeaking(!focusPeaking)}
+                      className={`px-2 py-0.5 rounded text-[9px] font-label-caps font-bold transition-colors cursor-pointer border ${
+                        focusPeaking
+                          ? 'bg-emerald-500/20 text-emerald-400 border-emerald-400/50'
+                          : 'bg-surface-container-high/60 text-on-surface-variant border-outline-variant/30'
+                      }`}
+                    >
+                      {focusPeaking ? 'ON' : 'OFF'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* IRIS / Aperture (DoF) */}
+            <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
+              <span className="font-label-caps text-[9px] text-on-surface-variant px-1" title="Aperture / Depth of Field (Circle of Confusion)">IRIS</span>
+              {['f/1.4', 'f/2.0', 'f/2.8', 'f/4.0', 'f/8.0', 'OFF'].map((val) => (
+                <button
+                  key={val}
+                  onClick={() => setAperture(val)}
+                  className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
+                    aperture === val ? 'bg-amber-400 text-black font-bold shadow' : 'text-on-surface-variant hover:text-amber-300'
+                  }`}
+                >
+                  {val}
+                </button>
+              ))}
+            </div>
+
+            {/* Lens Selector */}
             <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
               <span className="font-label-caps text-[9px] text-on-surface-variant px-1">LENS</span>
-              {['24mm', '35mm', '50mm', '85mm'].map((fl) => (
+              {['18mm', '24mm', '35mm', '50mm', '85mm', '135mm'].map((fl) => (
                 <button
                   key={fl}
                   onClick={() => setFocalLength(fl)}
-                  className={`px-2 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
+                  className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
                     focalLength === fl ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
                   }`}
                 >
@@ -1200,13 +1393,15 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                 </button>
               ))}
             </div>
+
+            {/* ISO Selector */}
             <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
               <span className="font-label-caps text-[9px] text-on-surface-variant px-1">ISO</span>
               {['400', '800', '1600'].map((val) => (
                 <button
                   key={val}
                   onClick={() => setIso(val)}
-                  className={`px-2 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
+                  className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
                     iso === val ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
                   }`}
                 >

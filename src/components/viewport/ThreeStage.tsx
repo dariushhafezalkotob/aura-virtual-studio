@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback, Suspense, Component, ReactNode } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo, Suspense, Component, ReactNode } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
   useGLTF,
@@ -17,6 +17,8 @@ import {
   DeviceOrientationData,
   RemoteMoveData,
   CameraPoseData,
+  StagePointLight,
+  DepthOfFieldConfig,
 } from '../../types';
 import { CharacterActorModel, ActorErrorBoundary } from './CharacterActorModel';
 import { computeDeviceQuaternion } from '../../services/cameraRemoteService';
@@ -24,12 +26,44 @@ import { computeDeviceQuaternion } from '../../services/cameraRemoteService';
 export type TransformMode = 'translate' | 'rotate' | 'scale';
 export type LightingEnvironmentPreset = 'studio' | 'city' | 'sunset' | 'dawn' | 'park';
 
+// Global Transform & Selection Interaction Guard
+let globalLastTransformEndTime = 0;
+let globalIsTransformDragging = false;
+let globalLastCameraDragEndTime = 0;
+
+export function markTransformDragStart() {
+  globalIsTransformDragging = true;
+}
+
+export function markTransformDragEnd() {
+  globalLastTransformEndTime = Date.now();
+  setTimeout(() => {
+    globalIsTransformDragging = false;
+  }, 250);
+}
+
+export function markCameraDrag() {
+  globalLastCameraDragEndTime = Date.now();
+}
+
+export function isSelectionSuppressed(): boolean {
+  return (
+    globalIsTransformDragging ||
+    Date.now() - globalLastTransformEndTime < 350 ||
+    Date.now() - globalLastCameraDragEndTime < 250
+  );
+}
+
 interface ThreeStageProps {
   isMobileViewfinder?: boolean;
   assets: SceneAsset[];
   selectedAssetId: string | null;
   characters?: CharacterActor[];
   selectedActorId?: string | null;
+  pointLights?: StagePointLight[];
+  selectedPointLightId?: string | null;
+  onSelectPointLight?: (id: string | null) => void;
+  onUpdatePointLightPosition?: (id: string, position: [number, number, number]) => void;
   transformMode?: TransformMode;
   lightIntensity?: number;
   stageSpecularity?: number;
@@ -73,6 +107,8 @@ interface ThreeStageProps {
   incomingCameraPose?: CameraPoseData | null;
   incomingCameraPoseRef?: React.MutableRefObject<CameraPoseData | null>;
   onCameraPose?: (pose: CameraPoseData) => void;
+  dofConfig?: DepthOfFieldConfig;
+  onAutoFocusDistance?: (distance: number) => void;
 }
 
 // 360° Equirectangular Panorama Dome (Resilient Non-Blocking Loader)
@@ -181,7 +217,10 @@ class ModelErrorBoundary extends Component<
   }
 
   handleTransformEnd = () => {
-    this.props.onDraggingChange?.(false);
+    markTransformDragEnd();
+    setTimeout(() => {
+      this.props.onDraggingChange?.(false);
+    }, 200);
     if (this.groupRef.current && this.props.onTransformChange && this.props.asset) {
       const pos: [number, number, number] = [
         this.groupRef.current.position.x,
@@ -232,6 +271,7 @@ class ModelErrorBoundary extends Component<
             scale={scl}
             onClick={(e) => {
               e.stopPropagation();
+              if (isSelectionSuppressed()) return;
               onSelect?.();
             }}
           >
@@ -288,7 +328,10 @@ class ModelErrorBoundary extends Component<
               object={this.groupRef.current}
               mode={transformMode}
               size={0.75}
-              onMouseDown={() => onDraggingChange?.(true)}
+              onMouseDown={() => {
+                markTransformDragStart();
+                onDraggingChange?.(true);
+              }}
               onMouseUp={this.handleTransformEnd}
             />
           )}
@@ -446,8 +489,13 @@ const GLTFModel: React.FC<{
     );
   }
 
+  const pointerDownPosRef = useRef<{ x: number; y: number } | null>(null);
+
   const handleTransformEnd = () => {
-    onDraggingChange(false);
+    markTransformDragEnd();
+    setTimeout(() => {
+      onDraggingChange(false);
+    }, 200);
     if (groupRef.current && onTransformChange) {
       const pos: [number, number, number] = [
         groupRef.current.position.x,
@@ -475,8 +523,17 @@ const GLTFModel: React.FC<{
         position={position}
         rotation={rotation}
         scale={scale}
+        onPointerDown={(e) => {
+          pointerDownPosRef.current = { x: e.clientX, y: e.clientY };
+        }}
         onClick={(e) => {
           e.stopPropagation();
+          if (isSelectionSuppressed()) return;
+          if (pointerDownPosRef.current) {
+            const dx = e.clientX - pointerDownPosRef.current.x;
+            const dy = e.clientY - pointerDownPosRef.current.y;
+            if (dx * dx + dy * dy > 25) return;
+          }
           onSelect();
         }}
       >
@@ -494,7 +551,10 @@ const GLTFModel: React.FC<{
           object={groupRef.current}
           mode={transformMode}
           size={0.75}
-          onMouseDown={() => onDraggingChange(true)}
+          onMouseDown={() => {
+            markTransformDragStart();
+            onDraggingChange(true);
+          }}
           onMouseUp={handleTransformEnd}
         />
       )}
@@ -660,6 +720,9 @@ const UnrealCameraNavigation: React.FC<{
       if (!dragging || !enabled) return;
       const dx = e.clientX - lx;
       const dy = e.clientY - ly;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+        markCameraDrag();
+      }
       lx = e.clientX;
       ly = e.clientY;
 
@@ -1079,12 +1142,328 @@ const CanvasPublisher: React.FC<{ onCanvasReady?: (canvas: HTMLCanvasElement) =>
   return null;
 };
 
+// 60 FPS Cinematic Depth of Field & Optical Blur Shader Pass
+const CinematicDepthOfField: React.FC<{
+  config?: DepthOfFieldConfig;
+  onAutoFocusDistance?: (distance: number) => void;
+}> = ({ config, onAutoFocusDistance }) => {
+  const { gl, scene, camera, size } = useThree();
+  const smoothedFocusRef = useRef<number>(config?.focusDistance ?? 3.5);
+  const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
+  const centerVec2 = useRef<THREE.Vector2>(new THREE.Vector2(0, 0));
+
+  // Only allocate render target when DoF is actively enabled and aperture < 100 (not infinite)
+  const isEnabled = !!(config && config.enabled && config.aperture < 100);
+
+  const renderTarget = useMemo(() => {
+    if (!isEnabled) return null;
+    const target = new THREE.WebGLRenderTarget(
+      Math.max(1, Math.floor(size.width)),
+      Math.max(1, Math.floor(size.height)),
+      {
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        format: THREE.RGBAFormat,
+        type: THREE.HalfFloatType,
+      }
+    );
+    target.depthTexture = new THREE.DepthTexture(
+      Math.max(1, Math.floor(size.width)),
+      Math.max(1, Math.floor(size.height))
+    );
+    target.depthTexture.format = THREE.DepthFormat;
+    target.depthTexture.type = THREE.UnsignedIntType;
+    return target;
+  }, [isEnabled, size.width, size.height]);
+
+  useEffect(() => {
+    return () => {
+      renderTarget?.dispose();
+      renderTarget?.depthTexture?.dispose();
+    };
+  }, [renderTarget]);
+
+  const postScene = useMemo(() => new THREE.Scene(), []);
+  const postCamera = useMemo(() => new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), []);
+
+  const dofMaterial = useMemo(() => {
+    return new THREE.ShaderMaterial({
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = vec4(position.xy, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform sampler2D tDepth;
+        uniform vec2 uResolution;
+        uniform float uNear;
+        uniform float uFar;
+        uniform float uFocusDistance;
+        uniform float uFocalLengthMm;
+        uniform float uAperture;
+        uniform float uBokehScale;
+        uniform bool uFocusPeaking;
+
+        varying vec2 vUv;
+
+        float readDepth(vec2 coord) {
+          float d = texture2D(tDepth, coord).r;
+          return (uNear * uFar) / (uFar - d * (uFar - uNear));
+        }
+
+        float computeCoC(float z) {
+          float fl = uFocalLengthMm * 0.001;
+          float fd = max(0.2, uFocusDistance);
+          float s = max(0.2, z);
+          float cocNorm = abs(s - fd) / s * (fl * fl) / (uAperture * max(0.001, fd - fl));
+          return clamp(cocNorm * uBokehScale * 2600.0, 0.0, 20.0);
+        }
+
+        const float GOLDEN_ANGLE = 2.39996323;
+
+        void main() {
+          float centerDepth = readDepth(vUv);
+          float centerCoC = computeCoC(centerDepth);
+          vec4 color = texture2D(tDiffuse, vUv);
+
+          // Focus Peaking assist overlay for sharp in-focus regions
+          if (uFocusPeaking) {
+            float dL = readDepth(vUv - vec2(1.0 / uResolution.x, 0.0));
+            float dR = readDepth(vUv + vec2(1.0 / uResolution.x, 0.0));
+            float dU = readDepth(vUv - vec2(0.0, 1.0 / uResolution.y));
+            float dD = readDepth(vUv + vec2(0.0, 1.0 / uResolution.y));
+            float edge = abs(dL - dR) + abs(dU - dD);
+            if (centerCoC < 1.6 && edge > 0.06) {
+              color.rgb = mix(color.rgb, vec3(0.0, 1.0, 0.8), 0.85);
+            }
+          }
+
+          if (centerCoC < 0.5) {
+            gl_FragColor = color;
+            #include <colorspace_fragment>
+            return;
+          }
+
+          vec3 accumColor = color.rgb;
+          float accumWeight = 1.0;
+
+          for (int i = 1; i <= 10; i++) {
+            float fi = float(i);
+            float r = sqrt(fi / 10.0) * centerCoC;
+            float theta = fi * GOLDEN_ANGLE;
+            vec2 offset = vec2(cos(theta), sin(theta)) * r / uResolution;
+
+            vec2 sampleUv = vUv + offset;
+            float sampleDepth = readDepth(sampleUv);
+            float sampleCoC = computeCoC(sampleDepth);
+
+            float weight = (sampleDepth >= centerDepth - 0.2) ? 1.0 : clamp(sampleCoC / max(0.1, centerCoC), 0.0, 1.0);
+            vec3 sCol = texture2D(tDiffuse, sampleUv).rgb;
+
+            accumColor += sCol * weight;
+            accumWeight += weight;
+          }
+
+          gl_FragColor = vec4(accumColor / accumWeight, color.a);
+          #include <colorspace_fragment>
+        }
+      `,
+      uniforms: {
+        tDiffuse: { value: null },
+        tDepth: { value: null },
+        uResolution: { value: new THREE.Vector2(size.width, size.height) },
+        uNear: { value: 0.1 },
+        uFar: { value: 1000.0 },
+        uFocusDistance: { value: 3.5 },
+        uFocalLengthMm: { value: 35.0 },
+        uAperture: { value: 2.8 },
+        uBokehScale: { value: 1.0 },
+        uFocusPeaking: { value: false },
+      },
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+    });
+  }, [size.width, size.height]);
+
+  useEffect(() => {
+    const geo = new THREE.PlaneGeometry(2, 2);
+    const mesh = new THREE.Mesh(geo, dofMaterial);
+    mesh.frustumCulled = false;
+    postScene.add(mesh);
+    return () => {
+      postScene.remove(mesh);
+      geo.dispose();
+    };
+  }, [dofMaterial, postScene]);
+
+  useFrame((state, delta) => {
+    if (!isEnabled || !renderTarget) {
+      gl.render(scene, camera);
+      return;
+    }
+
+    const pCam = camera as THREE.PerspectiveCamera;
+
+    // Real-time Autofocus raycasting from camera center
+    if (config?.autoFocus) {
+      raycasterRef.current.setFromCamera(centerVec2.current, camera);
+      const intersects = raycasterRef.current.intersectObjects(scene.children, true);
+      const hit = intersects.find(
+        (i) => i.distance > 0.4 && i.object.type === 'Mesh' && (i.object as THREE.Mesh).visible
+      );
+      if (hit) {
+        smoothedFocusRef.current = THREE.MathUtils.lerp(
+          smoothedFocusRef.current,
+          hit.distance,
+          Math.min(1, delta * 7)
+        );
+        onAutoFocusDistance?.(smoothedFocusRef.current);
+      }
+    } else if (config) {
+      smoothedFocusRef.current = THREE.MathUtils.lerp(
+        smoothedFocusRef.current,
+        config.focusDistance,
+        Math.min(1, delta * 12)
+      );
+    }
+
+    dofMaterial.uniforms.tDiffuse.value = renderTarget.texture;
+    dofMaterial.uniforms.tDepth.value = renderTarget.depthTexture;
+    dofMaterial.uniforms.uResolution.value.set(state.size.width, state.size.height);
+    dofMaterial.uniforms.uNear.value = pCam.near;
+    dofMaterial.uniforms.uFar.value = pCam.far;
+    dofMaterial.uniforms.uFocusDistance.value = smoothedFocusRef.current;
+    dofMaterial.uniforms.uFocalLengthMm.value = config?.focalLengthMm || 35.0;
+    dofMaterial.uniforms.uAperture.value = config?.aperture || 2.8;
+    dofMaterial.uniforms.uBokehScale.value = config?.bokehScale || 1.0;
+    dofMaterial.uniforms.uFocusPeaking.value = !!config?.focusPeaking;
+
+    gl.setRenderTarget(renderTarget);
+    gl.clear();
+    gl.render(scene, camera);
+
+    gl.setRenderTarget(null);
+    gl.render(postScene, postCamera);
+  }, 1);
+
+  return null;
+};
+
+// High-Performance Point Light Node with Physical Decay (0 Shadow Map Overhead, 0 Geometry Clutter)
+const PointLightNode: React.FC<{
+  light: StagePointLight;
+  isSelected: boolean;
+  isMobileViewfinder?: boolean;
+  onSelect: () => void;
+  onDraggingChange: (isDragging: boolean) => void;
+  onPositionChange?: (id: string, position: [number, number, number]) => void;
+}> = ({
+  light,
+  isSelected,
+  isMobileViewfinder = false,
+  onSelect,
+  onDraggingChange,
+  onPositionChange,
+}) => {
+  const groupRef = useRef<THREE.Group>(null);
+  const { position, color, intensity, distance, decay, enabled } = light;
+
+  const pointerDownPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    if (groupRef.current) {
+      groupRef.current.position.set(position[0], position[1], position[2]);
+      groupRef.current.updateMatrixWorld(true);
+    }
+  }, [position[0], position[1], position[2]]);
+
+  const handleTransformEnd = () => {
+    markTransformDragEnd();
+    setTimeout(() => {
+      onDraggingChange(false);
+    }, 200);
+    if (groupRef.current && onPositionChange) {
+      const pos: [number, number, number] = [
+        groupRef.current.position.x,
+        groupRef.current.position.y,
+        groupRef.current.position.z,
+      ];
+      onPositionChange(light.id, pos);
+    }
+  };
+
+  const isLightEnabled = enabled !== false;
+
+  return (
+    <>
+      <group
+        ref={groupRef}
+        position={position}
+        onPointerDown={(e) => {
+          pointerDownPosRef.current = { x: e.clientX, y: e.clientY };
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (isSelectionSuppressed()) return;
+          if (pointerDownPosRef.current) {
+            const dx = e.clientX - pointerDownPosRef.current.x;
+            const dy = e.clientY - pointerDownPosRef.current.y;
+            if (dx * dx + dy * dy > 25) return;
+          }
+          onSelect();
+        }}
+      >
+        {/* High-performance Three.js Point Light with physical decay (zero shadow map overhead) */}
+        {isLightEnabled && (
+          <pointLight
+            color={color || '#ffffff'}
+            intensity={intensity ?? 2.0}
+            distance={distance ?? 15}
+            decay={decay ?? 2.0}
+            castShadow={false}
+          />
+        )}
+
+        {/* Small subtle glowing marker ONLY when actively selected */}
+        {isSelected && !isMobileViewfinder && (
+          <mesh>
+            <sphereGeometry args={[0.07, 16, 16]} />
+            <meshBasicMaterial color={color || '#ffffff'} toneMapped={false} />
+          </mesh>
+        )}
+      </group>
+
+      {/* Translation gizmo strictly appears ONLY when this light is selected */}
+      {isSelected && !isMobileViewfinder && groupRef.current && (
+        <TransformControls
+          object={groupRef.current}
+          mode="translate"
+          size={0.65}
+          onMouseDown={() => {
+            markTransformDragStart();
+            onDraggingChange(true);
+          }}
+          onMouseUp={handleTransformEnd}
+        />
+      )}
+    </>
+  );
+};
+
 export const ThreeStage: React.FC<ThreeStageProps> = ({
   isMobileViewfinder = false,
   assets,
   selectedAssetId,
   characters = [],
   selectedActorId = null,
+  pointLights = [],
+  selectedPointLightId = null,
+  onSelectPointLight,
+  onUpdatePointLightPosition,
   transformMode = 'translate',
   lightIntensity = 1.0,
   stageSpecularity = 0.15,
@@ -1118,11 +1497,13 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   incomingCameraPose = null,
   incomingCameraPoseRef,
   onCameraPose,
+  dofConfig,
+  onAutoFocusDistance,
 }) => {
   const [isTransformDragging, setIsTransformDragging] = useState(false);
 
   return (
-    <div className="w-full h-full absolute inset-0 select-none overflow-hidden">
+    <div className="w-full h-full relative overflow-hidden select-none">
       <Canvas
         camera={{ position: [0, 2.5, 6.5], fov: cameraFov || 50, near: 0.1, far: 1000 }}
         dpr={isMobileViewfinder ? [1, 1.25] : [1, 2]}
@@ -1138,14 +1519,18 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           outputColorSpace: THREE.SRGBColorSpace,
         }}
         onPointerMissed={() => {
-          if (!isTransformDragging) {
+          if (!isSelectionSuppressed() && !isTransformDragging) {
             onSelectAsset?.(null);
             onSelectActor?.(null);
+            onSelectPointLight?.(null);
           }
         }}
       >
         <CanvasPublisher onCanvasReady={onCanvasReady} />
         <CameraFovUpdater fov={cameraFov} />
+        {dofConfig && dofConfig.enabled && dofConfig.aperture < 100 && (
+          <CinematicDepthOfField config={dofConfig} onAutoFocusDistance={onAutoFocusDistance} />
+        )}
         <color attach="background" args={['#1c1c1e']} />
 
         {/* 3D Gaussian Splatting Walkable World Scene */}
@@ -1271,6 +1656,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
                 showTrajectory={showTrajectories}
                 onSelect={() => {
                   onSelectAsset?.(null);
+                  onSelectPointLight?.(null);
                   onSelectActor?.(actor.id);
                 }}
                 onDraggingChange={setIsTransformDragging}
@@ -1279,6 +1665,24 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
             </Suspense>
           </ActorErrorBoundary>
         ))}
+
+        {/* High-Performance Custom Point Lights with Physical Decay */}
+        {pointLights &&
+          pointLights.map((light) => (
+            <PointLightNode
+              key={light.id}
+              light={light}
+              isSelected={selectedPointLightId === light.id}
+              isMobileViewfinder={isMobileViewfinder}
+              onSelect={() => {
+                onSelectAsset?.(null);
+                onSelectActor?.(null);
+                onSelectPointLight?.(light.id);
+              }}
+              onDraggingChange={setIsTransformDragging}
+              onPositionChange={onUpdatePointLightPosition}
+            />
+          ))}
 
           {/* 3D Visualizers for Active Constraints (Waypoints & Look-At Targets) */}
           {characters.map((actor) => {

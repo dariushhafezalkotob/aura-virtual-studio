@@ -2,13 +2,13 @@
   {
     "id": "stage_proj_proj_1789042056664",
     "name": "Bar",
-    "createdAt": "2026-09-11T08:23:35.811Z",
+    "createdAt": "2026-09-11T17:06:28.400Z",
     "scenes": [
       {
         "id": "roombake_1789042691984",
         "name": "AI Baked Room Environment",
         "category": "environment",
-        "glbUrl": "/api/assets/roombake_1789114961636.glb",
+        "glbUrl": "/api/assets/roombake_1789120450479.glb",
         "position": [
           0,
           0,
@@ -24,12 +24,1417 @@
           1,
           1
         ],
-        "createdAt": "2026-09-11T08:22:41.933Z"
+        "createdAt": "2026-09-11T09:54:10.505Z"
+      },
+      {
+        "id": "asset_1789118872351",
+        "name": "a bar shelf filled with liquor bottles",
+        "glbUrl": "/api/assets/trellis_1789118871533_usxkr.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789118872343_gbsyk.mp4",
+        "position": [
+          3.7990374525370174,
+          1.2819164096846674,
+          -0.8279523850154769
+        ],
+        "rotation": [
+          -3.141592653589793,
+          1.5493917459921611,
+          -3.141592653589793
+        ],
+        "scale": [
+          1.2229157026184307,
+          1.2229157026184307,
+          1.2229157026184307
+        ],
+        "prompt": "a bar shelf filled with liquor bottles",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "12:57 PM",
+        "specularity": 0.4
+      },
+      {
+        "id": "asset_1789119037352",
+        "name": "a tall bar shelf filled with liquor bottles",
+        "glbUrl": "/api/assets/trellis_1789119036631_u0x5u.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789119037342_6kikk.mp4",
+        "position": [
+          3.7283106743351944,
+          0,
+          -1.0320455866789107
+        ],
+        "rotation": [
+          0,
+          -1.5517825149871922,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          2.0441004532020783
+        ],
+        "prompt": "a tall bar shelf filled with liquor bottles",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "01:00 PM"
+      },
+      {
+        "id": "asset_1789119152380",
+        "name": "a tall bar shelf filled with liquor bottles",
+        "glbUrl": "/api/assets/trellis_1789119151631_sjqsn.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789119152307_o9l40.mp4",
+        "position": [
+          3.794426996590902,
+          0.4583773722977711,
+          0.17732931796552787
+        ],
+        "rotation": [
+          0,
+          -1.5289855198327273,
+          0
+        ],
+        "scale": [
+          2.055749046702671,
+          1.7218759524452518,
+          2.2905429243611994
+        ],
+        "prompt": "a tall bar shelf filled with liquor bottles",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "01:02 PM"
+      },
+      {
+        "id": "asset_1789120513133",
+        "name": "bar chair for counter",
+        "glbUrl": "/api/assets/trellis_1789120512530_6vcov.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789120513125_rbgx4.mp4",
+        "position": [
+          0.3153432857878571,
+          0,
+          0.2623467499083808
+        ],
+        "rotation": [
+          0,
+          0.010702383828586721,
+          0
+        ],
+        "scale": [
+          1.3019013713381127,
+          0.7273862248206704,
+          1.4116039446278408
+        ],
+        "prompt": "bar chair for counter",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "01:25 PM"
+      },
+      {
+        "id": "asset_1789132357455",
+        "name": "banquette bench sitting for bar",
+        "glbUrl": "/api/assets/trellis_1789132356722_j3w07.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789132357446_3ryfu.mp4",
+        "position": [
+          2.947703181954826,
+          0,
+          -3.746987450565643
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1.6411971181575886,
+          1,
+          1.7331374029787971
+        ],
+        "prompt": "banquette bench sitting for bar",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "04:42 PM"
+      },
+      {
+        "id": "asset_1789132508136_e4if",
+        "name": "banquette bench sitting for bar (Copy)",
+        "glbUrl": "/api/assets/trellis_1789132356722_j3w07.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789132357446_3ryfu.mp4",
+        "position": [
+          3.013057268435606,
+          0,
+          -2.1389520597333083
+        ],
+        "rotation": [
+          -3.141592653589793,
+          0.023272044733058425,
+          -3.141592653589793
+        ],
+        "scale": [
+          1.6411971181575886,
+          1,
+          1.7331374029787971
+        ],
+        "prompt": "banquette bench sitting for bar",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "04:42 PM"
+      },
+      {
+        "id": "asset_1789132729601",
+        "name": "an rectangle wooden table with some bottles and glasses on it for a bar, The table legs are positioned in the center.",
+        "glbUrl": "/api/assets/trellis_1789132728849_efjum.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789132729593_m3e8j.mp4",
+        "position": [
+          2.946384275837804,
+          0,
+          -2.9186548763563573
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1.9514426324773393,
+          1,
+          1.40564262427558
+        ],
+        "prompt": "an rectangle wooden table with some bottles and glasses on it for a bar, The table legs are positioned in the center.",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "04:48 PM"
+      },
+      {
+        "id": "asset_1789133140520_pxhr",
+        "name": "a wooden bar table with chairs (Copy)",
+        "glbUrl": "/api/assets/trellis_1789118434238_7bbe5.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789118435038_ifbiw.mp4",
+        "position": [
+          -2.3743176029148163,
+          -0.07036426419657832,
+          -1.1648813018635764
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1.5752716714886028,
+          1.1218582082641453,
+          1.8431936054986777
+        ],
+        "prompt": "a wooden bar table with chairs",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "12:50 PM"
+      },
+      {
+        "id": "asset_1789133174996_aw05",
+        "name": "a wooden bar table with chairs (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789118434238_7bbe5.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789118435038_ifbiw.mp4",
+        "position": [
+          -0.5274145447997018,
+          -0.0615966848009869,
+          -1.1234829518860536
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1.5752716714886028,
+          1.1218582082641453,
+          1.8431936054986777
+        ],
+        "prompt": "a wooden bar table with chairs",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "12:50 PM"
+      },
+      {
+        "id": "asset_1789133289671",
+        "name": "an rectangle wooden bar table with some bottles and glasses on it for a bar, with 4 chairs around it",
+        "glbUrl": "/api/assets/trellis_1789133288984_syoqt.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789133289666_kh1h8.mp4",
+        "position": [
+          0.7250676738982035,
+          0,
+          -3.238598113716784
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          2.3212335512289126,
+          1.6911739565487054,
+          2.200007486890575
+        ],
+        "prompt": "an rectangle wooden bar table with some bottles and glasses on it for a bar, with 4 chairs around it",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "04:58 PM"
+      },
+      {
+        "id": "asset_1789133560115",
+        "name": "an old rectangle wooden bar table with some bottles and glasses on it for a bar, The table legs are positioned in the center.",
+        "glbUrl": "/api/assets/trellis_1789133559321_sdrc8.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789133560109_hj5bh.mp4",
+        "position": [
+          -2.5951170385915576,
+          0,
+          0.8416490613551094
+        ],
+        "rotation": [
+          -3.141592653589793,
+          1.5595132565362806,
+          -3.141592653589793
+        ],
+        "scale": [
+          1.2916741529971645,
+          1,
+          1.5821544543517532
+        ],
+        "prompt": "an old rectangle wooden bar table with some bottles and glasses on it for a bar, The table legs are positioned in the center.",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:02 PM"
+      },
+      {
+        "id": "asset_1789133829455",
+        "name": "an old rectangle wooden bar table for a bar, The table legs are positioned in the center.",
+        "glbUrl": "/api/assets/trellis_1789133828693_mrhds.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789133829450_n1iyb.mp4",
+        "position": [
+          -0.6872079659563921,
+          -0.026155225829344042,
+          0.9145287592197873
+        ],
+        "rotation": [
+          -3.141592653589793,
+          1.559882411694221,
+          -3.141592653589793
+        ],
+        "scale": [
+          1.6770211740448788,
+          0.7974883865864537,
+          1.4819738461900174
+        ],
+        "prompt": "an old rectangle wooden bar table for a bar, The table legs are positioned in the center.",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:07 PM"
+      },
+      {
+        "id": "asset_1789134074150",
+        "name": "old bar table lamp for a bar table",
+        "glbUrl": "/api/assets/trellis_1789134073566_62jug.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789134074141_auucq.mp4",
+        "position": [
+          -0.7014799066718636,
+          0.5506201927431433,
+          1.476643948197981
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.7484424298672443,
+          0.5471481067970083,
+          0.7484424298672443
+        ],
+        "prompt": "old bar table lamp for a bar table",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:11 PM"
+      },
+      {
+        "id": "asset_1789134111385_c5ox",
+        "name": "old bar table lamp for a bar table (Copy)",
+        "glbUrl": "/api/assets/trellis_1789134073566_62jug.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789134074141_auucq.mp4",
+        "position": [
+          -2.614327766976481,
+          0.5779094626828902,
+          1.3264108138841688
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.7484424298672443,
+          0.5471481067970083,
+          0.7484424298672443
+        ],
+        "prompt": "old bar table lamp for a bar table",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:11 PM"
+      },
+      {
+        "id": "asset_1789134144579_qe56",
+        "name": "old bar table lamp for a bar table (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789134073566_62jug.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789134074141_auucq.mp4",
+        "position": [
+          -2.3900945217627916,
+          0.6361547958327105,
+          -1.452107494721807
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.7484424298672443,
+          0.5471481067970083,
+          0.7484424298672443
+        ],
+        "prompt": "old bar table lamp for a bar table",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:11 PM"
+      },
+      {
+        "id": "asset_1789134421584",
+        "name": "old bar wall light",
+        "glbUrl": "/api/assets/trellis_1789134420869_2rqua.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789134421577_3f396.mp4",
+        "position": [
+          -0.6839307707041886,
+          1.8363227345044082,
+          -3.921659065713855
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.5182963408205243,
+          0.44403084890144057,
+          0.6011803886823375
+        ],
+        "prompt": "old bar wall light",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:17 PM"
+      },
+      {
+        "id": "asset_1789134623731_wvcf",
+        "name": "a tall bar shelf filled with liquor bottles (Copy)",
+        "glbUrl": "/api/assets/trellis_1789119151631_sjqsn.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789119152307_o9l40.mp4",
+        "position": [
+          3.724091016502104,
+          0.4699929019616481,
+          1.0406507247298942
+        ],
+        "rotation": [
+          0,
+          -1.5289855198327273,
+          0
+        ],
+        "scale": [
+          2.055749046702671,
+          1.7218759524452518,
+          2.2905429243611994
+        ],
+        "prompt": "a tall bar shelf filled with liquor bottles",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "01:02 PM"
+      },
+      {
+        "id": "asset_1789137506127",
+        "name": "banquette bench seating for a bar",
+        "glbUrl": "/api/assets/trellis_1789137505441_z1yps.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789137506120_trm3p.mp4",
+        "position": [
+          -1.2419778384799989,
+          0,
+          0.8639915101726616
+        ],
+        "rotation": [
+          -3.141592653589793,
+          1.5545454398660954,
+          -3.141592653589793
+        ],
+        "scale": [
+          1.5091246020768196,
+          1.1532780702604275,
+          1.6583256795302685
+        ],
+        "prompt": "banquette bench seating for a bar",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:08 PM"
+      },
+      {
+        "id": "asset_1789142868790_pdf3",
+        "name": "banquette bench seating for a bar (Copy)",
+        "glbUrl": "/api/assets/trellis_1789137505441_z1yps.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789137506120_trm3p.mp4",
+        "position": [
+          -1.8286768351206213,
+          0,
+          0.8580041397163007
+        ],
+        "rotation": [
+          -2.361656027671714e-16,
+          -1.5623696312938844,
+          8.755971403628688e-18
+        ],
+        "scale": [
+          1.5091246020768196,
+          1.1532780702604275,
+          1.6583256795302685
+        ],
+        "prompt": "banquette bench seating for a bar",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:08 PM"
+      },
+      {
+        "id": "asset_1789142901735_l5xs",
+        "name": "banquette bench seating for a bar (Copy)",
+        "glbUrl": "/api/assets/trellis_1789137505441_z1yps.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789137506120_trm3p.mp4",
+        "position": [
+          -3.142559985537737,
+          0,
+          0.8728530528990064
+        ],
+        "rotation": [
+          -3.141592653589793,
+          1.5545454398660954,
+          -3.141592653589793
+        ],
+        "scale": [
+          1.5091246020768196,
+          1.1532780702604275,
+          1.6583256795302685
+        ],
+        "prompt": "banquette bench seating for a bar",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:08 PM"
+      },
+      {
+        "id": "asset_1789142928416_xfok",
+        "name": "banquette bench seating for a bar (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789137505441_z1yps.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789137506120_trm3p.mp4",
+        "position": [
+          -0.19362393360606478,
+          0,
+          0.8527147883948119
+        ],
+        "rotation": [
+          -2.361656027671714e-16,
+          -1.5623696312938844,
+          8.755971403628688e-18
+        ],
+        "scale": [
+          1.5091246020768196,
+          1.1532780702604275,
+          1.6583256795302685
+        ],
+        "prompt": "banquette bench seating for a bar",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:08 PM"
+      },
+      {
+        "id": "asset_1789142976648_cjg1",
+        "name": "banquette bench seating for a bar (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789137505441_z1yps.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789137506120_trm3p.mp4",
+        "position": [
+          0.682205504966577,
+          0,
+          1.4548526159166095
+        ],
+        "rotation": [
+          -3.141592653589793,
+          -0.004600716299188766,
+          -3.141592653589793
+        ],
+        "scale": [
+          1.2386120409205146,
+          1.1532780702604275,
+          1.6583256795302685
+        ],
+        "prompt": "banquette bench seating for a bar",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:08 PM"
+      },
+      {
+        "id": "asset_1789143062363_nnq0",
+        "name": "an old rectangle wooden bar table for a bar, The table legs are positioned in the center. (Copy)",
+        "glbUrl": "/api/assets/trellis_1789133828693_mrhds.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789133829450_n1iyb.mp4",
+        "position": [
+          0.6350758762692335,
+          -0.026155225829344042,
+          0.9008417935433918
+        ],
+        "rotation": [
+          -3.141592653589793,
+          -0.008950860459756363,
+          -3.141592653589793
+        ],
+        "scale": [
+          1.002913818192854,
+          0.7974883865864537,
+          1.4819738461900174
+        ],
+        "prompt": "an old rectangle wooden bar table for a bar, The table legs are positioned in the center.",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:07 PM"
+      },
+      {
+        "id": "asset_1789143394204",
+        "name": "bar old wooden counter wide table",
+        "glbUrl": "/api/assets/trellis_1789143393282_sbf1h.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789143394195_6ics7.mp4",
+        "position": [
+          2.4308612001428336,
+          0,
+          -0.7239847139025872
+        ],
+        "rotation": [
+          3.141592653589793,
+          -1.5685356159214334,
+          3.141592653589793
+        ],
+        "scale": [
+          1.720247437183437,
+          1.720247437183437,
+          1.720247437183437
+        ],
+        "prompt": "bar old wooden counter wide table",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:46 PM"
+      },
+      {
+        "id": "asset_1789143437862_d3bk",
+        "name": "bar old wooden counter wide table (Copy)",
+        "glbUrl": "/api/assets/trellis_1789143393282_sbf1h.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789143394195_6ics7.mp4",
+        "position": [
+          2.4249346974247024,
+          0,
+          0.8192619791678093
+        ],
+        "rotation": [
+          3.141592653589793,
+          -1.5685356159214334,
+          3.141592653589793
+        ],
+        "scale": [
+          1.720247437183437,
+          1.720247437183437,
+          1.720247437183437
+        ],
+        "prompt": "bar old wooden counter wide table",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:46 PM"
+      },
+      {
+        "id": "asset_1789143717513",
+        "name": "bar old bar beer taps",
+        "glbUrl": "/api/assets/trellis_1789143716818_bkx1r.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789143717507_sa8sg.mp4",
+        "position": [
+          2.409572468965381,
+          0.9336744905317695,
+          0.05756991582567644
+        ],
+        "rotation": [
+          0,
+          1.4881219131371137,
+          0
+        ],
+        "scale": [
+          0.5766165082370853,
+          0.5766165082370853,
+          0.7300579335051788
+        ],
+        "prompt": "bar old bar beer taps",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:51 PM"
+      },
+      {
+        "id": "asset_1789143961889",
+        "name": "A few half-filled different sized glasses of beer stand next to each other",
+        "glbUrl": "/api/assets/trellis_1789143961142_yoc1t.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789143961878_z5cwa.mp4",
+        "position": [
+          2.4458371335441087,
+          0.9350342944129466,
+          -1.1870559900277047
+        ],
+        "rotation": [
+          -3.141592653589793,
+          1.3293600847717006,
+          -3.141592653589793
+        ],
+        "scale": [
+          0.4065391834481462,
+          0.3050021052624436,
+          0.4065391834481462
+        ],
+        "prompt": "A few half-filled different sized glasses of beer stand next to each other",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:56 PM"
+      },
+      {
+        "id": "asset_1789144114878",
+        "name": "A  half-filled glasses of whiskey glass",
+        "glbUrl": "/api/assets/trellis_1789144114196_jvy03.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789144114869_mzucz.mp4",
+        "position": [
+          2.4503604248103326,
+          0.9366524451238212,
+          0.8802012054339817
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.22911988175788547,
+          0.18502946628535225,
+          0.25902531869178
+        ],
+        "prompt": "A  half-filled glasses of whiskey glass",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:58 PM"
+      },
+      {
+        "id": "asset_1789144303492",
+        "name": "Bar stool with a leather seat",
+        "glbUrl": "/api/assets/trellis_1789144302844_yhx8x.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789144303483_el2ac.mp4",
+        "position": [
+          1.8660494007835369,
+          0,
+          -1.0323921847880686
+        ],
+        "rotation": [
+          0,
+          0.4605226629944597,
+          0
+        ],
+        "scale": [
+          1.1496919945729631,
+          0.6987051152902756,
+          1.1496919945729631
+        ],
+        "prompt": "Bar stool with a leather seat",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:01 PM"
+      },
+      {
+        "id": "asset_1789144367163_mpo3",
+        "name": "Bar stool with a leather seat (Copy)",
+        "glbUrl": "/api/assets/trellis_1789144302844_yhx8x.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789144303483_el2ac.mp4",
+        "position": [
+          1.8664817446724982,
+          0,
+          -0.42962791919166493
+        ],
+        "rotation": [
+          0,
+          -0.28646028086975467,
+          0
+        ],
+        "scale": [
+          1.1496919945729631,
+          0.6987051152902756,
+          1.1496919945729631
+        ],
+        "prompt": "Bar stool with a leather seat",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:01 PM"
+      },
+      {
+        "id": "asset_1789144422262_bbar",
+        "name": "Bar stool with a leather seat (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789144302844_yhx8x.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789144303483_el2ac.mp4",
+        "position": [
+          1.7173110130122584,
+          0,
+          0.2875810663848441
+        ],
+        "rotation": [
+          0,
+          -0.28646028086975467,
+          0
+        ],
+        "scale": [
+          1.1496919945729631,
+          0.6987051152902756,
+          1.1496919945729631
+        ],
+        "prompt": "Bar stool with a leather seat",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:01 PM"
+      },
+      {
+        "id": "asset_1789144431300_vlwk",
+        "name": "Bar stool with a leather seat (Copy) (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789144302844_yhx8x.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789144303483_el2ac.mp4",
+        "position": [
+          1.8607858980397622,
+          0,
+          0.9597950572384439
+        ],
+        "rotation": [
+          0,
+          -0.28646028086975467,
+          0
+        ],
+        "scale": [
+          1.1496919945729631,
+          0.6987051152902756,
+          1.1496919945729631
+        ],
+        "prompt": "Bar stool with a leather seat",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:01 PM"
+      },
+      {
+        "id": "asset_1789144676178_6dwh",
+        "name": "old style Ceiling light for bar (Copy)",
+        "glbUrl": "/api/assets/trellis_1789144586228_o2gf2.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789144586951_c31jf.mp4",
+        "position": [
+          2.326037197681498,
+          1.6040554496628017,
+          0.16733701114898913
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.6850665511200741,
+          0.6850665511200741,
+          0.6850665511200741
+        ],
+        "prompt": "old style Ceiling light for bar",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:06 PM"
+      },
+      {
+        "id": "asset_1789145461671",
+        "name": "wooden timber for celling",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          -1.1612522515516914,
+          2.286380680187429,
+          -0.16761097599751928
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789145522092_9xgo",
+        "name": "wooden timber for celling (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          -2.2907625344053053,
+          2.295795875434598,
+          0.3323890240024807
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789145538625_0xdz",
+        "name": "wooden timber for celling (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          -3.5349676662553433,
+          2.295795875434598,
+          0.8323890240024807
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789145551106_318p",
+        "name": "wooden timber for celling (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          -2.9268671320512376,
+          2.295795875434598,
+          -1.5046851769749323
+        ],
+        "rotation": [
+          -3.141592653589793,
+          1.5544020602085105,
+          -3.141592653589793
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789145596456_hhhc",
+        "name": "wooden timber for celling (Copy) (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          -1.5799800186554451,
+          2.295795875434598,
+          1.7054937609354712
+        ],
+        "rotation": [
+          -3.2105929542374523e-16,
+          1.5645431461917823,
+          5.659659210319712e-16
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789145648110_jfv4",
+        "name": "wooden timber for celling (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          2.3289470072935528,
+          2.286380680187429,
+          0.3323890240024807
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789145705671_70w8",
+        "name": "old style Ceiling light for bar (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789144586228_o2gf2.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789144586951_c31jf.mp4",
+        "position": [
+          2.336570958719389,
+          1.6040554496628017,
+          1.0066307505708998
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.6850665511200741,
+          0.6850665511200741,
+          0.6850665511200741
+        ],
+        "prompt": "old style Ceiling light for bar",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:06 PM"
+      },
+      {
+        "id": "asset_1789145718993_ribl",
+        "name": "old style Ceiling light for bar (Copy) (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789144586228_o2gf2.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789144586951_c31jf.mp4",
+        "position": [
+          2.3408844292468753,
+          1.6040554496628017,
+          -0.6775559263893023
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.6850665511200741,
+          0.6850665511200741,
+          0.6850665511200741
+        ],
+        "prompt": "old style Ceiling light for bar",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:06 PM"
+      },
+      {
+        "id": "asset_1789145735319_u8z8",
+        "name": "wooden timber for celling (Copy) (Copy) (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          2.225194541193103,
+          2.295795875434598,
+          1.721562463860879
+        ],
+        "rotation": [
+          -3.2105929542374523e-16,
+          1.5645431461917823,
+          5.659659210319712e-16
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789145787520_1pnn",
+        "name": "wooden timber for celling (Copy) (Copy) (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          -1.5343734192228276,
+          2.295795875434598,
+          0.5314329618130806
+        ],
+        "rotation": [
+          -3.2105929542374523e-16,
+          1.5645431461917823,
+          5.659659210319712e-16
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789145809616_31bx",
+        "name": "wooden timber for celling (Copy) (Copy) (Copy) (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          2.2828571164154425,
+          2.295795875434598,
+          0.5337458191158426
+        ],
+        "rotation": [
+          -3.2105929542374523e-16,
+          1.5645431461917823,
+          5.659659210319712e-16
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789145830108_zhhy",
+        "name": "wooden timber for celling (Copy) (Copy) (Copy) (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          -1.6286145378887489,
+          2.295795875434598,
+          -0.6304838752230946
+        ],
+        "rotation": [
+          -3.2105929542374523e-16,
+          1.5645431461917823,
+          5.659659210319712e-16
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789145842438_xuzw",
+        "name": "wooden timber for celling (Copy) (Copy) (Copy) (Copy) (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          2.1730425054946814,
+          2.295795875434598,
+          -0.6094509838910536
+        ],
+        "rotation": [
+          -3.2105929542374523e-16,
+          1.5645431461917823,
+          5.659659210319712e-16
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789145883704_rpdd",
+        "name": "wooden timber for celling (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          0.6008279661495313,
+          2.286380680187429,
+          -0.291947008013139
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789146291624_9mhe",
+        "name": "wooden timber for celling (Copy) (Copy) (Copy) (Copy) (Copy) (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          0.9419085604737801,
+          2.295542101926672,
+          -1.5285350106940638
+        ],
+        "rotation": [
+          -3.2105929542374523e-16,
+          1.5645431461917823,
+          5.659659210319712e-16
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789146326774_by8r",
+        "name": "wooden timber for celling (Copy) (Copy) (Copy) (Copy) (Copy) (Copy) (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          4.760325959388516,
+          2.295542101926672,
+          -1.5300194205502307
+        ],
+        "rotation": [
+          -3.2105929542374523e-16,
+          1.5645431461917823,
+          5.659659210319712e-16
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789146340902_if9i",
+        "name": "wooden timber for celling (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          3.8129335787060343,
+          2.286380680187429,
+          0.4509752515312132
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789146362217_nc3f",
+        "name": "wooden timber for celling (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789145461048_fp4jc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789145461663_t44et.mp4",
+        "position": [
+          2.335108678510335,
+          2.286380680187429,
+          -2.473603038992196
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.7090078137877187,
+          0.8614601611908522,
+          3.91034941535023
+        ],
+        "prompt": "wooden timber for celling",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:21 PM"
       }
     ],
     "panoramaRotation": 0,
     "environmentPreset": "studio",
     "lightIntensity": 1,
+    "stageSpecularity": 0.15,
+    "pointLights": [
+      {
+        "id": "ptlight_1789119905527_ke1g",
+        "name": "Point Light 1",
+        "color": "#cb9b57",
+        "intensity": 3.2,
+        "distance": 26.5,
+        "decay": 2.3,
+        "position": [
+          3.432340440102661,
+          1.6899533028564624,
+          -1.1002745061656491
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789120590062_4p1z",
+        "name": "Point Light 2",
+        "color": "#e3901c",
+        "intensity": 2.5,
+        "distance": 33,
+        "decay": 2,
+        "position": [
+          3.352845720117044,
+          1.738067233957393,
+          0.945946497362704
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789134171500_a6jd",
+        "name": "Point Light 3",
+        "color": "#e5ac5d",
+        "intensity": 0.6,
+        "distance": 1,
+        "decay": 3.8,
+        "position": [
+          -2.416644124293469,
+          1.1104926427180535,
+          -1.2558524276705827
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789134245587_awwf",
+        "name": "Point Light 3 (Copy)",
+        "color": "#e5ac5d",
+        "intensity": 0.6,
+        "distance": 1,
+        "decay": 3.8,
+        "position": [
+          -2.38175482651946,
+          1.079463646493736,
+          1.0616923855931333
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789134272641_q5yd",
+        "name": "Point Light 3 (Copy) (Copy)",
+        "color": "#e5ac5d",
+        "intensity": 0.6,
+        "distance": 1,
+        "decay": 3.8,
+        "position": [
+          -0.5789367045731246,
+          1.079463646493736,
+          1.161205692868177
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789134496133_61e0",
+        "name": "Point Light 6",
+        "color": "#f0ca93",
+        "intensity": 2,
+        "distance": 42.5,
+        "decay": 3.3,
+        "position": [
+          -0.6102917614672807,
+          1.719152516680363,
+          -3.6641866847590223
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789144745683_u5c2",
+        "name": "Point Light 7",
+        "color": "#f4dbb8",
+        "intensity": 10.8,
+        "distance": 1,
+        "decay": 0.9,
+        "position": [
+          2.339811694842207,
+          1.764088147441942,
+          0.16532621422058028
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789144840327_opke",
+        "name": "Point Light 7 (Copy)",
+        "color": "#f4dbb8",
+        "intensity": 10.8,
+        "distance": 1,
+        "decay": 1.5,
+        "position": [
+          2.273464813631413,
+          1.7878028656015201,
+          1.0623548353052623
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789144907460_io21",
+        "name": "Point Light 7 (Copy)",
+        "color": "#f4dbb8",
+        "intensity": 10.8,
+        "distance": 1,
+        "decay": 0.9,
+        "position": [
+          2.4456905971322067,
+          1.764088147441942,
+          -0.7503756037557486
+        ],
+        "enabled": true
+      }
+    ],
     "thumbnail": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80"
   },
   {
@@ -192,7 +1597,7 @@
       {
         "id": "asset_prop_1",
         "name": "Sci-Fi Film Camera",
-        "glbUrl": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/AntiqueCamera/glTF-Binary/AntiqueCamera.glb",
+        "glbUrl": "/api/assets/model_1789118485348_glait.glb",
         "position": [
           0,
           0,

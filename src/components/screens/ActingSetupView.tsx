@@ -325,10 +325,13 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
           <ThreeStage
             assets={assets}
             selectedAssetId={null}
+            pointLights={currentProject.pointLights}
             characters={characters.map((c) => ({ ...c, renderMode }))}
             selectedActorId={selectedActorId}
             transformMode={transformMode}
+            lightIntensity={currentProject.lightIntensity}
             stageSpecularity={currentProject.stageSpecularity}
+            environmentPreset={currentProject.environmentPreset}
             onSelectActor={(id) => setSelectedActorId(id || '')}
             onUpdateActorTransform={handleUpdateActorTransform}
             currentTimelineTime={timelineSec}
@@ -336,6 +339,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             showTrajectories={showTrajectories}
             panoramaUrl={currentProject.panoramaUrl}
             panoramaRotation={currentProject.panoramaRotation || 0}
+            showPanorama={currentProject.showPanorama}
             splatUrl={currentProject.splatUrl}
           />
 

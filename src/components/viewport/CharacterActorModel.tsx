@@ -3,7 +3,12 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { TransformControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { CharacterActor, ActorConstraint, UpperBodyPosePreset } from '../../types';
-import { TransformMode } from './ThreeStage';
+import {
+  TransformMode,
+  markTransformDragStart,
+  markTransformDragEnd,
+  isSelectionSuppressed,
+} from './ThreeStage';
 
 interface CharacterActorModelProps {
   actor: CharacterActor;
@@ -666,8 +671,13 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     }
   });
 
+  const pointerDownPosRef = useRef<{ x: number; y: number } | null>(null);
+
   const handleTransformEnd = () => {
-    onDraggingChange(false);
+    markTransformDragEnd();
+    setTimeout(() => {
+      onDraggingChange(false);
+    }, 200);
     if (rootGroupRef.current && onTransformChange) {
       const pos: [number, number, number] = [
         rootGroupRef.current.position.x,
@@ -704,8 +714,17 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
         position={position}
         rotation={rotation}
         scale={scale}
+        onPointerDown={(e) => {
+          pointerDownPosRef.current = { x: e.clientX, y: e.clientY };
+        }}
         onClick={(e) => {
           e.stopPropagation();
+          if (isSelectionSuppressed()) return;
+          if (pointerDownPosRef.current) {
+            const dx = e.clientX - pointerDownPosRef.current.x;
+            const dy = e.clientY - pointerDownPosRef.current.y;
+            if (dx * dx + dy * dy > 25) return;
+          }
           onSelect();
         }}
       >
@@ -741,7 +760,10 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
           object={rootGroupRef.current}
           mode={transformMode}
           size={0.75}
-          onMouseDown={() => onDraggingChange(true)}
+          onMouseDown={() => {
+            markTransformDragStart();
+            onDraggingChange(true);
+          }}
           onMouseUp={handleTransformEnd}
         />
       )}

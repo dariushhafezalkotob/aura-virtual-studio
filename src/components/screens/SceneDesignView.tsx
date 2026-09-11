@@ -6,6 +6,7 @@ import {
   AssetCategory,
   WorkflowStage,
   SavedStageTemplate,
+  StagePointLight,
 } from '../../types';
 import { TrellisService, GenerationProgress } from '../../services/trellisService';
 import {
@@ -147,9 +148,20 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const [environmentPreset, setEnvironmentPreset] = useState<LightingEnvironmentPreset>('studio');
   const [showGrid, setShowGrid] = useState<boolean>(true);
 
+  // High-Performance Point Lights State (Physical Decay, Zero Shadow Map Overhead)
+  const [pointLights, setPointLights] = useState<StagePointLight[]>(currentProject.pointLights || []);
+  const [selectedPointLightId, setSelectedPointLightId] = useState<string | null>(null);
+  const [showPointLightsPanel, setShowPointLightsPanel] = useState<boolean>(false);
+
   useEffect(() => {
     if (currentProject.stageSpecularity !== undefined) {
       setStageSpecularity(currentProject.stageSpecularity);
+    }
+  }, [currentProject.id]);
+
+  useEffect(() => {
+    if (currentProject.pointLights) {
+      setPointLights(currentProject.pointLights);
     }
   }, [currentProject.id]);
 
@@ -204,39 +216,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     });
   }, [currentProject, onUpdateProject]);
 
-  // Global Keyboard Shortcuts for Undo (Ctrl+Z / Cmd+Z) and Redo (Ctrl+Y / Ctrl+Shift+Z / Cmd+Shift+Z)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept if user is typing inside text inputs/textareas
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
 
-      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
-      if (!isCmdOrCtrl) return;
-
-      const key = e.key.toLowerCase();
-
-      // Undo: Cmd+Z (Mac) or Ctrl+Z without Shift
-      if (key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        handleUndo();
-      }
-      // Redo: Cmd+Shift+Z (Mac) or Ctrl+Shift+Z or Ctrl+Y / Cmd+Y
-      else if ((key === 'z' && e.shiftKey) || key === 'y') {
-        e.preventDefault();
-        handleRedo();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo]);
 
   // 360 & 3DGS World State
   const [panoramaUrl, setPanoramaUrl] = useState<string | null>(currentProject.panoramaUrl || null);
@@ -262,6 +242,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
 
   const assets = currentProject.scenes || [];
   const selectedAsset = assets.find((a) => a.id === selectedAssetId) || null;
+  const selectedPointLight = pointLights.find((l) => l.id === selectedPointLightId) || null;
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -701,6 +682,151 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     onUpdateProject(updated);
   };
 
+  const handleDuplicateAsset = (idToDup?: string | null) => {
+    const targetId = idToDup || selectedAssetId;
+    const asset = assets.find((a) => a.id === targetId);
+    if (!asset) return;
+
+    pushUndoSnapshot();
+
+    const dup: SceneAsset = {
+      ...JSON.parse(JSON.stringify(asset)),
+      id: `asset_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      name: `${asset.name} (Copy)`,
+      position: [asset.position[0] + 0.5, asset.position[1], asset.position[2] + 0.5],
+    };
+
+    const updated = {
+      ...currentProject,
+      scenes: [...assets, dup],
+    };
+
+    onUpdateProject(updated);
+    setSelectedAssetId(dup.id);
+    setSelectedPointLightId(null);
+  };
+
+  // ----------------------------------------------------
+  // High-Performance Point Lights Handlers (Physical Decay)
+  // ----------------------------------------------------
+
+  const updatePointLightsAndProject = (newLights: StagePointLight[]) => {
+    setPointLights(newLights);
+    onUpdateProject({
+      ...currentProject,
+      pointLights: newLights,
+    });
+  };
+
+  const handleAddPointLight = () => {
+    const count = pointLights.length + 1;
+    const newLight: StagePointLight = {
+      id: `ptlight_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      name: `Point Light ${count}`,
+      color: '#fff4e5', // warm tungsten by default
+      intensity: 2.5,
+      distance: 15,
+      decay: 2.0,
+      position: [0, 2.5, 0],
+      enabled: true,
+    };
+    const updated = [...pointLights, newLight];
+    updatePointLightsAndProject(updated);
+    setSelectedPointLightId(newLight.id);
+    setSelectedAssetId(null);
+    setShowPointLightsPanel(true);
+  };
+
+  const handleUpdatePointLight = (id: string, updates: Partial<StagePointLight>) => {
+    const updated = pointLights.map((l) => (l.id === id ? { ...l, ...updates } : l));
+    updatePointLightsAndProject(updated);
+  };
+
+  const handleUpdatePointLightPosition = (id: string, pos: [number, number, number]) => {
+    const updated = pointLights.map((l) => (l.id === id ? { ...l, position: pos } : l));
+    updatePointLightsAndProject(updated);
+  };
+
+  const handleDeletePointLight = (id: string) => {
+    const updated = pointLights.filter((l) => l.id !== id);
+    updatePointLightsAndProject(updated);
+    if (selectedPointLightId === id) setSelectedPointLightId(null);
+  };
+
+  const handleDuplicatePointLight = (light: StagePointLight) => {
+    const dup: StagePointLight = {
+      ...JSON.parse(JSON.stringify(light)),
+      id: `ptlight_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      name: `${light.name} (Copy)`,
+      position: [light.position[0] + 0.8, light.position[1], light.position[2] + 0.8],
+    };
+    const updated = [...pointLights, dup];
+    updatePointLightsAndProject(updated);
+    setSelectedPointLightId(dup.id);
+    setSelectedAssetId(null);
+  };
+
+  // Global Keyboard Shortcuts for Undo (Ctrl+Z / Cmd+Z), Redo (Ctrl+Y / Cmd+Shift+Z), Duplicate (Ctrl+D / Cmd+D), Delete (Del / Backspace)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept if user is typing inside text inputs/textareas
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+      const key = e.key.toLowerCase();
+
+      // Undo: Cmd+Z (Mac) or Ctrl+Z without Shift
+      if (isCmdOrCtrl && key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      }
+      // Redo: Cmd+Shift+Z (Mac) or Ctrl+Shift+Z or Ctrl+Y / Cmd+Y
+      else if (isCmdOrCtrl && ((key === 'z' && e.shiftKey) || key === 'y')) {
+        e.preventDefault();
+        handleRedo();
+      }
+      // Duplicate Object or Point Light: Cmd+D / Ctrl+D
+      else if (isCmdOrCtrl && key === 'd') {
+        if (selectedAssetId) {
+          e.preventDefault();
+          handleDuplicateAsset(selectedAssetId);
+        } else if (selectedPointLightId) {
+          e.preventDefault();
+          const light = pointLights.find((l) => l.id === selectedPointLightId);
+          if (light) handleDuplicatePointLight(light);
+        }
+      }
+      // Delete Object or Point Light: Delete or Backspace
+      else if (!isCmdOrCtrl && (key === 'delete' || key === 'backspace')) {
+        if (selectedAssetId) {
+          e.preventDefault();
+          handleDeleteAsset(selectedAssetId);
+        } else if (selectedPointLightId) {
+          e.preventDefault();
+          handleDeletePointLight(selectedPointLightId);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    handleUndo,
+    handleRedo,
+    selectedAssetId,
+    selectedPointLightId,
+    pointLights,
+    assets,
+    currentProject,
+  ]);
+
   // ----------------------------------------------------
   // Stage Persistence & Reusable Stage Library Handlers
   // ----------------------------------------------------
@@ -714,6 +840,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       panoramaRotation: panoramaRotation || 0,
       splatUrl: splatUrl || undefined,
       stageSpecularity,
+      pointLights: JSON.parse(JSON.stringify(pointLights)),
       modified: 'Just now',
     };
     onUpdateProject(updatedProject);
@@ -731,6 +858,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       environmentPreset,
       lightIntensity,
       stageSpecularity,
+      pointLights: JSON.parse(JSON.stringify(pointLights)),
       thumbnail: currentProject.thumbnail,
     };
 
@@ -741,7 +869,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       console.warn('Failed to sync to stage library:', err);
     }
 
-    setSaveToast(`✓ Stage "${stageName}" saved to disk & library (${assets.length} object${assets.length === 1 ? '' : 's'})`);
+    const lightMsg = pointLights.length > 0 ? ` + ${pointLights.length} point light${pointLights.length === 1 ? '' : 's'}` : '';
+    setSaveToast(`✓ Stage "${stageName}" saved to disk & library (${assets.length} object${assets.length === 1 ? '' : 's'}${lightMsg})`);
     setTimeout(() => {
       setSaveToast(null);
       setIsSavingStage(false);
@@ -763,6 +892,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       environmentPreset,
       lightIntensity,
       stageSpecularity,
+      pointLights: JSON.parse(JSON.stringify(pointLights)),
       thumbnail: currentProject.thumbnail,
     };
 
@@ -787,6 +917,11 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     if (template.stageSpecularity !== undefined) {
       setStageSpecularity(template.stageSpecularity);
     }
+    if (template.pointLights) {
+      setPointLights(template.pointLights);
+    } else {
+      setPointLights([]);
+    }
 
     onUpdateProject({
       ...currentProject,
@@ -795,11 +930,14 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       panoramaRotation: template.panoramaRotation || 0,
       splatUrl: template.splatUrl || undefined,
       stageSpecularity: template.stageSpecularity,
+      pointLights: template.pointLights || [],
       modified: 'Just now',
     });
 
     setShowStageLibraryModal(false);
-    setSaveToast(`✓ Loaded stage "${template.name}" (${template.scenes?.length || 0} objects)`);
+    const lightCount = template.pointLights?.length || 0;
+    const lightDesc = lightCount > 0 ? `, ${lightCount} point light${lightCount === 1 ? '' : 's'}` : '';
+    setSaveToast(`✓ Loaded stage "${template.name}" (${template.scenes?.length || 0} objects${lightDesc})`);
     setTimeout(() => setSaveToast(null), 3500);
   };
 
@@ -1055,6 +1193,30 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             </span>
           </div>
 
+          {/* Point Lights Studio Toggle */}
+          <button
+            onClick={() => {
+              setShowPointLightsPanel(!showPointLightsPanel);
+              if (!showPointLightsPanel && pointLights.length > 0 && !selectedPointLightId) {
+                setSelectedPointLightId(pointLights[0].id);
+              }
+            }}
+            className={`flex items-center gap-xs px-sm py-[4px] rounded-lg text-[11px] font-label-caps font-semibold transition-all border cursor-pointer ${
+              showPointLightsPanel || pointLights.length > 0
+                ? 'bg-amber-400/15 text-amber-300 border-amber-400/50 shadow-sm'
+                : 'bg-surface-container-high/60 text-on-surface-variant border-outline-variant/40 hover:text-on-surface'
+            }`}
+            title="Stage Point Lights with Physical Inverse-Square Falloff"
+          >
+            <span className="material-symbols-outlined text-[16px] text-amber-400">light</span>
+            <span>POINT LIGHTS</span>
+            {pointLights.length > 0 && (
+              <span className="px-1.5 py-[1px] rounded-full bg-amber-400/30 text-amber-200 text-[9px] font-mono font-bold">
+                {pointLights.length}
+              </span>
+            )}
+          </button>
+
           {/* Grid Toggle */}
           <button
             onClick={() => setShowGrid(!showGrid)}
@@ -1123,6 +1285,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
         <ThreeStage
           assets={assets}
           selectedAssetId={selectedAssetId}
+          pointLights={pointLights}
+          selectedPointLightId={selectedPointLightId}
           transformMode={transformMode}
           lightIntensity={lightIntensity}
           stageSpecularity={stageSpecularity}
@@ -1131,8 +1295,16 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           panoramaRotation={panoramaRotation}
           showPanorama={showPanorama}
           splatUrl={splatUrl}
-          onSelectAsset={setSelectedAssetId}
+          onSelectAsset={(id) => {
+            setSelectedAssetId(id);
+            if (id) setSelectedPointLightId(null);
+          }}
+          onSelectPointLight={(id) => {
+            setSelectedPointLightId(id);
+            if (id) setSelectedAssetId(null);
+          }}
           onUpdateAssetTransform={handleUpdateAssetTransform}
+          onUpdatePointLightPosition={handleUpdatePointLightPosition}
           showGrid={showGrid}
         />
 
@@ -1150,6 +1322,294 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               onChange={(e) => setPanoramaRotation(parseFloat(e.target.value))}
               className="w-20 accent-primary cursor-pointer"
             />
+          </div>
+        )}
+
+        {/* Floating Point Lights Studio Panel */}
+        {showPointLightsPanel && (
+          <div className="absolute top-sm left-sm w-[260px] bg-surface-container/90 backdrop-blur-md border border-outline-variant/40 p-sm rounded-xl flex flex-col gap-xs z-20 shadow-2xl animate-in fade-in slide-in-from-left-2 duration-150">
+            <div className="flex justify-between items-center pb-xs border-b border-outline-variant/20">
+              <div className="flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-[16px] text-amber-400">light</span>
+                <span className="font-label-caps text-[11px] text-amber-300 font-bold uppercase tracking-wider">
+                  Stage Point Lights
+                </span>
+              </div>
+              <button
+                onClick={() => setShowPointLightsPanel(false)}
+                className="text-on-surface-variant hover:text-on-surface text-[12px] cursor-pointer p-0.5"
+                title="Close Panel"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-[10px] text-on-surface-variant/80 leading-tight">
+              High-performance point lights with real-world physical inverse-square decay.
+            </p>
+
+            {/* Lights List */}
+            <div className="max-h-48 overflow-y-auto space-y-1 my-1 pr-1 custom-scrollbar">
+              {pointLights.length === 0 ? (
+                <div className="text-center py-3 text-[11px] text-on-surface-variant/60">
+                  No point lights added yet.
+                </div>
+              ) : (
+                pointLights.map((light, idx) => {
+                  const isSelected = light.id === selectedPointLightId;
+                  return (
+                    <div
+                      key={light.id}
+                      onClick={() => {
+                        setSelectedPointLightId(light.id);
+                        setSelectedAssetId(null);
+                      }}
+                      className={`flex items-center justify-between px-2 py-1.5 rounded-lg text-[11px] font-medium cursor-pointer transition-all border ${
+                        isSelected
+                          ? 'bg-amber-400/20 border-amber-400/60 text-on-surface shadow-sm'
+                          : 'bg-surface-container-high/40 border-outline-variant/20 text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {/* Enabled / Disabled Bulb Toggle */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleUpdatePointLight(light.id, { enabled: light.enabled === false ? true : false });
+                          }}
+                          className={`p-0.5 rounded cursor-pointer ${
+                            light.enabled !== false ? 'text-amber-400 hover:text-amber-300' : 'text-on-surface-variant/30 hover:text-on-surface-variant'
+                          }`}
+                          title={light.enabled !== false ? 'Disable light' : 'Enable light'}
+                        >
+                          <span className="material-symbols-outlined text-[15px]">
+                            {light.enabled !== false ? 'wb_incandescent' : 'lightbulb'}
+                          </span>
+                        </button>
+                        {/* Color preview circle */}
+                        <div
+                          className="w-3 h-3 rounded-full border border-white/20 shrink-0"
+                          style={{ backgroundColor: light.color || '#fff4e5' }}
+                        />
+                        <span className="truncate font-label-caps text-[10px]">
+                          {light.name || `Point Light ${idx + 1}`}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDuplicatePointLight(light);
+                          }}
+                          className="text-on-surface-variant hover:text-primary p-0.5 cursor-pointer"
+                          title="Duplicate light"
+                        >
+                          <span className="material-symbols-outlined text-[13px]">content_copy</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeletePointLight(light.id);
+                          }}
+                          className="text-on-surface-variant hover:text-error p-0.5 cursor-pointer"
+                          title="Delete light"
+                        >
+                          <span className="material-symbols-outlined text-[13px]">delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Add Light Button */}
+            <button
+              onClick={handleAddPointLight}
+              className="w-full font-label-caps text-[10px] text-amber-300 bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/40 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1 font-bold shadow-sm"
+            >
+              <span className="material-symbols-outlined text-[15px]">add</span>
+              ADD POINT LIGHT
+            </button>
+          </div>
+        )}
+
+        {/* Selected Point Light Inspector */}
+        {selectedPointLight && (
+          <div className="absolute top-sm right-sm w-[260px] bg-surface-container/90 backdrop-blur-md border border-amber-400/40 p-sm rounded-xl flex flex-col gap-xs z-20 shadow-2xl animate-in fade-in slide-in-from-right-2 duration-150">
+            <div className="flex justify-between items-center pb-xs border-b border-outline-variant/20">
+              <div className="flex items-center gap-1 min-w-0">
+                <span className="material-symbols-outlined text-[15px] text-amber-400">wb_incandescent</span>
+                <span className="font-label-caps text-[10px] text-amber-300 tracking-widest uppercase font-semibold truncate">
+                  {selectedPointLight.name}
+                </span>
+              </div>
+              <button
+                onClick={() => setSelectedPointLightId(null)}
+                className="text-on-surface-variant hover:text-on-surface text-[12px] cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Light Name Input */}
+            <div className="flex items-center gap-1 text-[10px]">
+              <span className="text-on-surface-variant w-12 shrink-0">Name:</span>
+              <input
+                type="text"
+                value={selectedPointLight.name}
+                onChange={(e) => handleUpdatePointLight(selectedPointLight.id, { name: e.target.value })}
+                className="flex-1 bg-surface-container-high px-1.5 py-0.5 rounded border border-outline-variant/40 text-on-surface text-[10px] font-medium"
+              />
+            </div>
+
+            {/* Position Display */}
+            <div className="text-[10px] text-on-surface-variant font-mono flex items-center justify-between">
+              <span>POS:</span>
+              <span>
+                [{selectedPointLight.position.map((v) => v.toFixed(2)).join(', ')}]
+              </span>
+            </div>
+
+            {/* Color Picker & Quick Kelvin / Gel Presets */}
+            <div className="space-y-1 pt-1 border-t border-outline-variant/20">
+              <div className="flex items-center justify-between text-[10px]">
+                <span className="text-on-surface-variant flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[13px] text-amber-400">palette</span>
+                  Light Color
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="color"
+                    value={selectedPointLight.color || '#fff4e5'}
+                    onChange={(e) => handleUpdatePointLight(selectedPointLight.id, { color: e.target.value })}
+                    className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent"
+                  />
+                  <span className="font-mono text-[9px] text-on-surface-variant">
+                    {selectedPointLight.color || '#fff4e5'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Quick Kelvin & Gel Presets */}
+              <div className="flex items-center gap-1 flex-wrap">
+                {[
+                  { label: 'Candle', color: '#ff9329' },
+                  { label: 'Tungsten', color: '#ffb469' },
+                  { label: 'Halogen', color: '#ffd1a4' },
+                  { label: 'Daylight', color: '#ffffff' },
+                  { label: 'Sky', color: '#d4e5ff' },
+                  { label: 'Cyan', color: '#00f0ff' },
+                  { label: 'Magenta', color: '#ff007f' },
+                  { label: 'Gold', color: '#ffaa00' },
+                ].map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => handleUpdatePointLight(selectedPointLight.id, { color: preset.color })}
+                    className={`px-1.5 py-0.5 rounded text-[8px] font-mono uppercase cursor-pointer border transition-colors ${
+                      (selectedPointLight.color || '').toLowerCase() === preset.color.toLowerCase()
+                        ? 'border-white font-bold shadow'
+                        : 'border-outline-variant/30 text-on-surface-variant hover:text-on-surface'
+                    }`}
+                    style={{ backgroundColor: `${preset.color}25` }}
+                    title={`${preset.label} (${preset.color})`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Intensity Slider */}
+            <div className="flex items-center justify-between text-[10px] font-mono pt-1 border-t border-outline-variant/20">
+              <span className="text-on-surface-variant flex items-center gap-1">
+                <span className="material-symbols-outlined text-[13px] text-amber-400">light_mode</span>
+                Intensity
+              </span>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="range"
+                  min={0.1}
+                  max={20.0}
+                  step={0.1}
+                  value={selectedPointLight.intensity ?? 2.5}
+                  onChange={(e) => handleUpdatePointLight(selectedPointLight.id, { intensity: parseFloat(e.target.value) })}
+                  className="w-16 accent-amber-400 cursor-pointer h-1"
+                />
+                <span className="text-amber-300 font-bold w-8 text-right">
+                  {(selectedPointLight.intensity ?? 2.5).toFixed(1)}
+                </span>
+              </div>
+            </div>
+
+            {/* Cutoff Radius / Distance */}
+            <div className="flex items-center justify-between text-[10px] font-mono pt-1 border-t border-outline-variant/20">
+              <span className="text-on-surface-variant flex items-center gap-1" title="Maximum light reach / cutoff radius in meters">
+                <span className="material-symbols-outlined text-[13px] text-amber-400">radio_button_unchecked</span>
+                Radius (m)
+              </span>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="range"
+                  min={1}
+                  max={50}
+                  step={0.5}
+                  value={selectedPointLight.distance ?? 15}
+                  onChange={(e) => handleUpdatePointLight(selectedPointLight.id, { distance: parseFloat(e.target.value) })}
+                  className="w-16 accent-amber-400 cursor-pointer h-1"
+                />
+                <span className="text-amber-300 font-bold w-8 text-right">
+                  {(selectedPointLight.distance ?? 15).toFixed(0)}m
+                </span>
+              </div>
+            </div>
+
+            {/* Physical Decay / Falloff */}
+            <div className="flex items-center justify-between text-[10px] font-mono pt-1 border-t border-outline-variant/20">
+              <span className="text-on-surface-variant flex items-center gap-1" title="Physical falloff rate (2.0 is physical inverse-square law)">
+                <span className="material-symbols-outlined text-[13px] text-cyan-400">gradient</span>
+                Decay
+              </span>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="range"
+                  min={0.0}
+                  max={4.0}
+                  step={0.1}
+                  value={selectedPointLight.decay ?? 2.0}
+                  onChange={(e) => handleUpdatePointLight(selectedPointLight.id, { decay: parseFloat(e.target.value) })}
+                  className="w-16 accent-cyan-400 cursor-pointer h-1"
+                />
+                <span className="text-cyan-300 font-bold w-12 text-right">
+                  {(selectedPointLight.decay ?? 2.0) === 2 ? '2.0 (Phys)' : (selectedPointLight.decay ?? 2.0).toFixed(1)}
+                </span>
+              </div>
+            </div>
+
+            {/* Duplicate & Delete Light Buttons */}
+            <div className="flex items-center gap-1.5 pt-1.5 border-t border-outline-variant/20">
+              <button
+                type="button"
+                onClick={() => handleDuplicatePointLight(selectedPointLight)}
+                className="flex-1 font-label-caps text-[9px] text-on-surface-variant hover:text-on-surface bg-surface-container-high/50 hover:bg-surface-container-highest py-[4px] rounded transition-colors cursor-pointer flex items-center justify-center gap-1 border border-outline-variant/30"
+              >
+                <span className="material-symbols-outlined text-[13px]">content_copy</span>
+                DUPLICATE
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeletePointLight(selectedPointLight.id)}
+                className="flex-1 font-label-caps text-[9px] text-error hover:bg-error/10 py-[4px] rounded transition-colors cursor-pointer flex items-center justify-center gap-1 border border-error/30"
+              >
+                <span className="material-symbols-outlined text-[13px]">delete</span>
+                REMOVE
+              </button>
+            </div>
           </div>
         )}
 
@@ -1223,12 +1683,26 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                 <span className="material-symbols-outlined text-[14px]">brush</span>
                 PAINT / BAKE TEXTURE (ROOMBAKE)
               </button>
-              <button
-                onClick={() => handleDeleteAsset(selectedAsset.id)}
-                className="w-full font-label-caps text-[10px] text-error hover:bg-error/10 py-[3px] rounded transition-colors cursor-pointer"
-              >
-                REMOVE OBJECT
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleDuplicateAsset(selectedAsset.id)}
+                  className="flex-1 font-label-caps text-[10px] text-primary border border-primary/40 bg-primary/10 hover:bg-primary/20 py-[4px] rounded transition-colors cursor-pointer flex items-center justify-center gap-1 font-semibold shadow-sm"
+                  title="Duplicate this object (Ctrl+D / ⌘D)"
+                >
+                  <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                  DUPLICATE
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteAsset(selectedAsset.id)}
+                  className="flex-1 font-label-caps text-[10px] text-error border border-error/30 hover:bg-error/10 py-[4px] rounded transition-colors cursor-pointer flex items-center justify-center gap-1"
+                  title="Remove this object from the scene (Delete / Backspace)"
+                >
+                  <span className="material-symbols-outlined text-[14px]">delete</span>
+                  REMOVE
+                </button>
+              </div>
             </div>
           </div>
         )}
