@@ -1,5 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Project, SceneAsset, AI3DEngine, AssetCategory, WorkflowStage, SavedStageTemplate } from '../../types';
+import {
+  Project,
+  SceneAsset,
+  AI3DEngine,
+  AssetCategory,
+  WorkflowStage,
+  SavedStageTemplate,
+} from '../../types';
 import { TrellisService, GenerationProgress } from '../../services/trellisService';
 import {
   ThreeStage,
@@ -13,6 +20,7 @@ import {
   deleteStageTemplate,
   exportStageToFile,
   importStageFromFile,
+  uploadAssetToDisk,
 } from '../../services/storageService';
 
 interface SceneDesignViewProps {
@@ -133,8 +141,17 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [lightIntensity, setLightIntensity] = useState<number>(1.0);
+  const [stageSpecularity, setStageSpecularity] = useState<number>(
+    currentProject.stageSpecularity !== undefined ? currentProject.stageSpecularity : 0.15
+  );
   const [environmentPreset, setEnvironmentPreset] = useState<LightingEnvironmentPreset>('studio');
   const [showGrid, setShowGrid] = useState<boolean>(true);
+
+  useEffect(() => {
+    if (currentProject.stageSpecularity !== undefined) {
+      setStageSpecularity(currentProject.stageSpecularity);
+    }
+  }, [currentProject.id]);
 
   // Undo / Redo History Stack for Scene Assets (Transforms, Additions, Deletions)
   const undoStackRef = useRef<SceneAsset[][]>([]);
@@ -255,10 +272,11 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     }
   };
 
-  const handlePanoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePanoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const url = URL.createObjectURL(file);
+      const diskUrl = await uploadAssetToDisk(file, `pano_${Date.now()}_${file.name}`);
+      const url = diskUrl || URL.createObjectURL(file);
       setPanoramaUrl(url);
       setShowPanorama(true);
       onUpdateProject({
@@ -288,10 +306,11 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   };
 
   // Direct .ply / .splat 3DGS file upload
-  const handleDirectSplatUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleDirectSplatUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const url = URL.createObjectURL(file);
+      const diskUrl = await uploadAssetToDisk(file, `splat_${Date.now()}_${file.name}`);
+      const url = diskUrl || URL.createObjectURL(file);
       setSplatUrl(url);
       onUpdateProject({
         ...currentProject,
@@ -694,6 +713,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       panoramaUrl: panoramaUrl || undefined,
       panoramaRotation: panoramaRotation || 0,
       splatUrl: splatUrl || undefined,
+      stageSpecularity,
       modified: 'Just now',
     };
     onUpdateProject(updatedProject);
@@ -710,6 +730,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       splatUrl: splatUrl || undefined,
       environmentPreset,
       lightIntensity,
+      stageSpecularity,
       thumbnail: currentProject.thumbnail,
     };
 
@@ -720,7 +741,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       console.warn('Failed to sync to stage library:', err);
     }
 
-    setSaveToast(`✓ Stage "${stageName}" saved to disk & Load Stages library (${assets.length} object${assets.length === 1 ? '' : 's'})`);
+    setSaveToast(`✓ Stage "${stageName}" saved to disk & library (${assets.length} object${assets.length === 1 ? '' : 's'})`);
     setTimeout(() => {
       setSaveToast(null);
       setIsSavingStage(false);
@@ -741,6 +762,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       splatUrl: splatUrl || undefined,
       environmentPreset,
       lightIntensity,
+      stageSpecularity,
       thumbnail: currentProject.thumbnail,
     };
 
@@ -762,6 +784,9 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     if (template.lightIntensity !== undefined) {
       setLightIntensity(template.lightIntensity);
     }
+    if (template.stageSpecularity !== undefined) {
+      setStageSpecularity(template.stageSpecularity);
+    }
 
     onUpdateProject({
       ...currentProject,
@@ -769,6 +794,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       panoramaUrl: template.panoramaUrl || undefined,
       panoramaRotation: template.panoramaRotation || 0,
       splatUrl: template.splatUrl || undefined,
+      stageSpecularity: template.stageSpecularity,
       modified: 'Just now',
     });
 
@@ -1009,6 +1035,26 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             </span>
           </div>
 
+          {/* Stage Specularity & Glossiness Control */}
+          <div
+            className="flex items-center gap-xs bg-surface-container-high/60 px-2 py-[3px] rounded-lg border border-outline-variant/30"
+            title="Stage Specularity & Glossiness (0% = Matte/Diffuse with no shiny plastic highlights, 100% = Full Gloss)"
+          >
+            <span className="material-symbols-outlined text-[15px] text-cyan-400">tonality</span>
+            <input
+              type="range"
+              min={0.0}
+              max={1.0}
+              step={0.05}
+              value={stageSpecularity}
+              onChange={(e) => setStageSpecularity(parseFloat(e.target.value))}
+              className="w-16 h-1 bg-surface-variant rounded-lg appearance-none cursor-pointer accent-cyan-400"
+            />
+            <span className="text-[10px] font-mono font-medium text-on-surface-variant w-8 text-right">
+              {Math.round(stageSpecularity * 100)}%
+            </span>
+          </div>
+
           {/* Grid Toggle */}
           <button
             onClick={() => setShowGrid(!showGrid)}
@@ -1079,6 +1125,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           selectedAssetId={selectedAssetId}
           transformMode={transformMode}
           lightIntensity={lightIntensity}
+          stageSpecularity={stageSpecularity}
           environmentPreset={environmentPreset}
           panoramaUrl={panoramaUrl}
           panoramaRotation={panoramaRotation}
@@ -1125,6 +1172,33 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               <div>ROT: {selectedAsset.rotation.map((v) => v.toFixed(2)).join(', ')}</div>
               <div>SCL: {selectedAsset.scale.map((v) => v.toFixed(2)).join(', ')}</div>
             </div>
+
+            {/* Per-Object Specularity / Matte Control */}
+            <div className="flex items-center justify-between text-[10px] font-mono pt-1 border-t border-outline-variant/20">
+              <span className="text-on-surface-variant flex items-center gap-1">
+                <span className="material-symbols-outlined text-[13px] text-cyan-400">tonality</span>
+                Specularity
+              </span>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="range"
+                  min={0.0}
+                  max={1.0}
+                  step={0.05}
+                  value={selectedAsset.specularity !== undefined ? selectedAsset.specularity : stageSpecularity}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    const updated = assets.map((a) => (a.id === selectedAsset.id ? { ...a, specularity: val } : a));
+                    onUpdateProject({ ...currentProject, scenes: updated });
+                  }}
+                  className="w-16 accent-cyan-400 cursor-pointer h-1"
+                />
+                <span className="text-cyan-300 font-bold w-7 text-right">
+                  {Math.round((selectedAsset.specularity !== undefined ? selectedAsset.specularity : stageSpecularity) * 100)}%
+                </span>
+              </div>
+            </div>
+
             <button
               onClick={() =>
                 handleUpdateAssetTransform(

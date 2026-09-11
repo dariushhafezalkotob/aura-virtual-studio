@@ -1,5 +1,38 @@
 [
   {
+    "id": "stage_proj_proj_1789042056664",
+    "name": "Bar",
+    "createdAt": "2026-09-11T08:23:35.811Z",
+    "scenes": [
+      {
+        "id": "roombake_1789042691984",
+        "name": "AI Baked Room Environment",
+        "category": "environment",
+        "glbUrl": "/api/assets/roombake_1789114961636.glb",
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "createdAt": "2026-09-11T08:22:41.933Z"
+      }
+    ],
+    "panoramaRotation": 0,
+    "environmentPreset": "studio",
+    "lightIntensity": 1,
+    "thumbnail": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80"
+  },
+  {
     "id": "stage_proj_proj_1788685912909",
     "name": "wqetg",
     "createdAt": "2026-09-06T17:42:11.226Z",

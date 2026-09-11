@@ -145,42 +145,42 @@ export const ProxyMannequin: React.FC<{ color: string }> = ({ color }) => {
       {/* Head */}
       <mesh position={[0, 1.62, 0]} castShadow>
         <sphereGeometry args={[0.13, 16, 16]} />
-        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+        <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
       </mesh>
       {/* Neck */}
       <mesh position={[0, 1.46, 0]} castShadow>
         <cylinderGeometry args={[0.045, 0.05, 0.1, 12]} />
-        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+        <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
       </mesh>
       {/* Chest / Torso */}
       <mesh position={[0, 1.22, 0]} castShadow>
         <cylinderGeometry args={[0.16, 0.12, 0.42, 16]} />
-        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+        <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
       </mesh>
       {/* Pelvis */}
       <mesh position={[0, 0.95, 0]} castShadow>
         <cylinderGeometry args={[0.13, 0.14, 0.18, 16]} />
-        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+        <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
       </mesh>
       {/* Left Leg */}
       <mesh position={[-0.1, 0.5, 0]} castShadow>
         <cylinderGeometry args={[0.06, 0.045, 0.85, 12]} />
-        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+        <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
       </mesh>
       {/* Right Leg */}
       <mesh position={[0.1, 0.5, 0]} castShadow>
         <cylinderGeometry args={[0.06, 0.045, 0.85, 12]} />
-        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+        <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
       </mesh>
       {/* Left Arm */}
       <mesh position={[-0.24, 1.15, 0]} rotation={[0, 0, -0.15]} castShadow>
         <cylinderGeometry args={[0.045, 0.035, 0.65, 12]} />
-        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+        <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
       </mesh>
       {/* Right Arm */}
       <mesh position={[0.24, 1.15, 0]} rotation={[0, 0, 0.15]} castShadow>
         <cylinderGeometry args={[0.045, 0.035, 0.65, 12]} />
-        <meshStandardMaterial color={color} roughness={0.35} metalness={0.4} />
+        <meshStandardMaterial color={color} roughness={0.85} metalness={0.05} />
       </mesh>
     </group>
   );
@@ -359,8 +359,8 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
 
         const material = new THREE.MeshStandardMaterial({
           color: actor.color || (actor.characterType === 'g1' ? '#e5e5ea' : '#32363d'),
-          roughness: 0.35,
-          metalness: 0.45,
+          roughness: 0.85,
+          metalness: 0.05,
           side: THREE.DoubleSide,
         });
 

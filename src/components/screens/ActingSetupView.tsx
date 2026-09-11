@@ -328,6 +328,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             characters={characters.map((c) => ({ ...c, renderMode }))}
             selectedActorId={selectedActorId}
             transformMode={transformMode}
+            stageSpecularity={currentProject.stageSpecularity}
             onSelectActor={(id) => setSelectedActorId(id || '')}
             onUpdateActorTransform={handleUpdateActorTransform}
             currentTimelineTime={timelineSec}

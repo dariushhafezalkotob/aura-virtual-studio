@@ -111,11 +111,20 @@ export async function generateTexture(params: GenerateParams): Promise<HTMLCanva
 
   // 1. Google Gemini Multimodal Vision API
   if (provider === 'gemini') {
-    const key = apiKey || localStorage.getItem('roombake_gemini_key') || '';
+    const key =
+      (apiKey && apiKey.trim()) ||
+      (typeof localStorage !== 'undefined' && (localStorage.getItem('roombake_gemini_key') || localStorage.getItem('gemini_api_key'))) ||
+      (typeof process !== 'undefined' && (process.env?.VITE_GEMINI_API_KEY || process.env?.GEMINI_API_KEY)) ||
+      (typeof import.meta !== 'undefined' && ((import.meta as any).env?.VITE_GEMINI_API_KEY || (import.meta as any).env?.GEMINI_API_KEY)) ||
+      '';
+
     if (!key.trim()) {
       throw new Error('Please provide your Google Gemini API key (from aistudio.google.com).');
     }
-    localStorage.setItem('roombake_gemini_key', key.trim());
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('roombake_gemini_key', key.trim());
+      localStorage.setItem('gemini_api_key', key.trim());
+    }
 
     if (model.startsWith('imagen')) {
       const imgPayload = {

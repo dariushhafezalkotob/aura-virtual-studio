@@ -603,6 +603,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         assets={assets}
         selectedAssetId={null}
         characters={characters}
+        stageSpecularity={currentProject.stageSpecularity}
         currentTimelineTime={timelineSec}
         isPlaying={isPlaying}
         showTrajectories={false}

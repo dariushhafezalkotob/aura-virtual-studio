@@ -122,6 +122,60 @@ function resolveMediaUrl(item: any): string {
   return '';
 }
 
+async function persistMediaLocally(
+  remoteUrl: string,
+  prefix: string,
+  userToken?: string
+): Promise<string> {
+  if (!remoteUrl) return '';
+  if (remoteUrl.startsWith('/api/assets/') || (!remoteUrl.startsWith('http://') && !remoteUrl.startsWith('https://'))) {
+    return remoteUrl;
+  }
+
+  try {
+    const assetsDir = path.join(process.cwd(), 'data', 'assets');
+    if (!fs.existsSync(assetsDir)) {
+      fs.mkdirSync(assetsDir, { recursive: true });
+    }
+
+    const headers: Record<string, string> = {};
+    if (userToken) {
+      headers['Authorization'] = `Bearer ${userToken}`;
+    }
+
+    const res = await fetch(remoteUrl, { headers });
+    if (!res.ok) {
+      console.warn(`[Asset Cache] Failed to download remote asset from ${remoteUrl} (HTTP ${res.status})`);
+      return remoteUrl;
+    }
+
+    const arrayBuf = await res.arrayBuffer();
+    const buf = Buffer.from(arrayBuf);
+    if (buf.length === 0) return remoteUrl;
+
+    let ext = '.glb';
+    const lower = remoteUrl.toLowerCase();
+    if (lower.includes('.mp4')) ext = '.mp4';
+    else if (lower.includes('.png')) ext = '.png';
+    else if (lower.includes('.jpg') || lower.includes('.jpeg')) ext = '.jpg';
+    else if (lower.includes('.splat')) ext = '.splat';
+    else if (lower.includes('.ply')) ext = '.ply';
+    else if (lower.includes('.gltf')) ext = '.gltf';
+    else if (lower.includes('.glb')) ext = '.glb';
+
+    const cleanPrefix = prefix.replace(/[^a-zA-Z0-9_]/g, '_');
+    const filename = `${cleanPrefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}${ext}`;
+    const localPath = path.join(assetsDir, filename);
+
+    fs.writeFileSync(localPath, buf);
+    console.log(`[Asset Cache] ✓ Permanently cached ${prefix} to disk: ${localPath} (${(buf.length / 1024 / 1024).toFixed(2)} MB)`);
+    return `/api/assets/${filename}`;
+  } catch (err) {
+    console.warn(`[Asset Cache] Could not cache remote asset ${remoteUrl}:`, err);
+    return remoteUrl;
+  }
+}
+
 function getLocalIpAddress(): string {
   const interfaces = os.networkInterfaces();
   const candidates: string[] = [];
@@ -280,9 +334,32 @@ function apiMiddlewarePlugin(): Plugin {
           if (req.method === 'POST') {
             let body = '';
             req.on('data', (chunk) => { body += chunk; });
-            req.on('end', () => {
+            req.on('end', async () => {
               try {
                 const parsed = JSON.parse(body);
+
+                // Auto-cache any remote 3D models or media in projects so they never become gray boxes
+                if (Array.isArray(parsed)) {
+                  for (const proj of parsed) {
+                    if (proj && Array.isArray(proj.scenes)) {
+                      for (const s of proj.scenes) {
+                        if (s && s.glbUrl && (s.glbUrl.startsWith('http://') || s.glbUrl.startsWith('https://'))) {
+                          s.glbUrl = await persistMediaLocally(s.glbUrl, s.engine || 'model');
+                        }
+                        if (s && s.previewUrl && (s.previewUrl.startsWith('http://') || s.previewUrl.startsWith('https://'))) {
+                          s.previewUrl = await persistMediaLocally(s.previewUrl, 'preview');
+                        }
+                      }
+                    }
+                    if (proj && proj.panoramaUrl && (proj.panoramaUrl.startsWith('http://') || proj.panoramaUrl.startsWith('https://'))) {
+                      proj.panoramaUrl = await persistMediaLocally(proj.panoramaUrl, 'pano');
+                    }
+                    if (proj && proj.splatUrl && (proj.splatUrl.startsWith('http://') || proj.splatUrl.startsWith('https://'))) {
+                      proj.splatUrl = await persistMediaLocally(proj.splatUrl, 'splat');
+                    }
+                  }
+                }
+
                 // Atomic file write using temporary file to prevent corruption
                 const tempFilePath = path.join(dataDir, `projects.tmp.${Date.now()}.json`);
                 fs.writeFileSync(tempFilePath, JSON.stringify(parsed, null, 2), 'utf-8');
@@ -333,9 +410,22 @@ function apiMiddlewarePlugin(): Plugin {
           if (req.method === 'POST') {
             let body = '';
             req.on('data', (chunk) => { body += chunk; });
-            req.on('end', () => {
+            req.on('end', async () => {
               try {
                 const parsed = JSON.parse(body);
+
+                if (Array.isArray(parsed)) {
+                  for (const stage of parsed) {
+                    if (stage && Array.isArray(stage.scenes)) {
+                      for (const s of stage.scenes) {
+                        if (s && s.glbUrl && (s.glbUrl.startsWith('http://') || s.glbUrl.startsWith('https://'))) {
+                          s.glbUrl = await persistMediaLocally(s.glbUrl, s.engine || 'model');
+                        }
+                      }
+                    }
+                  }
+                }
+
                 const tempFilePath = path.join(dataDir, `stages.tmp.${Date.now()}.json`);
                 fs.writeFileSync(tempFilePath, JSON.stringify(parsed, null, 2), 'utf-8');
                 fs.renameSync(tempFilePath, stagesFilePath);
@@ -478,7 +568,8 @@ function apiMiddlewarePlugin(): Plugin {
                 }
               }
 
-              const primarySplat = gaussianSplatUrl || gaussianPlyUrl || resolveMediaUrl(data[0]);
+              const rawSplat = gaussianSplatUrl || gaussianPlyUrl || resolveMediaUrl(data[0]);
+              const primarySplat = await persistMediaLocally(rawSplat, 'hunyuan_world_splat');
 
               console.log('[API /api/reconstruct-hunyuan-world] Finished! 3DGS Splat URL:', primarySplat);
               res.setHeader('Content-Type', 'application/json');
@@ -655,12 +746,15 @@ function apiMiddlewarePlugin(): Plugin {
                 }
               }
 
-              console.log('[Pipeline Complete!] 360° Panorama:', panoramaUrl, '3D Scene Mesh:', glbUrl);
+              const persistentPanoUrl = await persistMediaLocally(panoramaUrl, 'pano_360');
+              const persistentGlbUrl = await persistMediaLocally(glbUrl, 'multiview_scene');
+
+              console.log('[Pipeline Complete!] 360° Panorama:', persistentPanoUrl, '3D Scene Mesh:', persistentGlbUrl);
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify({
                 success: true,
-                panoramaUrl,
-                glbUrl,
+                panoramaUrl: persistentPanoUrl,
+                glbUrl: persistentGlbUrl,
                 message: '2-Step 360° AI World & 3D Scene Geometry Successfully Synthesized!'
               }));
             } catch (err: any) {
@@ -905,9 +999,10 @@ function apiMiddlewarePlugin(): Plugin {
                   if (!glbUrl) glbUrl = resolveMediaUrl(data[1]) || resolveMediaUrl(data[0]);
                 }
 
-                console.log('[Hunyuan3D] Final Textured Model URL:', glbUrl);
+                const persistentGlbUrl = await persistMediaLocally(glbUrl, 'hunyuan3d', userToken);
+                console.log('[Hunyuan3D] Final Textured Model URL:', persistentGlbUrl);
                 res.setHeader('Content-Type', 'application/json');
-                res.end(JSON.stringify({ success: true, glbUrl, engine: 'hunyuan3d' }));
+                res.end(JSON.stringify({ success: true, glbUrl: persistentGlbUrl, engine: 'hunyuan3d' }));
                 return;
               }
 
@@ -964,11 +1059,14 @@ function apiMiddlewarePlugin(): Plugin {
                 }
               }
 
-              const glbUrl = typeof glbData === 'string' ? glbData : resolveMediaUrl(glbData);
-              const videoUrl = typeof videoData === 'string' ? videoData : resolveMediaUrl(videoData);
+              const rawGlbUrl = typeof glbData === 'string' ? glbData : resolveMediaUrl(glbData);
+              const rawVideoUrl = typeof videoData === 'string' ? videoData : resolveMediaUrl(videoData);
+
+              const persistentGlbUrl = await persistMediaLocally(rawGlbUrl, 'trellis', userToken);
+              const persistentVideoUrl = await persistMediaLocally(rawVideoUrl, 'trellis_preview', userToken);
 
               res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ success: true, glbUrl, videoUrl, engine: engine }));
+              res.end(JSON.stringify({ success: true, glbUrl: persistentGlbUrl, videoUrl: persistentVideoUrl, engine: engine }));
             } catch (err: any) {
               const errMsg = extractErrorMessage(err);
               console.error('[API /api/generate-3d] Error:', errMsg);

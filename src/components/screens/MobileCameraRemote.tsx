@@ -682,6 +682,7 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           assets={project?.scenes || []}
           selectedAssetId={null}
           characters={characters}
+          stageSpecularity={project?.stageSpecularity}
           currentTimelineTime={hostState.timelineSec}
           isPlaying={hostState.isPlaying}
           showTrajectories={false}

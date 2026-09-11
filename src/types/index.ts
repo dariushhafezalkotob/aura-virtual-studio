@@ -35,6 +35,7 @@ export interface Project {
   panoramaRotation?: number;
   panoramaBlur?: number;
   splatUrl?: string;
+  stageSpecularity?: number;
 }
 
 export interface SavedStageTemplate {
@@ -47,6 +48,7 @@ export interface SavedStageTemplate {
   splatUrl?: string;
   environmentPreset?: string;
   lightIntensity?: number;
+  stageSpecularity?: number;
   thumbnail?: string;
 }
 
@@ -62,6 +64,7 @@ export interface SceneAsset {
   prompt?: string;
   engine?: AI3DEngine;
   category?: AssetCategory;
+  specularity?: number;
   createdAt: string;
 }
 

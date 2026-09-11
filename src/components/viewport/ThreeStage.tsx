@@ -32,6 +32,7 @@ interface ThreeStageProps {
   selectedActorId?: string | null;
   transformMode?: TransformMode;
   lightIntensity?: number;
+  stageSpecularity?: number;
   environmentPreset?: LightingEnvironmentPreset;
   panoramaUrl?: string | null;
   panoramaRotation?: number;
@@ -298,10 +299,34 @@ class ModelErrorBoundary extends Component<
   }
 }
 
+// Utility function to apply specularity / roughness / reflectivity / metalness dynamically to materials
+function applySpecularityToMaterial(mat: THREE.Material, spec: number) {
+  const m = mat as THREE.MeshStandardMaterial;
+  // spec in [0, 1]:
+  // 0.0 is completely matte (roughness 1.0, metalness 0.0, zero specular/env reflections)
+  // 0.15 is default clean cinematic matte (roughness ~0.88, metalness ~0.05, very low specular)
+  // 1.0 is full gloss (roughness 0.1, metalness 0.35, high specular reflections)
+  const clampedSpec = THREE.MathUtils.clamp(spec, 0.0, 1.0);
+  m.roughness = THREE.MathUtils.lerp(1.0, 0.1, clampedSpec);
+  m.metalness = THREE.MathUtils.lerp(0.0, 0.35, clampedSpec);
+  m.envMapIntensity = THREE.MathUtils.lerp(0.0, 0.75, clampedSpec);
+  if ('specularIntensity' in m) {
+    (m as any).specularIntensity = clampedSpec;
+  }
+  if ('reflectivity' in m) {
+    (m as any).reflectivity = clampedSpec * 0.5;
+  }
+  if ('clearcoat' in m) {
+    (m as any).clearcoat = 0;
+  }
+  m.needsUpdate = true;
+}
+
 const GLTFModel: React.FC<{
   asset: SceneAsset;
   isSelected: boolean;
   transformMode: TransformMode;
+  stageSpecularity?: number;
   onSelect: () => void;
   onDraggingChange: (isDragging: boolean) => void;
   onTransformChange?: (
@@ -314,12 +339,14 @@ const GLTFModel: React.FC<{
   asset,
   isSelected,
   transformMode,
+  stageSpecularity = 0.15,
   onSelect,
   onDraggingChange,
   onTransformChange,
 }) => {
   const groupRef = useRef<THREE.Group>(null);
   const { glbUrl, position, rotation, scale } = asset;
+  const effectiveSpecularity = asset.specularity !== undefined ? asset.specularity : stageSpecularity;
 
   // Resolve expired blob URLs or baked room models to permanent asset storage
   const resolvedGlbUrl = React.useMemo(() => {
@@ -377,16 +404,31 @@ const GLTFModel: React.FC<{
               if (mesh.geometry?.attributes?.color) {
                 mat.vertexColors = true;
               }
-              if (mat.metalness !== undefined) mat.metalness = Math.min(mat.metalness, 0.25);
-              if (mat.roughness !== undefined) mat.roughness = Math.max(0.3, Math.min(mat.roughness, 0.85));
+              applySpecularityToMaterial(mat, effectiveSpecularity);
               mat.side = THREE.DoubleSide;
-              mat.needsUpdate = true;
             }
           }
         }
       });
       return c;
-    }, [scene]);
+    }, [scene, effectiveSpecularity]);
+
+    // Live specularity update without re-instantiation
+    useEffect(() => {
+      if (groupRef.current) {
+        groupRef.current.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            const mesh = child as THREE.Mesh;
+            if (mesh.material) {
+              const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+              for (const m of mats) {
+                applySpecularityToMaterial(m, effectiveSpecularity);
+              }
+            }
+          }
+        });
+      }
+    }, [cloned, effectiveSpecularity]);
 
     content = asset.category === 'environment' ? (
       <primitive object={cloned} />
@@ -399,7 +441,7 @@ const GLTFModel: React.FC<{
     content = (
       <mesh position={[0, 0.5, 0]}>
         <boxGeometry args={[0.8, 0.8, 0.8]} />
-        <meshStandardMaterial color="#505050" roughness={0.4} metalness={0.2} />
+        <meshStandardMaterial color="#505050" roughness={THREE.MathUtils.lerp(1.0, 0.1, effectiveSpecularity)} metalness={THREE.MathUtils.lerp(0.0, 0.35, effectiveSpecularity)} />
       </mesh>
     );
   }
@@ -1045,6 +1087,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   selectedActorId = null,
   transformMode = 'translate',
   lightIntensity = 1.0,
+  stageSpecularity = 0.15,
   environmentPreset = 'studio',
   panoramaUrl,
   panoramaRotation = 0,
@@ -1115,9 +1158,12 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           <PanoramaDome url={panoramaUrl} rotationY={panoramaRotation} />
         )}
 
-        {/* Realistic Image-Based Environment Lighting (IBL) */}
+        {/* Realistic Image-Based Environment Lighting (IBL) with specularity control */}
         <Suspense fallback={null}>
-          <Environment preset={environmentPreset} environmentIntensity={lightIntensity * 0.6} />
+          <Environment
+            preset={environmentPreset}
+            environmentIntensity={lightIntensity * 0.45 * (0.15 + stageSpecularity * 0.85)}
+          />
         </Suspense>
 
         {/* Balanced Ambient & Studio Lighting */}
@@ -1170,7 +1216,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         {/* Permanent Studio Ground Stage Floor & Grid (Always Visible Instantly) */}
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.005, 0]} receiveShadow={!isMobileViewfinder}>
           <circleGeometry args={[25, isMobileViewfinder ? 32 : 64]} />
-          <meshStandardMaterial color="#14161a" roughness={0.75} metalness={0.15} />
+          <meshStandardMaterial color="#14161a" roughness={0.88} metalness={0.05} />
         </mesh>
 
         {showGrid && (
@@ -1199,6 +1245,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
                 asset={asset}
                 isSelected={asset.id === selectedAssetId}
                 transformMode={transformMode}
+                stageSpecularity={stageSpecularity}
                 onSelect={() => {
                   onSelectActor?.(null);
                   onSelectAsset?.(asset.id);

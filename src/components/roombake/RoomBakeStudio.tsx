@@ -35,6 +35,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
 
   // 00 Geometry
   const [uvMode, setUvMode] = useState<'smart' | 'auto' | 'box' | 'model'>('smart');
+  const [splitTrims, setSplitTrims] = useState(true);
 
   // 01 View
   const [views, setViews] = useState<ViewPoint[]>([]);
@@ -43,6 +44,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
 
   // 02 Conditioning
   const [frameSize, setFrameSize] = useState('1024x1024');
+  const [showFramingGuide, setShowFramingGuide] = useState(true);
   const [condInfo, setCondInfo] = useState('—');
   const nearDist = 0.3;
   const farDist = 12.0;
@@ -60,7 +62,16 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   const [genericSeed, setGenericSeed] = useState(20260903);
 
   // Gemini State
-  const gemKey = localStorage.getItem('roombake_gemini_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+  const [gemKey, setGemKey] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    return (
+      localStorage.getItem('roombake_gemini_key') ||
+      localStorage.getItem('gemini_api_key') ||
+      (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+      (import.meta as any).env?.GEMINI_API_KEY ||
+      ''
+    );
+  });
   const [gemSendCond, setGemSendCond] = useState(true);
   const [gemStyle, setGemStyle] = useState('A futuristic cyberpunk hideout interior, industrial sci-fi architecture, aged black metal wall panels, wet polished concrete floor, subtle holographic interface glow on the walls, cinematic warm tungsten lighting mixed with cold blue ambient light, realistic materials, believable wear and scratches.');
   const gemTemplate = `Photorealistic architectural photograph of a room interior wall and surface view.\nScene style: {{STYLE}}.\nLighting: flat even diffused interior lighting, architectural photography, ultra sharp textures, no distortion, high detail, ARRI style 8K detail.\nSeamless continuity: If any portion of a wall, floor, or ceiling is already textured in the reference view, seamlessly continue and extend that exact material, color palette, scale, and pattern across the rest of the surface with an invisible boundary.`;
@@ -334,7 +345,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
           : targetAsset.glbUrl;
 
       engine
-        .loadCustomModel(resolvedUrl, 'model')
+        .loadCustomModel(resolvedUrl, uvMode, splitTrims)
         .then(() => {
           if (!engineRef.current) return;
           setViews([...engineRef.current.views]);
@@ -357,6 +368,8 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   }, [
     isOpen,
     targetAsset,
+    uvMode,
+    splitTrims,
     autoRange,
     depthInvert,
     maskFeather,
@@ -373,7 +386,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
 
     try {
       addLog(`Importing 3D Model: ${file.name}...`, 'info');
-      await engine.loadCustomModel(file, uvMode);
+      await engine.loadCustomModel(file, uvMode, splitTrims);
       setViews([...engine.views]);
       setModelStatus(engine.state.modelName);
       setSelectedViewIdx(1);
@@ -388,6 +401,36 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     } catch (err: any) {
       addLog(`Model import failed: ${err.message}`, 'err');
     }
+  };
+
+  const handleUvModeChange = (newMode: 'smart' | 'auto' | 'box' | 'model') => {
+    setUvMode(newMode);
+    const engine = engineRef.current;
+    if (!engine || engine.meshes.length === 0) return;
+    engine.reUnwrapRoom(newMode, splitTrims);
+    setViews([...engine.views]);
+    const v = engine.views[selectedViewIdx] || engine.views[0];
+    if (v) {
+      engine.renderConditioning(v, autoRange, depthInvert, maskFeather);
+      refreshViewInfo(v);
+    }
+    updateStats();
+    addLog(`Applied ${newMode.toUpperCase()} UV layout!`, 'ok');
+  };
+
+  const handleSplitTrimsChange = (newSplit: boolean) => {
+    setSplitTrims(newSplit);
+    const engine = engineRef.current;
+    if (!engine || engine.meshes.length === 0) return;
+    engine.reUnwrapRoom(uvMode, newSplit);
+    setViews([...engine.views]);
+    const v = engine.views[selectedViewIdx] || engine.views[0];
+    if (v) {
+      engine.renderConditioning(v, autoRange, depthInvert, maskFeather);
+      refreshViewInfo(v);
+    }
+    updateStats();
+    addLog(`Cornice trim splitting ${newSplit ? 'ENABLED' : 'DISABLED'}. UV atlas repacked!`, 'ok');
   };
 
   const handleResetBox = () => {
@@ -445,6 +488,23 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     refreshViewInfo(newView);
     updateStats();
     addLog(`Added panorama viewpoint "${newView.name}" at preview position.`, 'ok');
+  };
+
+  const handleSelectView = (idx: number) => {
+    setSelectedViewIdx(idx);
+    const engine = engineRef.current;
+    if (!engine) return;
+    const v = engine.views[idx];
+    if (v) {
+      if (v.fov) {
+        setFov(v.fov);
+      }
+      engine.jumpToView(idx);
+      engine.renderConditioning(v, autoRange, depthInvert, maskFeather);
+      refreshViewInfo(v);
+      updateStats();
+      addLog(`Switched to viewpoint: ${v.name}`, 'info');
+    }
   };
 
   // Section 02: Conditioning Handlers
@@ -857,32 +917,115 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
       </header>
 
       {/* Main Studio Body */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Left Side: 3D Stage & Bottom Status Strip */}
-        <div className="flex-1 flex flex-col min-w-0 bg-black/80 relative">
-          {/* Canvas Wrap */}
-          <div className="flex-1 relative min-h-0">
-            <canvas ref={canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" />
+      {(() => {
+        const currentView = views[selectedViewIdx] || views[0];
+        const isPanoView = currentView?.type === 'pano';
+        const [frameW, frameH] = (() => {
+          if (isPanoView) return [2048, 1024];
+          const parts = frameSize.split('x').map((n) => parseInt(n, 10));
+          if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+            return [parts[0], parts[1]];
+          }
+          return [1024, 1024];
+        })();
+        const frameAspect = frameW / frameH;
 
-            {/* Brand Badge */}
-            <div className="absolute top-3 left-3 pointer-events-none bg-surface-container-low/85 backdrop-blur-md border border-outline-variant/40 px-3 py-1.5 rounded text-xs font-mono flex items-center gap-2 shadow-md">
-              <b className="text-primary font-semibold">RoomBake</b>
-              <span className="text-on-surface-variant">projective bake harness</span>
-            </div>
+        return (
+          <div className="flex-1 flex min-h-0 overflow-hidden">
+            {/* Left Side: 3D Stage & Bottom Status Strip */}
+            <div className="flex-1 flex flex-col min-w-0 bg-black/80 relative">
+              {/* Canvas Wrap */}
+              <div className="flex-1 relative min-h-0 overflow-hidden">
+                <canvas ref={canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" />
 
-            {/* Hint Badge */}
-            <div className="absolute top-3 right-3 pointer-events-none bg-surface-container-low/85 backdrop-blur-md border border-outline-variant/40 px-3 py-1.5 rounded text-[11px] font-mono text-on-surface-variant shadow-md">
-              drag to look · wheel to pull back · WASD/QE to move
-            </div>
+                {/* Viewport Capture Framing Guide (Aspect Ratio Boundary) */}
+                {showFramingGuide && (
+                  <div className="absolute inset-0 pointer-events-none flex items-center justify-center overflow-hidden">
+                    <div
+                      className="relative h-full transition-all duration-200 flex flex-col justify-between"
+                      style={{
+                        height: '100%',
+                        aspectRatio: `${frameW} / ${frameH}`,
+                        boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.45)',
+                      }}
+                    >
+                      {/* Thin Transparent Border */}
+                      <div className="absolute inset-0 border border-cyan-400/50 pointer-events-none transition-colors duration-200" />
 
-            {/* Progress Badge */}
-            {autoProgress && (
-              <div className="absolute bottom-4 right-4 bg-primary/20 backdrop-blur-md border border-primary px-4 py-2 rounded text-primary text-xs font-mono flex items-center gap-3 animate-pulse shadow-lg">
-                <span className="material-symbols-outlined animate-spin text-[18px]">sync</span>
-                Auto-Baking Views: {autoProgress.current} / {autoProgress.total}
+                      {/* Corner Reticles */}
+                      <div className="w-4 h-4 border-t-2 border-l-2 border-cyan-400 absolute -top-0.5 -left-0.5 pointer-events-none" />
+                      <div className="w-4 h-4 border-t-2 border-r-2 border-cyan-400 absolute -top-0.5 -right-0.5 pointer-events-none" />
+                      <div className="w-4 h-4 border-b-2 border-l-2 border-cyan-400 absolute -bottom-0.5 -left-0.5 pointer-events-none" />
+                      <div className="w-4 h-4 border-b-2 border-r-2 border-cyan-400 absolute -bottom-0.5 -right-0.5 pointer-events-none" />
+
+                      {/* Center Crosshair */}
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-30">
+                        <div className="w-4 h-px bg-cyan-300" />
+                        <div className="h-4 w-px bg-cyan-300 absolute" />
+                      </div>
+
+                      {/* Rule of Thirds Grid (Subtle) */}
+                      <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none opacity-15">
+                        <div className="border-r border-b border-cyan-200" />
+                        <div className="border-r border-b border-cyan-200" />
+                        <div className="border-b border-cyan-200" />
+                        <div className="border-r border-b border-cyan-200" />
+                        <div className="border-r border-b border-cyan-200" />
+                        <div className="border-b border-cyan-200" />
+                        <div className="border-r border-cyan-200" />
+                        <div className="border-r border-cyan-200" />
+                        <div />
+                      </div>
+
+                      {/* Framing Badge Info */}
+                      <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/75 backdrop-blur-md border border-cyan-400/40 text-[10px] font-mono text-cyan-300 tracking-wider shadow-sm">
+                        <span className="material-symbols-outlined text-[13px]">crop</span>
+                        <span>{frameW} × {frameH}</span>
+                        <span className="text-cyan-400/60">
+                          ({frameAspect === 1 ? '1:1 Square' : frameAspect === 1.5 ? '3:2 Landscape' : frameAspect === 2 ? '2:1 Pano' : `${frameAspect.toFixed(2)}:1`})
+                        </span>
+                        {currentView && currentView.fov && (
+                          <span className="text-cyan-400/80 border-l border-cyan-500/30 pl-1.5">FOV {currentView.fov}°</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Brand Badge */}
+                <div className="absolute top-3 left-3 pointer-events-none bg-surface-container-low/85 backdrop-blur-md border border-outline-variant/40 px-3 py-1.5 rounded text-xs font-mono flex items-center gap-2 shadow-md">
+                  <b className="text-primary font-semibold">RoomBake</b>
+                  <span className="text-on-surface-variant">projective bake harness</span>
+                </div>
+
+                {/* Top Right Controls (Framing Toggle & Navigation Hint) */}
+                <div className="absolute top-3 right-3 flex items-center gap-2 z-10">
+                  <button
+                    onClick={() => setShowFramingGuide(!showFramingGuide)}
+                    className={`px-2.5 py-1.5 rounded text-[11px] font-mono border backdrop-blur-md flex items-center gap-1.5 transition-all shadow-md cursor-pointer ${
+                      showFramingGuide
+                        ? 'bg-cyan-950/80 text-cyan-300 border-cyan-400/50 hover:bg-cyan-900/80'
+                        : 'bg-surface-container-low/85 text-on-surface-variant border-outline-variant/40 hover:text-on-surface'
+                    }`}
+                    title="Toggle Capture Framing Guide"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">crop_free</span>
+                    <span>{showFramingGuide ? `${frameW}×${frameH}` : 'Frame Guide'}</span>
+                  </button>
+
+                  <div className="pointer-events-none bg-surface-container-low/85 backdrop-blur-md border border-outline-variant/40 px-3 py-1.5 rounded text-[11px] font-mono text-on-surface-variant shadow-md hidden sm:block">
+                    drag to look · wheel to pull back · WASD/QE to move
+                  </div>
+                </div>
+
+                {/* Progress Badge */}
+                {autoProgress && (
+                  <div className="absolute bottom-4 right-4 bg-primary/20 backdrop-blur-md border border-primary px-4 py-2 rounded text-primary text-xs font-mono flex items-center gap-3 animate-pulse shadow-lg">
+                    <span className="material-symbols-outlined animate-spin text-[18px]">sync</span>
+                    Auto-Baking Views: {autoProgress.current} / {autoProgress.total}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
           {/* Bottom Status & Conditioning Strip */}
           <div className="h-44 border-t border-surface-container-highest bg-surface-container-low grid grid-cols-12 gap-px shrink-0">
@@ -1080,7 +1223,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                   </label>
                   <select
                     value={uvMode}
-                    onChange={(e) => setUvMode(e.target.value as any)}
+                    onChange={(e) => handleUvModeChange(e.target.value as any)}
                     className="w-full bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded outline-none focus:border-primary font-mono"
                   >
                     <option value="smart">Smart Coplanar Island Unwrap (Maximum Area, Zero Overlap)</option>
@@ -1088,6 +1231,16 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                     <option value="box">Simple 6-Way Box Projection</option>
                     <option value="model">Force File UVs</option>
                   </select>
+
+                  <label className="flex items-center gap-2 cursor-pointer text-[11px] font-mono text-on-surface select-none pt-0.5">
+                    <input
+                      type="checkbox"
+                      checked={splitTrims}
+                      onChange={(e) => handleSplitTrimsChange(e.target.checked)}
+                      className="rounded border-outline-variant text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer accent-primary"
+                    />
+                    <span>Split Long Cornices & Loops (High Texel Density)</span>
+                  </label>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -1131,6 +1284,25 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
 
             {openSections.s01 && (
               <div className="flex flex-col gap-3 pt-1 animate-fade-in">
+                {views.length > 0 && (
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-mono text-on-surface-variant">
+                      Active Viewpoint ({selectedViewIdx + 1}/{views.length})
+                    </label>
+                    <select
+                      value={selectedViewIdx}
+                      onChange={(e) => handleSelectView(parseInt(e.target.value, 10))}
+                      className="w-full bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded outline-none focus:border-primary font-mono"
+                    >
+                      {views.map((v, i) => (
+                        <option key={i} value={i}>
+                          {i}: {v.name} {v.type === 'pano' ? '(Pano)' : `(${v.fov || 60}°)`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 <div className="flex flex-col gap-1">
                   <div className="flex justify-between text-[11px] font-mono text-on-surface-variant">
                     <span>Field of view</span>
@@ -1198,6 +1370,16 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                     <option value="1024x1536">1024 × 1536 — portrait</option>
                     <option value="768x768">768 × 768 — fast, local models</option>
                   </select>
+
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-mono text-on-surface-variant select-none pt-1">
+                    <input
+                      type="checkbox"
+                      checked={showFramingGuide}
+                      onChange={(e) => setShowFramingGuide(e.target.checked)}
+                      className="accent-primary"
+                    />
+                    Show framing & capture reticle
+                  </label>
                 </div>
 
                 <button
@@ -1328,6 +1510,53 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                 {/* Gemini Box */}
                 {srcSelect === 'gemini' && (
                   <div className="flex flex-col gap-3 pt-1">
+                    {/* Gemini API Key Input */}
+                    <div className="flex flex-col gap-1.5 p-2.5 bg-surface-container-high/60 rounded-lg border border-outline-variant/60">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-mono text-on-surface flex items-center gap-1.5 font-semibold">
+                          <span className="material-symbols-outlined text-[15px] text-primary">key</span>
+                          Google Gemini API Key
+                        </label>
+                        <a
+                          href="https://aistudio.google.com/app/apikey"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[10px] font-mono text-primary hover:underline flex items-center gap-0.5"
+                        >
+                          Get API Key ↗
+                        </a>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="password"
+                          value={gemKey}
+                          onChange={(e) => {
+                            const val = e.target.value.trim();
+                            setGemKey(val);
+                            if (val) {
+                              localStorage.setItem('roombake_gemini_key', val);
+                              localStorage.setItem('gemini_api_key', val);
+                            } else {
+                              localStorage.removeItem('roombake_gemini_key');
+                              localStorage.removeItem('gemini_api_key');
+                            }
+                          }}
+                          placeholder="Paste AIzaSy... API key here"
+                          className="flex-1 bg-surface-container border border-outline-variant px-2.5 py-1.5 text-xs text-on-surface rounded font-mono focus:border-primary outline-none"
+                        />
+                        {gemKey ? (
+                          <span className="text-[11px] font-mono text-emerald-400 flex items-center gap-1 whitespace-nowrap bg-emerald-950/40 px-2 py-1 rounded border border-emerald-500/30">
+                            <span className="material-symbols-outlined text-[13px]">check_circle</span>
+                            Ready
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-mono text-amber-400 whitespace-nowrap bg-amber-950/40 px-2 py-1 rounded border border-amber-500/30">
+                            Required
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
                     <label className="flex items-center gap-2 cursor-pointer text-xs font-mono text-on-surface-variant select-none">
                       <input
                         type="checkbox"
@@ -1675,6 +1904,8 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
           </div>
         </aside>
       </div>
+        );
+      })()}
 
       {/* UV Inspector Modal */}
       <UVInspectorModal

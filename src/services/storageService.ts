@@ -363,9 +363,6 @@ export function importStageFromFile(file: File): Promise<SavedStageTemplate> {
         if (!parsed.name || !Array.isArray(parsed.scenes)) {
           throw new Error('Invalid stage file structure: missing name or scenes array');
         }
-        if (!parsed.id) {
-          parsed.id = `stage_${Date.now()}`;
-        }
         resolve(parsed);
       } catch (err) {
         reject(err);
@@ -375,4 +372,28 @@ export function importStageFromFile(file: File): Promise<SavedStageTemplate> {
     reader.readAsText(file);
   });
 }
+
+/**
+ * Uploads a binary asset (File or Blob) to the local disk storage (./data/assets/)
+ * and returns the persistent static URL (/api/assets/filename).
+ */
+export async function uploadAssetToDisk(file: File | Blob, customName?: string): Promise<string> {
+  try {
+    const filename = customName || (file instanceof File ? file.name : `asset_${Date.now()}.glb`);
+    const resp = await fetch(`/api/upload-asset?filename=${encodeURIComponent(filename)}`, {
+      method: 'POST',
+      body: file,
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.success && data.url) {
+        return data.url;
+      }
+    }
+  } catch (err) {
+    console.warn('[StorageService] uploadAssetToDisk error:', err);
+  }
+  return '';
+}
+
 

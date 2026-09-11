@@ -666,6 +666,31 @@ export class RoomBakeEngine {
       v.cam.updateMatrixWorld(true);
       v.viewProj = new THREE.Matrix4().multiplyMatrices(v.cam.projectionMatrix, v.cam.matrixWorldInverse);
     }
+    this.previewCam.fov = fov;
+    this.previewCam.updateProjectionMatrix();
+  }
+
+  public jumpToView(viewIndex: number) {
+    const v = this.views[viewIndex];
+    if (!v) return;
+    if (v.fov) {
+      this.previewCam.fov = v.fov;
+      this.previewCam.updateProjectionMatrix();
+    }
+    if (v.pos && v.target) {
+      const p = new THREE.Vector3(...v.pos);
+      const t = new THREE.Vector3(...v.target);
+      const dir = new THREE.Vector3().subVectors(t, p).normalize();
+      this.orbit.target.copy(p);
+      this.orbit.dist = 0.001;
+      this.orbit.yaw = Math.atan2(dir.x, dir.z);
+      this.orbit.pitch = Math.asin(Math.max(-0.999, Math.min(0.999, dir.y)));
+      this.applyOrbit();
+    } else if (v.pos) {
+      this.orbit.target.set(...v.pos);
+      this.orbit.dist = 0.001;
+      this.applyOrbit();
+    }
   }
 
   public addAimView(fov = 60): ViewPoint {
@@ -999,7 +1024,7 @@ export class RoomBakeEngine {
    * - Minimum Oriented Bounding Box (OBB) 2D alignment (eliminates diagonal bounding box waste)
    * - MaxRects Guillotine Bin Packing with 90° rotation and binary search scale maximization
    */
-  public smartUnwrapGeometry(geometry: THREE.BufferGeometry) {
+  public smartUnwrapGeometry(geometry: THREE.BufferGeometry, splitTrims = true) {
     geometry.computeVertexNormals();
     const pos = geometry.attributes.position;
     const nor = geometry.attributes.normal;
@@ -1040,7 +1065,7 @@ export class RoomBakeEngine {
         n = new THREE.Vector3(nor.getX(i), nor.getY(i), nor.getZ(i)).normalize();
       }
 
-      const centroid = new THREE.Vector3((ax + bx + cx) / 3, (ay + by + cy) / 3, (az + cz + cz) / 3);
+      const centroid = new THREE.Vector3((ax + bx + cx) / 3, (ay + by + cy) / 3, (az + bz + cz) / 3);
       const d = n.dot(centroid);
 
       // Quantize normal to dominant 26-cube vectors (approx 20 deg tolerance) and distance (0.05m tolerance)
@@ -1115,10 +1140,13 @@ export class RoomBakeEngine {
       }
     }
 
-    // 3. 2D Basis & OBB (Minimum Oriented Bounding Box) Alignment
+    // 3. 2D Basis & Sub-Island Decomposition for Low-Fill / Long-Thin Cornices & Loops
     const processedIslands: UVIsland[] = [];
     const tempU = new Float32Array(vertexCount);
     const tempV = new Float32Array(vertexCount);
+    const testAngles = [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165].map(
+      (deg) => (deg * Math.PI) / 180
+    );
 
     let islandIdCounter = 0;
 
@@ -1128,11 +1156,11 @@ export class RoomBakeEngine {
       let vDir: THREE.Vector3;
 
       if (Math.abs(norm.y) > 0.7) {
-        // Horizontal floors / ceilings
+        // Horizontal floors / ceilings / moldings
         uDir = new THREE.Vector3(1, 0, 0);
         vDir = new THREE.Vector3(0, 0, norm.y > 0 ? -1 : 1);
       } else {
-        // Vertical walls
+        // Vertical walls / moldings
         uDir = new THREE.Vector3(-norm.z, 0, norm.x).normalize();
         vDir = new THREE.Vector3(0, 1, 0);
       }
@@ -1148,80 +1176,193 @@ export class RoomBakeEngine {
         }
       }
 
-      // Test angles to find Minimum Oriented Bounding Box
-      const testAngles = [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165].map(
-        (deg) => (deg * Math.PI) / 180
-      );
+      // Helper to partition hollow/L-shaped loops & long trims into compact rectangular chunks
+      const partitionIsland = (subTris: IslandTriangle[], depth = 0): IslandTriangle[][] => {
+        if (!splitTrims || subTris.length <= 4 || depth >= 5) {
+          return [subTris];
+        }
 
-      let bestAngle = 0;
-      let bestBBoxArea = Infinity;
-      let bestMinU = 0, bestMaxU = 0, bestMinV = 0, bestMaxV = 0;
-
-      for (const ang of testAngles) {
-        const cosA = Math.cos(ang);
-        const sinA = Math.sin(ang);
         let minU = Infinity, maxU = -Infinity;
         let minV = Infinity, maxV = -Infinity;
+        let geomArea = 0;
 
-        for (const it of raw.tris) {
+        for (const t of subTris) {
+          geomArea += t.area;
+          const i = t.tIdx * 3;
+          for (let k = 0; k < 3; k++) {
+            const idx = i + k;
+            const u = tempU[idx];
+            const v = tempV[idx];
+            if (u < minU) minU = u;
+            if (u > maxU) maxU = u;
+            if (v < minV) minV = v;
+            if (v > maxV) maxV = v;
+          }
+        }
+
+        const spanU = maxU - minU;
+        const spanV = maxV - minV;
+        const bboxArea = Math.max(1e-5, spanU * spanV);
+        const fillFactor = geomArea / bboxArea;
+        const maxSpan = Math.max(spanU, spanV);
+        const minSpan = Math.max(1e-4, Math.min(spanU, spanV));
+        const aspect = maxSpan / minSpan;
+
+        // Condition for splitting: low fill (e.g. O-loops, L-shapes, U-shapes) OR extreme long aspect ratio
+        const isHollowOrLoop = fillFactor < 0.60 && bboxArea > 0.02;
+        const isExtremelyLongStrip = aspect > 6.0 && maxSpan > 1.5 && bboxArea > 0.02;
+
+        if (!isHollowOrLoop && !isExtremelyLongStrip) {
+          return [subTris];
+        }
+
+        // Split along the longer span axis
+        const splitAlongU = spanU >= spanV;
+        const midCut = splitAlongU ? (minU + maxU) * 0.5 : (minV + maxV) * 0.5;
+
+        const groupA: IslandTriangle[] = [];
+        const groupB: IslandTriangle[] = [];
+
+        for (const t of subTris) {
+          const i = t.tIdx * 3;
+          const c = splitAlongU
+            ? (tempU[i] + tempU[i + 1] + tempU[i + 2]) / 3
+            : (tempV[i] + tempV[i + 1] + tempV[i + 2]) / 3;
+
+          if (c <= midCut) {
+            groupA.push(t);
+          } else {
+            groupB.push(t);
+          }
+        }
+
+        if (groupA.length === 0 || groupB.length === 0) {
+          return [subTris];
+        }
+
+        // Extract connected components within each partition to ensure no disconnected fragments
+        const getConnectedComponents = (group: IslandTriangle[]): IslandTriangle[][] => {
+          const triMap = new Map<number, IslandTriangle>();
+          for (const t of group) triMap.set(t.tIdx, t);
+          const localVisited = new Set<number>();
+          const comps: IslandTriangle[][] = [];
+
+          for (const t of group) {
+            if (localVisited.has(t.tIdx)) continue;
+            const comp: IslandTriangle[] = [];
+            const q: number[] = [t.tIdx];
+            localVisited.add(t.tIdx);
+
+            while (q.length > 0) {
+              const curr = q.pop()!;
+              const match = triMap.get(curr);
+              if (match) comp.push(match);
+
+              const i = curr * 3;
+              for (let k = 0; k < 3; k++) {
+                const vKey = getVertKey(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k));
+                const nbrs = vertTriMap.get(vKey);
+                if (!nbrs) continue;
+                for (const nbr of nbrs) {
+                  if (triMap.has(nbr) && !localVisited.has(nbr)) {
+                    localVisited.add(nbr);
+                    q.push(nbr);
+                  }
+                }
+              }
+            }
+            if (comp.length > 0) comps.push(comp);
+          }
+          return comps;
+        };
+
+        const compsA = getConnectedComponents(groupA);
+        const compsB = getConnectedComponents(groupB);
+
+        const subResults: IslandTriangle[][] = [];
+        for (const ca of compsA) {
+          subResults.push(...partitionIsland(ca, depth + 1));
+        }
+        for (const cb of compsB) {
+          subResults.push(...partitionIsland(cb, depth + 1));
+        }
+        return subResults;
+      };
+
+      const subIslandsTris = partitionIsland(raw.tris, 0);
+
+      for (const subTris of subIslandsTris) {
+        // Test angles to find Minimum Oriented Bounding Box for this sub-island
+        let bestAngle = 0;
+        let bestBBoxArea = Infinity;
+        let bestMinU = 0, bestMaxU = 0, bestMinV = 0, bestMaxV = 0;
+
+        for (const ang of testAngles) {
+          const cosA = Math.cos(ang);
+          const sinA = Math.sin(ang);
+          let minU = Infinity, maxU = -Infinity;
+          let minV = Infinity, maxV = -Infinity;
+
+          for (const it of subTris) {
+            const i = it.tIdx * 3;
+            for (let k = 0; k < 3; k++) {
+              const idx = i + k;
+              const u = tempU[idx];
+              const v = tempV[idx];
+              const ru = u * cosA - v * sinA;
+              const rv = u * sinA + v * cosA;
+              if (ru < minU) minU = ru;
+              if (ru > maxU) maxU = ru;
+              if (rv < minV) minV = rv;
+              if (rv > maxV) maxV = rv;
+            }
+          }
+
+          const area = (maxU - minU) * (maxV - minV);
+          if (area < bestBBoxArea) {
+            bestBBoxArea = area;
+            bestAngle = ang;
+            bestMinU = minU;
+            bestMaxU = maxU;
+            bestMinV = minV;
+            bestMaxV = maxV;
+          }
+        }
+
+        // Rotate 2D vertex coords for this sub-island by bestAngle
+        const cosB = Math.cos(bestAngle);
+        const sinB = Math.sin(bestAngle);
+        for (const it of subTris) {
           const i = it.tIdx * 3;
           for (let k = 0; k < 3; k++) {
             const idx = i + k;
             const u = tempU[idx];
             const v = tempV[idx];
-            const ru = u * cosA - v * sinA;
-            const rv = u * sinA + v * cosA;
-            if (ru < minU) minU = ru;
-            if (ru > maxU) maxU = ru;
-            if (rv < minV) minV = rv;
-            if (rv > maxV) maxV = rv;
+            tempU[idx] = u * cosB - v * sinB;
+            tempV[idx] = u * sinB + v * cosB;
           }
         }
 
-        const area = (maxU - minU) * (maxV - minV);
-        if (area < bestBBoxArea) {
-          bestBBoxArea = area;
-          bestAngle = ang;
-          bestMinU = minU;
-          bestMaxU = maxU;
-          bestMinV = minV;
-          bestMaxV = maxV;
-        }
+        const uLen = Math.max(0.02, bestMaxU - bestMinU);
+        const vLen = Math.max(0.02, bestMaxV - bestMinV);
+        const totalArea = subTris.reduce((sum, t) => sum + t.area, 0);
+
+        processedIslands.push({
+          id: islandIdCounter++,
+          tris: subTris,
+          normal: norm,
+          uDir,
+          vDir,
+          rotAngle: bestAngle,
+          minU: bestMinU,
+          maxU: bestMaxU,
+          minV: bestMinV,
+          maxV: bestMaxV,
+          uLen,
+          vLen,
+          totalArea,
+        });
       }
-
-      // Rotate 2D vertex coords by best angle
-      const cosB = Math.cos(bestAngle);
-      const sinB = Math.sin(bestAngle);
-      for (const it of raw.tris) {
-        const i = it.tIdx * 3;
-        for (let k = 0; k < 3; k++) {
-          const idx = i + k;
-          const u = tempU[idx];
-          const v = tempV[idx];
-          tempU[idx] = u * cosB - v * sinB;
-          tempV[idx] = u * sinB + v * cosB;
-        }
-      }
-
-      const uLen = Math.max(0.02, bestMaxU - bestMinU);
-      const vLen = Math.max(0.02, bestMaxV - bestMinV);
-      const totalArea = raw.tris.reduce((sum, t) => sum + t.area, 0);
-
-      processedIslands.push({
-        id: islandIdCounter++,
-        tris: raw.tris,
-        normal: norm,
-        uDir,
-        vDir,
-        rotAngle: bestAngle,
-        minU: bestMinU,
-        maxU: bestMaxU,
-        minV: bestMinV,
-        maxV: bestMaxV,
-        uLen,
-        vLen,
-        totalArea,
-      });
     }
 
     // 4. MaxRects Area-Maximization Packing across the Atlas
@@ -1378,7 +1519,8 @@ export class RoomBakeEngine {
 
   public async loadCustomModel(
     fileOrUrl: File | string,
-    uvMode: 'smart' | 'box' | 'model' | 'auto' = 'smart'
+    uvMode: 'smart' | 'box' | 'model' | 'auto' = 'smart',
+    splitTrims = true
   ): Promise<void> {
     let rootObject: THREE.Object3D;
     const fileName = typeof fileOrUrl === 'string' ? fileOrUrl.split('/').pop() || 'model' : fileOrUrl.name;
@@ -1482,6 +1624,7 @@ export class RoomBakeEngine {
     mergedGeom.setAttribute('normal', new THREE.BufferAttribute(outNor, 3));
     if (hasAnyUv) {
       mergedGeom.setAttribute('uv', new THREE.BufferAttribute(outUv, 2));
+      mergedGeom.userData.originalUv = new Float32Array(outUv);
     }
 
     // Extract existing diffuse / albedo texture from model materials if present
@@ -1502,12 +1645,25 @@ export class RoomBakeEngine {
       }
     }
 
-    // Default to Smart Coplanar Island Unwrapping, but preserve UVs if model already has texture
-    const effectiveUvMode = (existingTexture && hasAnyUv) ? 'model' : uvMode;
+    // Determine effective UV unwrapping strategy
+    let shouldSmartUnwrap = false;
+    let shouldBoxUnwrap = false;
 
-    if (effectiveUvMode === 'smart' || !hasAnyUv || (effectiveUvMode === 'auto' && !hasAnyUv)) {
-      this.smartUnwrapGeometry(mergedGeom);
-    } else if (effectiveUvMode === 'box') {
+    if (uvMode === 'smart') {
+      shouldSmartUnwrap = true;
+    } else if (uvMode === 'box') {
+      shouldBoxUnwrap = true;
+    } else if (uvMode === 'model') {
+      if (!hasAnyUv) shouldSmartUnwrap = true;
+    } else if (uvMode === 'auto') {
+      if (!hasAnyUv || !existingTexture) shouldSmartUnwrap = true;
+    } else {
+      shouldSmartUnwrap = true;
+    }
+
+    if (shouldSmartUnwrap) {
+      this.smartUnwrapGeometry(mergedGeom, splitTrims);
+    } else if (shouldBoxUnwrap) {
       this.autoUnwrapGeometry(mergedGeom);
     }
 
@@ -1573,6 +1729,29 @@ export class RoomBakeEngine {
     }
 
     this.state.modelName = `${fileName} (${this.config.room.W.toFixed(1)}m × ${this.config.room.H.toFixed(1)}m × ${this.config.room.D.toFixed(1)}m)`;
+  }
+
+  public reUnwrapRoom(uvMode: 'smart' | 'box' | 'model' | 'auto' = 'smart', splitTrims = true) {
+    if (this.meshes.length === 0) return;
+    for (const mesh of this.meshes) {
+      const geom = mesh.geometry;
+      if (uvMode === 'smart') {
+        this.smartUnwrapGeometry(geom, splitTrims);
+      } else if (uvMode === 'box') {
+        this.autoUnwrapGeometry(geom);
+      } else if (uvMode === 'model' || uvMode === 'auto') {
+        if (geom.userData?.originalUv) {
+          geom.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(geom.userData.originalUv), 2));
+        } else {
+          this.smartUnwrapGeometry(geom, splitTrims);
+        }
+      }
+      if (geom.attributes.uv) {
+        geom.attributes.uv.needsUpdate = true;
+      }
+    }
+    this.clearBake();
+    this.generatePresetViews();
   }
 
   public generatePresetViews() {
