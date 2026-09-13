@@ -360,3 +360,39 @@ export function sampleActorPose(
 
   return out;
 }
+
+/**
+ * Hip position in Kimodo's canonical motion space at `timeSec`, sampled from a
+ * generated take: XZ relative to the take's first frame, Y as the real hip
+ * height. Returns null when the actor has no generated motion, in which case
+ * the caller should fall back to the actor's scene placement.
+ */
+export function sampleActorRootMotion(
+  actor: {
+    motionData?: { root?: number[][]; rotations?: number[][][]; num_frames?: number; duration?: number } | null;
+    duration?: number;
+  },
+  timeSec: number
+): [number, number, number] | null {
+  const md = actor.motionData;
+  if (!md || !md.root || md.root.length === 0) return null;
+
+  const tTotal = Math.max(0.1, md.duration || actor.duration || 4.0);
+  const numFrames = md.num_frames || md.root.length;
+  const progress = (timeSec % tTotal) / tTotal;
+  const exactFrame = progress * (numFrames - 1);
+  const f0 = Math.floor(exactFrame);
+  const f1 = Math.min(md.root.length - 1, f0 + 1);
+  const alpha = exactFrame - f0;
+
+  const init = md.root[0] || [0, 0, 0];
+  const r0 = md.root[Math.min(md.root.length - 1, f0)] || init;
+  const r1 = md.root[f1] || r0;
+  const lerp = (a: number, b: number) => a + (b - a) * alpha;
+
+  return [
+    parseFloat((lerp(r0[0], r1[0]) - init[0]).toFixed(4)),
+    parseFloat(lerp(r0[1], r1[1]).toFixed(4)),
+    parseFloat((lerp(r0[2], r1[2]) - init[2]).toFixed(4)),
+  ];
+}

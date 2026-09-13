@@ -479,18 +479,27 @@ export class KimodoService {
         if (!localJointsRot) continue;
 
         const frameIdx = Math.min(totalFrames - 1, Math.max(0, Math.round((kf.time || 0) * fps)));
-        const kfRoot = kf.rootPosition || startPosition;
-        const entry = {
-          frameIdx,
-          localJointsRot,
-          // Relative to the actor's start, matching the root2d convention.
-          // Y is hip height, which the hips IK effector lowers for a crouch.
-          rootPosition: [
+        // Prefer the hip position sampled from the generated take. The fallback
+        // is the actor's scene placement, which is static for the whole take --
+        // using it pins the root back at the origin on that frame and cancels
+        // whatever locomotion was just generated.
+        let rootPosition: [number, number, number];
+        if (kf.rootMotion) {
+          rootPosition = [
+            parseFloat(kf.rootMotion[0].toFixed(4)),
+            parseFloat((kf.ikTargets?.hips?.[1] ?? kf.rootMotion[1]).toFixed(4)),
+            parseFloat(kf.rootMotion[2].toFixed(4)),
+          ];
+        } else {
+          const kfRoot = kf.rootPosition || startPosition;
+          rootPosition = [
             parseFloat((kfRoot[0] - startPosition[0]).toFixed(4)),
             parseFloat((kf.ikTargets?.hips?.[1] ?? restHipY).toFixed(4)),
             parseFloat((kfRoot[2] - startPosition[2]).toFixed(4)),
-          ] as [number, number, number],
-        };
+          ];
+        }
+
+        const entry = { frameIdx, localJointsRot, rootPosition };
 
         const kinds: string[] =
           Array.isArray(kf.constraintKinds) && kf.constraintKinds.length > 0

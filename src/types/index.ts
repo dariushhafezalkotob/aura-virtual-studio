@@ -206,6 +206,18 @@ export interface ActorKeyframePose {
   boneRotations?: Record<number, [number, number, number, number]>; // boneIndex -> quaternion [x, y, z, w]
   ikTargets?: IkTargets;
   rootPosition?: [number, number, number];
+  /**
+   * Hip position in Kimodo's canonical motion space at this key: XZ relative to
+   * the take's first frame (Kimodo canonicalises the root to (0,0) at frame 0),
+   * Y as the real hip height.
+   *
+   * Distinct from `rootPosition`, which is the actor's static placement in the
+   * scene and does NOT move during a generated take -- the take's translation
+   * lives in motionData.root. Sending the static position as a constraint tells
+   * Kimodo the character is back at the origin on that frame, which cancels the
+   * locomotion it just generated.
+   */
+  rootMotion?: [number, number, number];
   poseName?: string;
   /**
    * Kimodo constraint types this key emits. Defaults to ['fullbody'] when

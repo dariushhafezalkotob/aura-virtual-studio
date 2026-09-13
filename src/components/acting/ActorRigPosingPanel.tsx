@@ -7,7 +7,12 @@ import {
   KeyframeConstraintKind,
   KEYFRAME_CONSTRAINT_KINDS,
 } from '../../types';
-import { SOMA, composeRestOffset, sampleActorPose } from '../../services/somaSkeleton';
+import {
+  SOMA,
+  composeRestOffset,
+  sampleActorPose,
+  sampleActorRootMotion,
+} from '../../services/somaSkeleton';
 
 export interface ActorRigPosingPanelProps {
   actor: CharacterActor;
@@ -276,6 +281,9 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
     // holding only the edited bones becomes a 'fullbody' constraint whose other
     // 70-odd joints default to REST, which rips the actor out of the animation.
     const fullPose = sampleActorPose(actor, roundedTime);
+    // Where the hips actually are in the generated take at this instant, not
+    // where the actor is parked in the scene.
+    const rootMotion = sampleActorRootMotion(actor, roundedTime);
 
     const newKey: ActorKeyframePose = {
       id: currentKeyframe ? currentKeyframe.id : `kf_${Date.now()}`,
@@ -283,6 +291,7 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
       boneRotations: fullPose || (actor.customBoneRotations ? { ...actor.customBoneRotations } : {}),
       ikTargets: actor.ikTargets ? { ...actor.ikTargets } : {},
       rootPosition: [...actor.position],
+      rootMotion: rootMotion || undefined,
       poseName: `Pose @ ${roundedTime}s`,
       constraintKinds: currentKeyframe?.constraintKinds || ['fullbody'],
     };
