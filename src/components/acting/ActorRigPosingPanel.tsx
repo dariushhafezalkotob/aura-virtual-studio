@@ -7,7 +7,7 @@ import {
   KeyframeConstraintKind,
   KEYFRAME_CONSTRAINT_KINDS,
 } from '../../types';
-import { SOMA, composeRestOffset } from '../../services/somaSkeleton';
+import { SOMA, composeRestOffset, sampleActorPose } from '../../services/somaSkeleton';
 
 export interface ActorRigPosingPanelProps {
   actor: CharacterActor;
@@ -270,10 +270,17 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
 
   const handleAddOrUpdateKeyframe = () => {
     const roundedTime = parseFloat(currentTimelineTime.toFixed(2));
+
+    // Snapshot every joint as currently posed -- generated motion, keyframe
+    // blend, plus your edits -- not just the handful of bones touched. A key
+    // holding only the edited bones becomes a 'fullbody' constraint whose other
+    // 70-odd joints default to REST, which rips the actor out of the animation.
+    const fullPose = sampleActorPose(actor, roundedTime);
+
     const newKey: ActorKeyframePose = {
       id: currentKeyframe ? currentKeyframe.id : `kf_${Date.now()}`,
       time: roundedTime,
-      boneRotations: actor.customBoneRotations ? { ...actor.customBoneRotations } : {},
+      boneRotations: fullPose || (actor.customBoneRotations ? { ...actor.customBoneRotations } : {}),
       ikTargets: actor.ikTargets ? { ...actor.ikTargets } : {},
       rootPosition: [...actor.position],
       poseName: `Pose @ ${roundedTime}s`,
@@ -288,9 +295,9 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
       ...actor,
       keyframePoses: updatedKeys,
       customPoseTime: roundedTime,
-      // The generated take no longer matches these keys, and motionData takes
-      // playback priority, so drop it to return to pose-authoring mode.
-      motionData: undefined,
+      // motionData is deliberately kept. The reference workflow is
+      // generate -> scrub -> pose -> key -> regenerate, so the take you are
+      // keying against has to survive being keyed.
     });
   };
 
@@ -312,7 +319,7 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
         constraintKinds: (resolved.length > 0 ? resolved : ['fullbody']) as KeyframeConstraintKind[],
       };
     });
-    onUpdateActor({ ...actor, keyframePoses: updated, motionData: undefined });
+    onUpdateActor({ ...actor, keyframePoses: updated });
   };
 
   const handleLoadKeyframe = (kf: ActorKeyframePose) => {
@@ -332,7 +339,6 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
     onUpdateActor({
       ...actor,
       keyframePoses: updated,
-      motionData: undefined,
     });
   };
 
@@ -341,7 +347,6 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
       ...actor,
       keyframePoses: [],
       customBoneRotations: {},
-      motionData: undefined,
     });
   };
 

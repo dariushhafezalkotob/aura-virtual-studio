@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { POSE_EDIT_TIME_TOLERANCE } from '../types';
 
 /**
  * Canonical bone indices for the official SOMA 77-bone skeleton
@@ -252,4 +253,110 @@ export function buildFullBodyAxisAngle(
 /** Rest-pose height of the hips, used as the default root Y for constraints. */
 export function getRestHipHeight(): number {
   return getCachedSomaRig()?.restWorldPositions[SOMA.hips]?.y ?? 0.999;
+}
+
+/**
+ * Resolves the full 77-joint pose an actor is showing at `timeSec`, composing
+ * whatever the viewport is composing: generated motion, else keyframe blend,
+ * else rest -- with any live pose edit laid on top.
+ *
+ * Keyframes must capture ALL joints, not just the ones the user touched.
+ * buildFullBodyAxisAngle fills anything missing with the REST pose, so a key
+ * holding only the two bones you rotated becomes a 'fullbody' constraint
+ * meaning "these two here, everything else at rest", which tears the body out
+ * of the generated motion. Snapshotting the composed pose is what lets you key
+ * on top of a walk the way the reference demo does.
+ */
+export function sampleActorPose(
+  actor: {
+    motionData?: { rotations?: number[][][]; num_frames?: number; duration?: number } | null;
+    keyframePoses?: { time: number; boneRotations?: Record<number, [number, number, number, number]> }[];
+    customBoneRotations?: Record<number, [number, number, number, number]>;
+    customPoseTime?: number;
+    duration?: number;
+  },
+  timeSec: number
+): Record<number, [number, number, number, number]> | null {
+  const rig = getCachedSomaRig();
+  if (!rig) return null;
+
+  const out: Record<number, [number, number, number, number]> = {};
+  const q = new THREE.Quaternion();
+  const qb = new THREE.Quaternion();
+
+  const md = actor.motionData;
+  if (md && md.rotations && md.rotations.length > 0) {
+    // Mirrors the viewport's playback sampling exactly.
+    const tTotal = Math.max(0.1, md.duration || actor.duration || 4.0);
+    const numFrames = md.num_frames || md.rotations.length;
+    const progress = (timeSec % tTotal) / tTotal;
+    const exactFrame = progress * (numFrames - 1);
+    const f0 = Math.floor(exactFrame);
+    const f1 = Math.min(numFrames - 1, f0 + 1);
+    const alpha = exactFrame - f0;
+    const r0 = md.rotations[f0];
+    const r1 = md.rotations[f1] || r0;
+
+    for (let b = 0; b < SOMA_BONE_COUNT; b++) {
+      const a = r0?.[b];
+      const c = r1?.[b] ?? a;
+      if (a && c) {
+        q.set(a[0], a[1], a[2], a[3]);
+        qb.set(c[0], c[1], c[2], c[3]);
+        q.slerp(qb, alpha);
+      } else {
+        q.copy(rig.localTransforms[b].quat);
+      }
+      out[b] = [q.x, q.y, q.z, q.w];
+    }
+  } else if (actor.keyframePoses && actor.keyframePoses.length > 0) {
+    const kfs = [...actor.keyframePoses].sort((a, b) => a.time - b.time);
+    let prev = kfs[0];
+    let next = kfs[kfs.length - 1];
+    for (const k of kfs) {
+      if (k.time <= timeSec) prev = k;
+      if (k.time >= timeSec) { next = k; break; }
+    }
+    const span = next.time - prev.time;
+    const t = span > 0.001 ? Math.min(1, Math.max(0, (timeSec - prev.time) / span)) : 0;
+    const ease = t * t * (3 - 2 * t);
+
+    for (let b = 0; b < SOMA_BONE_COUNT; b++) {
+      const a = prev.boneRotations?.[b];
+      const c = next.boneRotations?.[b];
+      if (a || c) {
+        if (a) q.set(a[0], a[1], a[2], a[3]);
+        else q.copy(rig.localTransforms[b].quat);
+        if (c) qb.set(c[0], c[1], c[2], c[3]);
+        else qb.copy(q);
+        q.slerp(qb, ease);
+      } else {
+        q.copy(rig.localTransforms[b].quat);
+      }
+      out[b] = [q.x, q.y, q.z, q.w];
+    }
+  } else {
+    for (let b = 0; b < SOMA_BONE_COUNT; b++) {
+      const r = rig.localTransforms[b].quat;
+      out[b] = [r.x, r.y, r.z, r.w];
+    }
+  }
+
+  // Live pose edit wins where it applies.
+  const editTime = actor.customPoseTime;
+  const hasPoseTrack =
+    !!(md && md.rotations && md.rotations.length > 0) ||
+    !!(actor.keyframePoses && actor.keyframePoses.length > 0);
+  const editApplies =
+    !hasPoseTrack ||
+    editTime === undefined ||
+    Math.abs(timeSec - editTime) <= POSE_EDIT_TIME_TOLERANCE;
+
+  if (actor.customBoneRotations && editApplies) {
+    for (const [k, v] of Object.entries(actor.customBoneRotations)) {
+      if (v) out[Number(k)] = v;
+    }
+  }
+
+  return out;
 }

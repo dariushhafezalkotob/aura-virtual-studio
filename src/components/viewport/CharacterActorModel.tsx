@@ -563,9 +563,14 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     // look identical. Once keys exist, only honour the edit near the timeline
     // position it was authored at; elsewhere the blend owns the pose.
     const poseEditTime = actor.customPoseTime;
+    // Scope the edit whenever something else already drives the pose over time
+    // -- a generated take or a keyframe track. With neither, the edit IS the
+    // pose and must show everywhere.
+    const hasPoseTrack =
+      !!(actor.motionData && actor.motionData.rotations && actor.motionData.rotations.length > 0) ||
+      !!(actor.keyframePoses && actor.keyframePoses.length > 0);
     const poseEditApplies =
-      !actor.keyframePoses ||
-      actor.keyframePoses.length === 0 ||
+      !hasPoseTrack ||
       poseEditTime === undefined ||
       Math.abs(currentTimelineTime - poseEditTime) <= POSE_EDIT_TIME_TOLERANCE;
 
