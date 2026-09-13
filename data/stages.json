@@ -2,7 +2,7 @@
   {
     "id": "stage_proj_proj_1789042056664",
     "name": "Bar",
-    "createdAt": "2026-09-11T17:06:28.400Z",
+    "createdAt": "2026-09-13T05:03:00.869Z",
     "scenes": [
       {
         "id": "roombake_1789042691984",
@@ -1301,6 +1301,106 @@
         "engine": "trellis",
         "category": "prop",
         "createdAt": "08:21 PM"
+      },
+      {
+        "id": "asset_1789275444523_1jtf",
+        "name": "old bar wall light (Copy)",
+        "glbUrl": "/api/assets/trellis_1789134420869_2rqua.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789134421577_3f396.mp4",
+        "position": [
+          -1.5702836066387171,
+          1.7487991017633693,
+          -1.4319072676656692
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.4898925975924988,
+          0.41969701278453453,
+          0.5682344231236675
+        ],
+        "prompt": "old bar wall light",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:17 PM"
+      },
+      {
+        "id": "asset_1789275486793_sap6",
+        "name": "old bar wall light (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789134420869_2rqua.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789134421577_3f396.mp4",
+        "position": [
+          -3.2061200544489807,
+          1.7487991017633693,
+          1.6138688607748062
+        ],
+        "rotation": [
+          -3.141592653589793,
+          -0.0027798588549082315,
+          -3.141592653589793
+        ],
+        "scale": [
+          0.4898925975924988,
+          0.41969701278453453,
+          0.5682344231236675
+        ],
+        "prompt": "old bar wall light",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:17 PM"
+      },
+      {
+        "id": "asset_1789275545351_fj93",
+        "name": "old bar wall light (Copy) (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789134420869_2rqua.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789134421577_3f396.mp4",
+        "position": [
+          -1.0304326731117754,
+          1.7487991017633693,
+          1.6252305982235788
+        ],
+        "rotation": [
+          -3.141592653589793,
+          -0.0027798588549082315,
+          -3.141592653589793
+        ],
+        "scale": [
+          0.4898925975924988,
+          0.41969701278453453,
+          0.5682344231236675
+        ],
+        "prompt": "old bar wall light",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:17 PM"
+      },
+      {
+        "id": "asset_1789275566601_cvwr",
+        "name": "old style Ceiling light for bar (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789144586228_o2gf2.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789144586951_c31jf.mp4",
+        "position": [
+          -1.159408620383901,
+          1.6040554496628017,
+          -0.1658608863663159
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.6850665511200741,
+          0.6850665511200741,
+          0.6850665511200741
+        ],
+        "prompt": "old style Ceiling light for bar",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:06 PM"
       }
     ],
     "panoramaRotation": 0,
@@ -1431,6 +1531,62 @@
           2.4456905971322067,
           1.764088147441942,
           -0.7503756037557486
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789275617827_ckuk",
+        "name": "Point Light 10",
+        "color": "#f4cc95",
+        "intensity": 2.5,
+        "distance": 1,
+        "decay": 1.3,
+        "position": [
+          -1.4412845824721268,
+          1.797995710784125,
+          -1.3168546462068818
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789275672469_1e92",
+        "name": "Point Light 10 (Copy)",
+        "color": "#f4cc95",
+        "intensity": 2.5,
+        "distance": 1,
+        "decay": 1.3,
+        "position": [
+          -1.1344619874918143,
+          1.7403701828269706,
+          -0.17082096947818595
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789275698437_izu0",
+        "name": "Point Light 10 (Copy) (Copy)",
+        "color": "#f4cc95",
+        "intensity": 2.5,
+        "distance": 1,
+        "decay": 1.3,
+        "position": [
+          -1.0391686106681883,
+          1.7143416419048965,
+          1.406530720032841
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789275738637_679u",
+        "name": "Point Light 10 (Copy) (Copy) (Copy)",
+        "color": "#f4cc95",
+        "intensity": 2.5,
+        "distance": 1,
+        "decay": 1.3,
+        "position": [
+          -3.196833000603108,
+          1.7143416419048965,
+          1.5031321262289947
         ],
         "enabled": true
       }
