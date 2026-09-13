@@ -265,6 +265,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
         30,
         selectedActor.keyframePoses,
         {
+          actorRotationY: selectedActor.rotation?.[1] || 0,
           densePath:
             useSmoothPath && selectedActor.trajectory && selectedActor.trajectory.length >= 2
               ? selectedActor.trajectory
@@ -310,6 +311,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
           trajectoryMode,
           speed: speedMultiplier,
           startPosition: selectedActor.position,
+          actorRotationY: selectedActor.rotation?.[1] || 0,
           constraints: compiledConstraints.length > 0 ? compiledConstraints : undefined,
         },
         (s) => setStatusText(s)

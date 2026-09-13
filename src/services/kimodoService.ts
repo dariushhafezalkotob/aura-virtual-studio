@@ -9,6 +9,8 @@ export interface MotionGenerationParams {
   speed?: number;
   seed?: number;
   startPosition?: [number, number, number];
+  /** Actor's Y rotation in the scene; Kimodo motion is expressed in this frame. */
+  actorRotationY?: number;
   constraints?: any[];
 }
 
@@ -115,6 +117,36 @@ export const MOTION_PRESETS: MotionPreset[] = [
     description: 'Smooth 360-degree circular orbit walk trajectory',
   },
 ];
+
+/**
+ * Kimodo works in the actor's own frame: generated root offsets are applied to
+ * the body group, which sits inside the actor's rotated root group. So motion
+ * space is actor-LOCAL, while scene waypoints and trajectories are world.
+ *
+ * Ignoring the actor's Y rotation makes the two disagree by exactly that angle
+ * -- the waypoint marker renders in one place and the actor walks to another.
+ * New actors are seeded with a random Y rotation, so this is the common case,
+ * not the edge case.
+ */
+export function worldToActorLocalXZ(
+  dx: number,
+  dz: number,
+  actorRotationY: number
+): [number, number] {
+  const c = Math.cos(actorRotationY);
+  const s = Math.sin(actorRotationY);
+  return [c * dx - s * dz, s * dx + c * dz];
+}
+
+export function actorLocalToWorldXZ(
+  lx: number,
+  lz: number,
+  actorRotationY: number
+): [number, number] {
+  const c = Math.cos(actorRotationY);
+  const s = Math.sin(actorRotationY);
+  return [c * lx + s * lz, -s * lx + c * lz];
+}
 
 export class KimodoService {
   /**
@@ -273,11 +305,18 @@ export class KimodoService {
         if (result.rotations && Array.isArray(result.rotations) && result.rotations.length > 0) {
           // Normalize trajectory root points relative to initial frame so path begins directly at startPos on the floor
           const initR = (result.root && result.root.length > 0) ? result.root[0] : [0, 0, 0];
-          const rootPts: [number, number, number][] = (result.root || []).map((r: number[]) => [
-            ((r[0] ?? initR[0]) - initR[0]) + startPos[0],
-            startPos[1], // Floor level
-            ((r[2] ?? initR[2]) - initR[2]) + startPos[2],
-          ]);
+          // The generated root is in the actor's local frame, while this trajectory
+          // line renders in world space outside the actor's rotated group. Without
+          // rotating it back, the drawn path and the walking actor diverge by
+          // exactly the actor's Y rotation.
+          const rootPts: [number, number, number][] = (result.root || []).map((r: number[]) => {
+            const [wx, wz] = actorLocalToWorldXZ(
+              (r[0] ?? initR[0]) - initR[0],
+              (r[2] ?? initR[2]) - initR[2],
+              params.actorRotationY || 0
+            );
+            return [wx + startPos[0], startPos[1], wz + startPos[2]] as [number, number, number];
+          });
 
           motionData = {
             fps: result.fps || 30,
@@ -333,8 +372,11 @@ export class KimodoService {
     startPosition: [number, number, number] = [0, 0, 0],
     fps: number = 30,
     keyframePoses?: any[],
-    options?: { densePath?: [number, number, number][] }
+    options?: { densePath?: [number, number, number][]; actorRotationY?: number }
   ): any[] {
+    const rotY = options?.actorRotationY || 0;
+    const toLocal = (wx: number, wz: number): [number, number] =>
+      worldToActorLocalXZ(wx - startPosition[0], wz - startPosition[2], rotY);
     const totalFrames = Math.max(15, Math.round(durationSeconds * fps));
     const compiledList: any[] = [];
 
@@ -353,7 +395,7 @@ export class KimodoService {
     ): [number, number] | null => {
       const explicit = facingConstraints.find((c) => timeSec >= c.startTime && timeSec <= c.endTime);
       if (explicit) {
-        const rad = ((explicit.facing!.angleDegrees as number) * Math.PI) / 180;
+        const rad = ((explicit.facing!.angleDegrees as number) * Math.PI) / 180 - rotY;
         return [parseFloat(Math.cos(rad).toFixed(4)), parseFloat(Math.sin(rad).toFixed(4))];
       }
       if (!fallbackDir) return null;
@@ -382,13 +424,13 @@ export class KimodoService {
         const pt = densePath[idx];
         const nxt = densePath[Math.min(densePath.length - 1, idx + 1)];
 
-        frameIndices.push(f);
-        smoothRoot2D.push([
-          parseFloat((pt[0] - startPosition[0]).toFixed(4)),
-          parseFloat((pt[2] - startPosition[2]).toFixed(4)),
-        ]);
+        const [lx, lz] = toLocal(pt[0], pt[2]);
+        const [nlx, nlz] = toLocal(nxt[0], nxt[2]);
 
-        const h = headingAt(u * durationSeconds, [nxt[0] - pt[0], nxt[2] - pt[2]]);
+        frameIndices.push(f);
+        smoothRoot2D.push([parseFloat(lx.toFixed(4)), parseFloat(lz.toFixed(4))]);
+
+        const h = headingAt(u * durationSeconds, [nlx - lx, nlz - lz]);
         if (h) headings.push(h);
         else headingsComplete = false;
       }
@@ -418,13 +460,11 @@ export class KimodoService {
           const arrivalTime = Math.min(durationSeconds, Math.max(0.2, c.endTime));
           const frameIdx = Math.min(totalFrames - 1, Math.max(1, Math.round(arrivalTime * fps)));
           if (points.some((p) => p.fi === frameIdx)) continue;
+          const [lx, lz] = toLocal(c.destination.position[0], c.destination.position[2]);
           points.push({
             fi: frameIdx,
             t: arrivalTime,
-            pt: [
-              parseFloat((c.destination.position[0] - startPosition[0]).toFixed(3)),
-              parseFloat((c.destination.position[2] - startPosition[2]).toFixed(3)),
-            ],
+            pt: [parseFloat(lx.toFixed(3)), parseFloat(lz.toFixed(3))],
           });
         }
 
