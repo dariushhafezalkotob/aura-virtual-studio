@@ -68,6 +68,9 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   const [speedMultiplier, setSpeedMultiplier] = useState<number>(1.0);
   const [trajectoryMode, setTrajectoryMode] = useState<'straight' | 'arc' | 'circle' | 'inplace'>('straight');
   const [showTrajectories, setShowTrajectories] = useState<boolean>(true);
+  // Kimodo's "Make Smooth Path": send the viewport trajectory as a dense
+  // root2d constraint instead of sparse destination waypoints.
+  const [useSmoothPath, setUseSmoothPath] = useState<boolean>(false);
   const [renderMode, setRenderMode] = useState<'mesh' | 'skeleton' | 'hybrid'>('mesh');
   const [showViserEmbed, setShowViserEmbed] = useState<boolean>(false);
   const [inspectorPanel, setInspectorPanel] = useState<'rig' | 'constraints' | null>('rig');
@@ -260,7 +263,13 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
         durationSec,
         selectedActor.position,
         30,
-        selectedActor.keyframePoses
+        selectedActor.keyframePoses,
+        {
+          densePath:
+            useSmoothPath && selectedActor.trajectory && selectedActor.trajectory.length >= 2
+              ? selectedActor.trajectory
+              : undefined,
+        }
       );
 
       // The compiled list is heterogeneous: 'root2d' entries carry
@@ -274,8 +283,16 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
         .filter((c: any) => c?.type === 'keyframe_poses')
         .reduce((n: number, c: any) => n + (c.keyframes?.length || 0), 0);
 
-      const conditioning = [
-        waypointCount > 0 ? `${waypointCount} waypoint${waypointCount === 1 ? '' : 's'}` : null,
+      const isDense = compiledConstraints.some(
+        (c: any) => c?.type === 'root2d' && (c.frame_indices?.length || 0) > 8
+      );
+
+        const conditioning = [
+        isDense
+          ? 'smooth root path'
+          : waypointCount > 0
+          ? `${waypointCount} waypoint${waypointCount === 1 ? '' : 's'}`
+          : null,
         poseKeyCount > 0 ? `${poseKeyCount} pose key${poseKeyCount === 1 ? '' : 's'}` : null,
       ].filter(Boolean);
 
@@ -703,6 +720,20 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
               >
                 <span className="material-symbols-outlined text-[15px]">timeline</span>
                 PATH
+              </button>
+
+              <button
+                onClick={() => setUseSmoothPath(!useSmoothPath)}
+                title={
+                  'Make Smooth Path: send the trajectory spline to Kimodo as a dense root2d ' +
+                  'constraint so the generated motion follows it, instead of only hitting sparse waypoints.'
+                }
+                className={`px-sm py-xs text-[11px] font-label-caps tracking-wider rounded-lg transition-colors flex items-center gap-xs cursor-pointer ${
+                  useSmoothPath ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">route</span>
+                SMOOTH PATH
               </button>
 
               {selectedActor?.motionData && (

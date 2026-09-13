@@ -1,5 +1,12 @@
 import React, { useState, useMemo } from 'react';
-import { CharacterActor, ActorKeyframePose, RigMode, IkEffectorType } from '../../types';
+import {
+  CharacterActor,
+  ActorKeyframePose,
+  RigMode,
+  IkEffectorType,
+  KeyframeConstraintKind,
+  KEYFRAME_CONSTRAINT_KINDS,
+} from '../../types';
 import { SOMA, composeRestOffset } from '../../services/somaSkeleton';
 
 export interface ActorRigPosingPanelProps {
@@ -269,6 +276,7 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
       ikTargets: actor.ikTargets ? { ...actor.ikTargets } : {},
       rootPosition: [...actor.position],
       poseName: `Pose @ ${roundedTime}s`,
+      constraintKinds: currentKeyframe?.constraintKinds || ['fullbody'],
     };
 
     const updatedKeys = keyframes.filter((k) => k.id !== newKey.id);
@@ -282,6 +290,27 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
       // playback priority, so drop it to return to pose-authoring mode.
       motionData: undefined,
     });
+  };
+
+  const handleToggleKind = (id: string, kind: KeyframeConstraintKind) => {
+    const updated = keyframes.map((k) => {
+      if (k.id !== id) return k;
+      const current = k.constraintKinds && k.constraintKinds.length > 0 ? k.constraintKinds : ['fullbody'];
+      const next = current.includes(kind)
+        ? current.filter((c) => c !== kind)
+        : [...current, kind];
+      // 'fullbody' already pins every joint, so pairing it with a limb is
+      // redundant; picking one clears the other.
+      const resolved =
+        kind === 'fullbody'
+          ? (next.includes('fullbody') ? ['fullbody'] : [])
+          : next.filter((c) => c !== 'fullbody');
+      return {
+        ...k,
+        constraintKinds: (resolved.length > 0 ? resolved : ['fullbody']) as KeyframeConstraintKind[],
+      };
+    });
+    onUpdateActor({ ...actor, keyframePoses: updated, motionData: undefined });
   };
 
   const handleDeleteKeyframe = (id: string) => {
@@ -571,12 +600,13 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
                   return (
                     <div
                       key={kf.id}
-                      className={`p-2 rounded-xl flex items-center justify-between border text-xs font-mono transition-all ${
+                      className={`p-2 rounded-xl flex flex-col gap-1 border text-xs font-mono transition-all ${
                         isCurrent
                           ? 'bg-primary/15 border-primary text-primary font-bold shadow-sm'
                           : 'bg-surface-container-highest/40 border-outline-variant/30 text-on-surface hover:bg-surface-container-highest'
                       }`}
                     >
+                      <div className="flex items-center justify-between w-full">
                       <button
                         onClick={() => onJumpToTime?.(kf.time)}
                         className="flex items-center gap-2 flex-1 text-left"
@@ -603,6 +633,35 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
                           <span className="material-symbols-outlined text-[14px]">close</span>
                         </button>
                       </div>
+                      </div>
+
+                    {/* Which Kimodo constraint this key sends */}
+                    <div className="flex flex-wrap items-center gap-1 pl-1 pb-1">
+                      <span className="text-[9px] font-mono text-on-surface-variant/70 uppercase tracking-wider pr-0.5">
+                        Pins:
+                      </span>
+                      {KEYFRAME_CONSTRAINT_KINDS.map((k) => {
+                        const active = (kf.constraintKinds || ['fullbody']).includes(k.id);
+                        return (
+                          <button
+                            key={k.id}
+                            onClick={() => handleToggleKind(kf.id, k.id)}
+                            title={
+                              k.id === 'fullbody'
+                                ? 'Constrain every joint at this frame (Kimodo "fullbody")'
+                                : `Constrain only the ${k.label} and hips, leaving the rest of the body free (Kimodo "${k.id}")`
+                            }
+                            className={`px-1.5 py-[1px] rounded-md text-[9px] font-mono border transition-all ${
+                              active
+                                ? 'bg-primary/20 border-primary/60 text-primary font-bold'
+                                : 'bg-surface-container-highest/40 border-outline-variant/30 text-on-surface-variant hover:text-on-surface'
+                            }`}
+                          >
+                            {k.label}
+                          </button>
+                        );
+                      })}
+                    </div>
                     </div>
                   );
                 })}

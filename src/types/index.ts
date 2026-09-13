@@ -173,6 +173,30 @@ export interface IkTargets {
   lookAt?: [number, number, number];
 }
 
+/**
+ * Which Kimodo constraint a pose key emits. 'fullbody' pins every joint;
+ * the end-effector kinds pin only that limb (plus hips) and leave the rest of
+ * the body free for the model to solve.
+ */
+export type KeyframeConstraintKind =
+  | 'fullbody'
+  | 'left-hand'
+  | 'right-hand'
+  | 'left-foot'
+  | 'right-foot';
+
+export const KEYFRAME_CONSTRAINT_KINDS: {
+  id: KeyframeConstraintKind;
+  label: string;
+  icon: string;
+}[] = [
+  { id: 'fullbody', label: 'Full Body', icon: 'accessibility_new' },
+  { id: 'left-hand', label: 'L Hand', icon: 'pan_tool' },
+  { id: 'right-hand', label: 'R Hand', icon: 'pan_tool' },
+  { id: 'left-foot', label: 'L Foot', icon: 'snowshoeing' },
+  { id: 'right-foot', label: 'R Foot', icon: 'snowshoeing' },
+];
+
 export interface ActorKeyframePose {
   id: string;
   time: number; // timestamp in seconds on timeline
@@ -180,6 +204,11 @@ export interface ActorKeyframePose {
   ikTargets?: IkTargets;
   rootPosition?: [number, number, number];
   poseName?: string;
+  /**
+   * Kimodo constraint types this key emits. Defaults to ['fullbody'] when
+   * absent, which is how every key authored before this existed behaves.
+   */
+  constraintKinds?: KeyframeConstraintKind[];
 }
 
 export interface CharacterActor {

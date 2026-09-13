@@ -332,88 +332,185 @@ export class KimodoService {
     durationSeconds: number,
     startPosition: [number, number, number] = [0, 0, 0],
     fps: number = 30,
-    keyframePoses?: any[]
+    keyframePoses?: any[],
+    options?: { densePath?: [number, number, number][] }
   ): any[] {
     const totalFrames = Math.max(15, Math.round(durationSeconds * fps));
     const compiledList: any[] = [];
 
-    // 1. Root 2D Destination Waypoints
-    const destConstraints = (constraints || []).filter(
-      (c) => c.enabled && c.type === 'destination' && c.destination
+    // 1. Root 2D: dense path, or sparse destination waypoints
+    //
+    // Kimodo canonicalises the motion so the smoothed root starts at (0, 0) on
+    // frame 0, so every position below is relative to the actor's start.
+    const facingConstraints = (constraints || []).filter(
+      (c) => c.enabled && c.type === 'facing_direction' && typeof c.facing?.angleDegrees === 'number'
     );
 
-    if (destConstraints.length > 0) {
-      const frameIndices: number[] = [0];
-      const smoothRoot2D: [number, number][] = [[0.0, 0.0]];
+    /** Heading at time t as [cos, sin], from an explicit facing key or the path tangent. */
+    const headingAt = (
+      timeSec: number,
+      fallbackDir: [number, number] | null
+    ): [number, number] | null => {
+      const explicit = facingConstraints.find((c) => timeSec >= c.startTime && timeSec <= c.endTime);
+      if (explicit) {
+        const rad = ((explicit.facing!.angleDegrees as number) * Math.PI) / 180;
+        return [parseFloat(Math.cos(rad).toFixed(4)), parseFloat(Math.sin(rad).toFixed(4))];
+      }
+      if (!fallbackDir) return null;
+      const len = Math.hypot(fallbackDir[0], fallbackDir[1]);
+      if (len < 1e-4) return null;
+      return [
+        parseFloat((fallbackDir[0] / len).toFixed(4)),
+        parseFloat((fallbackDir[1] / len).toFixed(4)),
+      ];
+    };
 
-      for (const c of destConstraints) {
-        if (!c.destination) continue;
-        const arrivalTime = Math.min(durationSeconds, Math.max(0.2, c.endTime));
-        const frameIdx = Math.min(totalFrames - 1, Math.max(1, Math.round(arrivalTime * fps)));
+    const densePath = options?.densePath;
 
-        const relX = c.destination.position[0] - startPosition[0];
-        const relZ = c.destination.position[2] - startPosition[2];
+    if (densePath && densePath.length >= 2) {
+      // "Make Smooth Path": resample the viewport trajectory spline onto one
+      // frame-aligned root2d constraint. Dense root paths are the one dense
+      // constraint Kimodo is documented to handle well.
+      const frameIndices: number[] = [];
+      const smoothRoot2D: [number, number][] = [];
+      const headings: [number, number][] = [];
+      let headingsComplete = true;
 
-        if (!frameIndices.includes(frameIdx)) {
-          frameIndices.push(frameIdx);
-          smoothRoot2D.push([parseFloat(relX.toFixed(3)), parseFloat(relZ.toFixed(3))]);
-        }
+      for (let f = 0; f < totalFrames; f++) {
+        const u = totalFrames > 1 ? f / (totalFrames - 1) : 0;
+        const idx = Math.min(densePath.length - 1, Math.round(u * (densePath.length - 1)));
+        const pt = densePath[idx];
+        const nxt = densePath[Math.min(densePath.length - 1, idx + 1)];
+
+        frameIndices.push(f);
+        smoothRoot2D.push([
+          parseFloat((pt[0] - startPosition[0]).toFixed(4)),
+          parseFloat((pt[2] - startPosition[2]).toFixed(4)),
+        ]);
+
+        const h = headingAt(u * durationSeconds, [nxt[0] - pt[0], nxt[2] - pt[2]]);
+        if (h) headings.push(h);
+        else headingsComplete = false;
       }
 
-      const paired = frameIndices.map((fi, i) => ({ fi, pt: smoothRoot2D[i] }));
-      paired.sort((a, b) => a.fi - b.fi);
-
-      compiledList.push({
+      const entry: any = {
         type: 'root2d',
-        frame_indices: paired.map((p) => p.fi),
-        smooth_root_2d: paired.map((p) => p.pt),
-      });
+        frame_indices: frameIndices,
+        smooth_root_2d: smoothRoot2D,
+      };
+      // global_root_heading must be [T, 2] matching frame_indices, or omitted.
+      if (headingsComplete && headings.length === frameIndices.length) {
+        entry.global_root_heading = headings;
+      }
+      compiledList.push(entry);
+    } else {
+      const destConstraints = (constraints || []).filter(
+        (c) => c.enabled && c.type === 'destination' && c.destination
+      );
+
+      if (destConstraints.length > 0) {
+        const points: { fi: number; t: number; pt: [number, number] }[] = [
+          { fi: 0, t: 0, pt: [0.0, 0.0] },
+        ];
+
+        for (const c of destConstraints) {
+          if (!c.destination) continue;
+          const arrivalTime = Math.min(durationSeconds, Math.max(0.2, c.endTime));
+          const frameIdx = Math.min(totalFrames - 1, Math.max(1, Math.round(arrivalTime * fps)));
+          if (points.some((p) => p.fi === frameIdx)) continue;
+          points.push({
+            fi: frameIdx,
+            t: arrivalTime,
+            pt: [
+              parseFloat((c.destination.position[0] - startPosition[0]).toFixed(3)),
+              parseFloat((c.destination.position[2] - startPosition[2]).toFixed(3)),
+            ],
+          });
+        }
+
+        points.sort((a, b) => a.fi - b.fi);
+
+        const headings: [number, number][] = [];
+        let headingsComplete = true;
+        for (let i = 0; i < points.length; i++) {
+          const nxt = points[Math.min(points.length - 1, i + 1)];
+          const dir: [number, number] = [nxt.pt[0] - points[i].pt[0], nxt.pt[1] - points[i].pt[1]];
+          const h = headingAt(points[i].t, dir);
+          if (h) headings.push(h);
+          else headingsComplete = false;
+        }
+
+        const entry: any = {
+          type: 'root2d',
+          frame_indices: points.map((p) => p.fi),
+          smooth_root_2d: points.map((p) => p.pt),
+        };
+        if (headingsComplete && headings.length === points.length) {
+          entry.global_root_heading = headings;
+        }
+        compiledList.push(entry);
+      }
     }
 
-    // 2. Timeline Keyframe Poses -> Kimodo 'fullbody' constraint
+    // 2. Timeline Keyframe Poses -> Kimodo pose constraints
     //
     // Kimodo's load_constraints_lst does TYPE_TO_CLASS[el['type']], a plain dict
     // lookup over {root2d, fullbody, left-hand, right-hand, left-foot,
-    // right-foot, end-effector}. The old 'keyframe_poses' type raised KeyError,
-    // and because the server wraps the whole list in one try/except that killed
-    // every constraint in the request -- including the root2d waypoints.
+    // right-foot, end-effector}. An unknown type raises KeyError, and since the
+    // server wraps the whole list in one try/except that silently discards
+    // EVERY constraint in the request, waypoints included.
     //
-    // The real schema wants per-joint LOCAL rotations as axis-angle vectors plus
-    // a root position per keyframe. All 77 joints are sent; kimodo's
-    // _convert_constraint_local_rots_to_skeleton handles 77 -> 30 itself.
+    // Each kind is its own entry with its own frames. 'fullbody' pins every
+    // joint; the end-effector kinds pin only that limb plus hips and leave the
+    // rest of the body for the model to solve. They all take the same payload:
+    // per-joint LOCAL rotations as axis-angle, plus a root position per key.
+    // All 77 joints are sent -- kimodo's
+    // _convert_constraint_local_rots_to_skeleton does 77 -> 30 itself.
     if (keyframePoses && keyframePoses.length > 0) {
       const restHipY = getRestHipHeight();
 
-      const entries = keyframePoses
-        .map((kf: any) => {
-          const localJointsRot = buildFullBodyAxisAngle(kf.boneRotations);
-          if (!localJointsRot) return null;
+      const byKind = new Map<
+        string,
+        { frameIdx: number; localJointsRot: [number, number, number][]; rootPosition: [number, number, number] }[]
+      >();
 
-          const frameIdx = Math.min(totalFrames - 1, Math.max(0, Math.round((kf.time || 0) * fps)));
-          const kfRoot = kf.rootPosition || startPosition;
+      for (const kf of keyframePoses as any[]) {
+        const localJointsRot = buildFullBodyAxisAngle(kf.boneRotations);
+        if (!localJointsRot) continue;
 
-          // Root is expressed relative to the actor's start, matching the
-          // root2d convention above. Y is hip height, which the hips IK
-          // effector moves when the pose is a crouch or a weight shift.
-          return {
-            frameIdx,
-            localJointsRot,
-            rootPosition: [
-              parseFloat((kfRoot[0] - startPosition[0]).toFixed(4)),
-              parseFloat((kf.ikTargets?.hips?.[1] ?? restHipY).toFixed(4)),
-              parseFloat((kfRoot[2] - startPosition[2]).toFixed(4)),
-            ] as [number, number, number],
-          };
-        })
-        .filter((e): e is NonNullable<typeof e> => e !== null);
+        const frameIdx = Math.min(totalFrames - 1, Math.max(0, Math.round((kf.time || 0) * fps)));
+        const kfRoot = kf.rootPosition || startPosition;
+        const entry = {
+          frameIdx,
+          localJointsRot,
+          // Relative to the actor's start, matching the root2d convention.
+          // Y is hip height, which the hips IK effector lowers for a crouch.
+          rootPosition: [
+            parseFloat((kfRoot[0] - startPosition[0]).toFixed(4)),
+            parseFloat((kf.ikTargets?.hips?.[1] ?? restHipY).toFixed(4)),
+            parseFloat((kfRoot[2] - startPosition[2]).toFixed(4)),
+          ] as [number, number, number],
+        };
 
-      // Kimodo indexes frames positionally, so they must be sorted and unique.
-      entries.sort((a, b) => a.frameIdx - b.frameIdx);
-      const deduped = entries.filter((e, i) => i === 0 || e.frameIdx !== entries[i - 1].frameIdx);
+        const kinds: string[] =
+          Array.isArray(kf.constraintKinds) && kf.constraintKinds.length > 0
+            ? kf.constraintKinds
+            : ['fullbody'];
 
-      if (deduped.length > 0) {
+        for (const kind of kinds) {
+          if (!byKind.has(kind)) byKind.set(kind, []);
+          byKind.get(kind)!.push(entry);
+        }
+      }
+
+      for (const [kind, entries] of byKind) {
+        // Kimodo indexes frames positionally, so they must be sorted and unique.
+        entries.sort((a, b) => a.frameIdx - b.frameIdx);
+        const deduped = entries.filter((e, i) => i === 0 || e.frameIdx !== entries[i - 1].frameIdx);
+        if (deduped.length === 0) continue;
+
         compiledList.push({
-          type: 'fullbody',
+          type: kind,
           frame_indices: deduped.map((e) => e.frameIdx),
           local_joints_rot: deduped.map((e) => e.localJointsRot),
           root_positions: deduped.map((e) => e.rootPosition),
