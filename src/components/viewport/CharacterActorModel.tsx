@@ -15,6 +15,7 @@ import {
   isSelectionSuppressed,
 } from './ThreeStage';
 import { solveTwoBoneIK, solveLookAtIK } from '../../services/ikSolver';
+import { POSE_EDIT_TIME_TOLERANCE } from '../../types';
 import {
   SOMA,
   IK_CHAINS,
@@ -556,7 +557,19 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     // =========================================================================
     // 2. ACTIVE USER FK POSE OVERRIDES
     // =========================================================================
-    if (actor.customBoneRotations) {
+    // customBoneRotations is a single live pose for the whole actor, not a
+    // per-time track. Applied unconditionally it sits on top of the keyframe
+    // blend at EVERY time, so the most recent edit masks every key and they all
+    // look identical. Once keys exist, only honour the edit near the timeline
+    // position it was authored at; elsewhere the blend owns the pose.
+    const poseEditTime = actor.customPoseTime;
+    const poseEditApplies =
+      !actor.keyframePoses ||
+      actor.keyframePoses.length === 0 ||
+      poseEditTime === undefined ||
+      Math.abs(currentTimelineTime - poseEditTime) <= POSE_EDIT_TIME_TOLERANCE;
+
+    if (actor.customBoneRotations && poseEditApplies) {
       for (const [idxStr, qRaw] of Object.entries(actor.customBoneRotations)) {
         const bIdx = Number(idxStr);
         if (bones[bIdx] && qRaw) {
@@ -991,6 +1004,7 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
                   ...(actor.customBoneRotations || {}),
                   [selectedJointIndex]: committed,
                 },
+                customPoseTime: currentTimelineTime,
               });
             }
           }}

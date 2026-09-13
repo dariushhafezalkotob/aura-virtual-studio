@@ -263,6 +263,7 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
         ...(actor.customBoneRotations || {}),
         ...resolved,
       },
+      customPoseTime: currentTimelineTime,
       activeRigMode: 'fk',
     });
   };
@@ -286,6 +287,7 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
     onUpdateActor({
       ...actor,
       keyframePoses: updatedKeys,
+      customPoseTime: roundedTime,
       // The generated take no longer matches these keys, and motionData takes
       // playback priority, so drop it to return to pose-authoring mode.
       motionData: undefined,
@@ -311,6 +313,18 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
       };
     });
     onUpdateActor({ ...actor, keyframePoses: updated, motionData: undefined });
+  };
+
+  const handleLoadKeyframe = (kf: ActorKeyframePose) => {
+    // Load the key's own pose for editing and pin the edit to its time, so the
+    // viewport shows that key rather than whatever was authored most recently.
+    onUpdateActor({
+      ...actor,
+      customBoneRotations: { ...(kf.boneRotations || {}) },
+      ikTargets: { ...(kf.ikTargets || {}) },
+      customPoseTime: kf.time,
+    });
+    onJumpToTime?.(kf.time);
   };
 
   const handleDeleteKeyframe = (id: string) => {
@@ -608,7 +622,7 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
                     >
                       <div className="flex items-center justify-between w-full">
                       <button
-                        onClick={() => onJumpToTime?.(kf.time)}
+                        onClick={() => handleLoadKeyframe(kf)}
                         className="flex items-center gap-2 flex-1 text-left"
                       >
                         <span className="material-symbols-outlined text-primary text-[14px]">diamond</span>
@@ -619,7 +633,7 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
                       </button>
                       <div className="flex items-center gap-1">
                         <button
-                          onClick={() => onJumpToTime?.(kf.time)}
+                          onClick={() => handleLoadKeyframe(kf)}
                           className="p-1 text-on-surface-variant hover:text-primary transition-colors"
                           title="Jump to keyframe"
                         >

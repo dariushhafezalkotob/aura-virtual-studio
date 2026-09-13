@@ -185,6 +185,9 @@ export type KeyframeConstraintKind =
   | 'left-foot'
   | 'right-foot';
 
+/** How close the playhead must be for a live pose edit to count as "here". */
+export const POSE_EDIT_TIME_TOLERANCE = 0.15;
+
 export const KEYFRAME_CONSTRAINT_KINDS: {
   id: KeyframeConstraintKind;
   label: string;
@@ -236,6 +239,14 @@ export interface CharacterActor {
   selectedIkEffector?: IkEffectorType | null;
   ikTargets?: IkTargets;
   customBoneRotations?: Record<number, [number, number, number, number]>;
+  /**
+   * Timeline position the live pose edit in `customBoneRotations` belongs to.
+   *
+   * Without this the edit is applied at every time, so it masks the keyframe
+   * blend and every key renders as whichever pose was authored last. When
+   * keyframes exist the override only applies near this time.
+   */
+  customPoseTime?: number;
 }
 
 export interface TrellisGenerateParams {
