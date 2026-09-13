@@ -3,6 +3,7 @@ import { Project, CharacterActor, WorkflowStage, ActorConstraint } from '../../t
 import { ThreeStage, TransformMode } from '../viewport/ThreeStage';
 import { KimodoService } from '../../services/kimodoService';
 import { ActorConstraintsPanel } from '../acting/ActorConstraintsPanel';
+import { ActorRigPosingPanel } from '../acting/ActorRigPosingPanel';
 import { MultiActorTimeline } from '../acting/MultiActorTimeline';
 
 interface ActingSetupViewProps {
@@ -68,7 +69,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   const [showTrajectories, setShowTrajectories] = useState<boolean>(true);
   const [renderMode, setRenderMode] = useState<'mesh' | 'skeleton' | 'hybrid'>('mesh');
   const [showViserEmbed, setShowViserEmbed] = useState<boolean>(false);
-  const [showConstraintsPanel, setShowConstraintsPanel] = useState<boolean>(true);
+  const [inspectorPanel, setInspectorPanel] = useState<'rig' | 'constraints' | null>('rig');
   const [showActorEditModal, setShowActorEditModal] = useState<boolean>(false);
 
   // Timeline playback state
@@ -81,6 +82,12 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
 
   const selectedActor = characters.find((c) => c.id === selectedActorId) || characters[0];
   const maxDuration = Math.max(5.0, ...characters.map((c) => c.duration || 4.0));
+
+  // Update complete actor object (including rig mode, keyframes, poses)
+  const handleUpdateActor = (updatedActor: CharacterActor) => {
+    const updated = characters.map((c) => (c.id === updatedActor.id ? updatedActor : c));
+    onUpdateProject({ ...currentProject, characters: updated });
+  };
 
   // Update constraints for a given actor and persist in project
   const handleUpdateConstraints = (actorId: string, constraints: ActorConstraint[]) => {
@@ -223,7 +230,9 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
     const compiledConstraints = KimodoService.compileKimodoConstraints(
       constraintsToUse,
       durationSec,
-      selectedActor.position
+      selectedActor.position,
+      30,
+      selectedActor.keyframePoses
     );
 
     setIsGenerating(true);
@@ -334,6 +343,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             environmentPreset={currentProject.environmentPreset}
             onSelectActor={(id) => setSelectedActorId(id || '')}
             onUpdateActorTransform={handleUpdateActorTransform}
+            onUpdateActor={handleUpdateActor}
             currentTimelineTime={timelineSec}
             isPlaying={isPlaying}
             showTrajectories={showTrajectories}
@@ -659,12 +669,35 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             </div>
           </div>
 
-          {/* Top Right: Constraints Panel Toggle & Live Kimodo Viser Engine Toggle */}
+          {/* Top Right: Rig & Pose Panel, Constraints Panel & Live Kimodo Viser Engine Toggle */}
           <div className="absolute top-md right-md z-30 flex items-center gap-xs">
+            {/* Rig & Pose Toggle */}
             <button
-              onClick={() => setShowConstraintsPanel(!showConstraintsPanel)}
+              onClick={() => setInspectorPanel(inspectorPanel === 'rig' ? null : 'rig')}
               className={`px-md py-sm rounded-xl font-label-caps text-xs tracking-wider border backdrop-blur-xl flex items-center gap-xs transition-all shadow-xl cursor-pointer ${
-                showConstraintsPanel
+                inspectorPanel === 'rig'
+                  ? 'bg-primary text-background border-primary font-medium'
+                  : 'bg-surface-container/90 border-outline-variant/40 text-on-surface-variant hover:text-primary'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[18px]">accessibility_new</span>
+              <span>3D RIG & POSING</span>
+              {selectedActor?.keyframePoses && selectedActor.keyframePoses.length > 0 && (
+                <span
+                  className={`text-[10px] px-1.5 py-[1px] rounded-full font-mono font-bold ${
+                    inspectorPanel === 'rig' ? 'bg-black text-primary' : 'bg-primary/20 text-primary'
+                  }`}
+                >
+                  {selectedActor.keyframePoses.length}
+                </span>
+              )}
+            </button>
+
+            {/* Constraints Toggle */}
+            <button
+              onClick={() => setInspectorPanel(inspectorPanel === 'constraints' ? null : 'constraints')}
+              className={`px-md py-sm rounded-xl font-label-caps text-xs tracking-wider border backdrop-blur-xl flex items-center gap-xs transition-all shadow-xl cursor-pointer ${
+                inspectorPanel === 'constraints'
                   ? 'bg-primary text-background border-primary font-medium'
                   : 'bg-surface-container/90 border-outline-variant/40 text-on-surface-variant hover:text-primary'
               }`}
@@ -674,7 +707,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
               {selectedActor?.constraints && selectedActor.constraints.filter((c) => c.enabled).length > 0 && (
                 <span
                   className={`text-[10px] px-1.5 py-[1px] rounded-full font-mono font-bold ${
-                    showConstraintsPanel ? 'bg-black text-primary' : 'bg-primary/20 text-primary'
+                    inspectorPanel === 'constraints' ? 'bg-black text-primary' : 'bg-primary/20 text-primary'
                   }`}
                 >
                   {selectedActor.constraints.filter((c) => c.enabled).length}
@@ -695,8 +728,20 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             </button>
           </div>
 
-          {/* Floating Actor Constraints Inspector Panel */}
-          {showConstraintsPanel && selectedActor && (
+          {/* Floating Inspector Panel: 3D Rig & Pose Editor */}
+          {inspectorPanel === 'rig' && selectedActor && (
+            <div className="absolute top-[68px] right-md z-30 w-80 max-h-[calc(100%-80px)] animate-fadeIn">
+              <ActorRigPosingPanel
+                actor={selectedActor}
+                currentTimelineTime={timelineSec}
+                onUpdateActor={handleUpdateActor}
+                onJumpToTime={(t) => setTimelineSec(t)}
+              />
+            </div>
+          )}
+
+          {/* Floating Inspector Panel: Actor Constraints */}
+          {inspectorPanel === 'constraints' && selectedActor && (
             <div className="absolute top-[68px] right-md z-30 animate-fadeIn">
               <ActorConstraintsPanel
                 actor={selectedActor}
@@ -710,7 +755,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
                 onUpdateConstraints={(updatedConstraints) =>
                   handleUpdateConstraints(selectedActor.id, updatedConstraints)
                 }
-                onClose={() => setShowConstraintsPanel(false)}
+                onClose={() => setInspectorPanel(null)}
               />
             </div>
           )}

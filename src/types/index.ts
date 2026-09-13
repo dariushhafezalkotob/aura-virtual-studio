@@ -156,6 +156,26 @@ export interface ActorConstraint {
   };
 }
 
+export type RigMode = 'fk' | 'ik' | 'off';
+export type IkEffectorType = 'leftHand' | 'rightHand' | 'leftFoot' | 'rightFoot' | 'lookAt';
+
+export interface IkTargets {
+  leftHand?: [number, number, number];
+  rightHand?: [number, number, number];
+  leftFoot?: [number, number, number];
+  rightFoot?: [number, number, number];
+  lookAt?: [number, number, number];
+}
+
+export interface ActorKeyframePose {
+  id: string;
+  time: number; // timestamp in seconds on timeline
+  boneRotations?: Record<number, [number, number, number, number]>; // boneIndex -> quaternion [x, y, z, w]
+  ikTargets?: IkTargets;
+  rootPosition?: [number, number, number];
+  poseName?: string;
+}
+
 export interface CharacterActor {
   id: string;
   name: string;
@@ -175,6 +195,12 @@ export interface CharacterActor {
   renderMode?: 'mesh' | 'skeleton' | 'hybrid';
   visible?: boolean;
   constraints?: ActorConstraint[];
+  keyframePoses?: ActorKeyframePose[];
+  activeRigMode?: RigMode;
+  selectedJointIndex?: number | null;
+  selectedIkEffector?: IkEffectorType | null;
+  ikTargets?: IkTargets;
+  customBoneRotations?: Record<number, [number, number, number, number]>;
 }
 
 export interface TrellisGenerateParams {

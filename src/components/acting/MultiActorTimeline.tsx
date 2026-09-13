@@ -467,6 +467,30 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
                   )}
                 </div>
 
+                {/* Keyframe Pose Diamond Markers */}
+                {actor.keyframePoses &&
+                  actor.keyframePoses.map((kf, ki) => {
+                    const kfLeftPct = (kf.time / maxDuration) * 100;
+                    if (kfLeftPct > 100) return null;
+                    const isCurrentKey = Math.abs(timelineSec - kf.time) < 0.15;
+                    return (
+                      <div
+                        key={kf.id || ki}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSeek(kf.time);
+                        }}
+                        title={`Keyframe #${ki + 1}: ${kf.poseName || 'Pose'} (${kf.time.toFixed(2)}s) — Click to jump`}
+                        className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rotate-45 border shadow-sm cursor-pointer z-20 flex items-center justify-center transition-all hover:scale-125 ${
+                          isCurrentKey
+                            ? 'bg-amber-400 border-white text-black shadow-amber-400/50 scale-110'
+                            : 'bg-primary border-background text-background hover:bg-white'
+                        }`}
+                        style={{ left: `${kfLeftPct}%` }}
+                      />
+                    );
+                  })}
+
                 {/* Interactive Playhead Needle Across Track */}
                 <div
                   className="absolute top-0 bottom-0 w-[2px] bg-primary z-20 pointer-events-none shadow-[0_0_8px_rgba(0,255,204,0.9)]"

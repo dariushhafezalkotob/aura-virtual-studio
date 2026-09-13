@@ -87,6 +87,9 @@ interface ThreeStageProps {
     rotation: [number, number, number],
     scale: [number, number, number]
   ) => void;
+  onUpdateActor?: (actor: CharacterActor) => void;
+  onSelectJoint?: (jointIndex: number | null) => void;
+  onSelectIkEffector?: (effector: any) => void;
   currentTimelineTime?: number;
   isPlaying?: boolean;
   showTrajectories?: boolean;
@@ -1477,6 +1480,9 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   onUpdateAssetTransform,
   onSelectActor,
   onUpdateActorTransform,
+  onUpdateActor,
+  onSelectJoint,
+  onSelectIkEffector,
   currentTimelineTime = 0,
   isPlaying = false,
   showTrajectories = true,
@@ -1661,6 +1667,9 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
                 }}
                 onDraggingChange={setIsTransformDragging}
                 onTransformChange={onUpdateActorTransform}
+                onUpdateActor={onUpdateActor}
+                onSelectJoint={onSelectJoint}
+                onSelectIkEffector={onSelectIkEffector}
               />
             </Suspense>
           </ActorErrorBoundary>

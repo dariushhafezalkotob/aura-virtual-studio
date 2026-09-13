@@ -324,50 +324,69 @@ export class KimodoService {
   }
 
   /**
-   * Compiles actor waypoint / destination constraints into official Kimodo root2d constraint dictionaries
+   * Compiles actor waypoint / destination constraints and keyframe poses into official Kimodo conditioning dictionaries
    */
   static compileKimodoConstraints(
     constraints: ActorConstraint[],
     durationSeconds: number,
     startPosition: [number, number, number] = [0, 0, 0],
-    fps: number = 30
+    fps: number = 30,
+    keyframePoses?: any[]
   ): any[] {
     const totalFrames = Math.max(15, Math.round(durationSeconds * fps));
+    const compiledList: any[] = [];
+
+    // 1. Root 2D Destination Waypoints
     const destConstraints = (constraints || []).filter(
       (c) => c.enabled && c.type === 'destination' && c.destination
     );
 
-    if (destConstraints.length === 0) return [];
+    if (destConstraints.length > 0) {
+      const frameIndices: number[] = [0];
+      const smoothRoot2D: [number, number][] = [[0.0, 0.0]];
 
-    const frameIndices: number[] = [0];
-    const smoothRoot2D: [number, number][] = [[0.0, 0.0]];
+      for (const c of destConstraints) {
+        if (!c.destination) continue;
+        const arrivalTime = Math.min(durationSeconds, Math.max(0.2, c.endTime));
+        const frameIdx = Math.min(totalFrames - 1, Math.max(1, Math.round(arrivalTime * fps)));
 
-    for (const c of destConstraints) {
-      if (!c.destination) continue;
-      // Compute arrival frame index
-      const arrivalTime = Math.min(durationSeconds, Math.max(0.2, c.endTime));
-      const frameIdx = Math.min(totalFrames - 1, Math.max(1, Math.round(arrivalTime * fps)));
+        const relX = c.destination.position[0] - startPosition[0];
+        const relZ = c.destination.position[2] - startPosition[2];
 
-      // Coordinates in meters relative to actor's starting position (Kimodo canonical origin is 0,0 at frame 0)
-      const relX = c.destination.position[0] - startPosition[0];
-      const relZ = c.destination.position[2] - startPosition[2];
-
-      if (!frameIndices.includes(frameIdx)) {
-        frameIndices.push(frameIdx);
-        smoothRoot2D.push([parseFloat(relX.toFixed(3)), parseFloat(relZ.toFixed(3))]);
+        if (!frameIndices.includes(frameIdx)) {
+          frameIndices.push(frameIdx);
+          smoothRoot2D.push([parseFloat(relX.toFixed(3)), parseFloat(relZ.toFixed(3))]);
+        }
       }
-    }
 
-    // Sort by frame index
-    const paired = frameIndices.map((fi, i) => ({ fi, pt: smoothRoot2D[i] }));
-    paired.sort((a, b) => a.fi - b.fi);
+      const paired = frameIndices.map((fi, i) => ({ fi, pt: smoothRoot2D[i] }));
+      paired.sort((a, b) => a.fi - b.fi);
 
-    return [
-      {
+      compiledList.push({
         type: 'root2d',
         frame_indices: paired.map((p) => p.fi),
         smooth_root_2d: paired.map((p) => p.pt),
-      },
-    ];
+      });
+    }
+
+    // 2. Timeline Keyframe Joint Pose Constraints
+    if (keyframePoses && keyframePoses.length > 0) {
+      const keyframeEntries = keyframePoses.map((kf: any) => {
+        const frameIdx = Math.min(totalFrames - 1, Math.max(0, Math.round((kf.time || 0) * fps)));
+        return {
+          frame_index: frameIdx,
+          time: kf.time,
+          bone_rotations: kf.boneRotations || {},
+          ik_targets: kf.ikTargets || {},
+        };
+      });
+
+      compiledList.push({
+        type: 'keyframe_poses',
+        keyframes: keyframeEntries,
+      });
+    }
+
+    return compiledList;
   }
 }
