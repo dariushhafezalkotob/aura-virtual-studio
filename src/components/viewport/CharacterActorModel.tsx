@@ -446,45 +446,13 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     // =========================================================================
     // 1. BASE POSE: TIMELINE KEYFRAME BLENDING, KIMODO DIFFUSION, OR REST BREATHING
     // =========================================================================
-    if (actor.keyframePoses && actor.keyframePoses.length > 0) {
-      // A. Timeline Keyframe Pose Blending
-      const kfs = [...actor.keyframePoses].sort((a, b) => a.time - b.time);
-      let prevKf = kfs[0];
-      let nextKf = kfs[kfs.length - 1];
-
-      for (let i = 0; i < kfs.length; i++) {
-        if (kfs[i].time <= currentTimelineTime) {
-          prevKf = kfs[i];
-        }
-        if (kfs[i].time >= currentTimelineTime) {
-          nextKf = kfs[i];
-          break;
-        }
-      }
-
-      const span = nextKf.time - prevKf.time;
-      const alpha = span > 0.001 ? THREE.MathUtils.clamp((currentTimelineTime - prevKf.time) / span, 0, 1) : 0;
-      const easeAlpha = alpha * alpha * (3 - 2 * alpha);
-
-      // Slerp bone rotations
-      for (let b = 0; b < bones.length; b++) {
-        const q0Raw = prevKf.boneRotations?.[b];
-        const q1Raw = nextKf.boneRotations?.[b];
-
-        if (q0Raw || q1Raw) {
-          const q0 = q0Raw
-            ? new THREE.Quaternion(q0Raw[0], q0Raw[1], q0Raw[2], q0Raw[3])
-            : restQuats[b].clone();
-          const q1 = q1Raw
-            ? new THREE.Quaternion(q1Raw[0], q1Raw[1], q1Raw[2], q1Raw[3])
-            : q0.clone();
-          bones[b].quaternion.copy(q0).slerp(q1, easeAlpha);
-        } else {
-          bones[b].quaternion.copy(restQuats[b]);
-        }
-      }
-    } else if (actor.motionData && actor.motionData.rotations && actor.motionData.rotations.length > 0) {
-      // B. Neural Motion Data Playback
+    // Generated motion wins over keyframe poses. It was the other way round,
+    // so as soon as an actor had a single pose keyframe the Kimodo animation
+    // never played -- the character just sat in the blended keyframe pose and
+    // it looked like generation had done nothing. Editing a keyframe clears
+    // motionData (see ActorRigPosingPanel), which drops back to authoring.
+    if (actor.motionData && actor.motionData.rotations && actor.motionData.rotations.length > 0) {
+      // A. Generated Kimodo Motion Playback
       const mData = actor.motionData;
       const tTotal = Math.max(0.1, mData.duration || duration || 4.0);
       const progress = (currentTimelineTime % tTotal) / tTotal;
@@ -526,6 +494,43 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
             q1.set(raw1[0], raw1[1], raw1[2], raw1[3]);
             bones[b].quaternion.copy(q0).slerp(q1, alpha);
           }
+        }
+      }
+    } else if (actor.keyframePoses && actor.keyframePoses.length > 0) {
+      // B. Timeline Keyframe Pose Blending (authoring preview)
+      const kfs = [...actor.keyframePoses].sort((a, b) => a.time - b.time);
+      let prevKf = kfs[0];
+      let nextKf = kfs[kfs.length - 1];
+
+      for (let i = 0; i < kfs.length; i++) {
+        if (kfs[i].time <= currentTimelineTime) {
+          prevKf = kfs[i];
+        }
+        if (kfs[i].time >= currentTimelineTime) {
+          nextKf = kfs[i];
+          break;
+        }
+      }
+
+      const span = nextKf.time - prevKf.time;
+      const alpha = span > 0.001 ? THREE.MathUtils.clamp((currentTimelineTime - prevKf.time) / span, 0, 1) : 0;
+      const easeAlpha = alpha * alpha * (3 - 2 * alpha);
+
+      // Slerp bone rotations
+      for (let b = 0; b < bones.length; b++) {
+        const q0Raw = prevKf.boneRotations?.[b];
+        const q1Raw = nextKf.boneRotations?.[b];
+
+        if (q0Raw || q1Raw) {
+          const q0 = q0Raw
+            ? new THREE.Quaternion(q0Raw[0], q0Raw[1], q0Raw[2], q0Raw[3])
+            : restQuats[b].clone();
+          const q1 = q1Raw
+            ? new THREE.Quaternion(q1Raw[0], q1Raw[1], q1Raw[2], q1Raw[3])
+            : q0.clone();
+          bones[b].quaternion.copy(q0).slerp(q1, easeAlpha);
+        } else {
+          bones[b].quaternion.copy(restQuats[b]);
         }
       }
     } else {

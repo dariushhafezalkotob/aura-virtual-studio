@@ -201,3 +201,55 @@ export function composeRestOffset(
   const q = rest ? rest.clone().multiply(off) : off;
   return [q.x, q.y, q.z, q.w];
 }
+
+/**
+ * Converts a quaternion [x, y, z, w] to an axis-angle (rotation vector), the
+ * form Kimodo's constraint files use for `local_joints_rot`.
+ *
+ * atan2 rather than acos for numerical stability near identity, and the
+ * hemisphere is normalised so the result is always the shortest rotation.
+ */
+export function quatToAxisAngle(q: [number, number, number, number]): [number, number, number] {
+  let [x, y, z, w] = q;
+  const n = Math.hypot(x, y, z, w);
+  if (n < 1e-12) return [0, 0, 0];
+  x /= n; y /= n; z /= n; w /= n;
+  if (w < 0) { x = -x; y = -y; z = -z; w = -w; }
+
+  const s = Math.hypot(x, y, z);
+  if (s < 1e-8) return [0, 0, 0];
+  const k = (2 * Math.atan2(s, w)) / s;
+  return [x * k, y * k, z * k];
+}
+
+/**
+ * Expands a sparse `customBoneRotations`-style map into the dense per-joint
+ * axis-angle array Kimodo expects, filling untouched joints with their rest
+ * orientation.
+ *
+ * All 77 joints are emitted: kimodo's `_convert_constraint_local_rots_to_skeleton`
+ * converts 77 -> 30 itself, so there is no need to remap here.
+ */
+export function buildFullBodyAxisAngle(
+  boneRotations: Record<number, [number, number, number, number]> | undefined
+): [number, number, number][] | null {
+  const rig = getCachedSomaRig();
+  if (!rig) return null;
+
+  const out: [number, number, number][] = [];
+  for (let i = 0; i < SOMA_BONE_COUNT; i++) {
+    const posed = boneRotations?.[i];
+    if (posed) {
+      out.push(quatToAxisAngle(posed));
+    } else {
+      const r = rig.localTransforms[i].quat;
+      out.push(quatToAxisAngle([r.x, r.y, r.z, r.w]));
+    }
+  }
+  return out;
+}
+
+/** Rest-pose height of the hips, used as the default root Y for constraints. */
+export function getRestHipHeight(): number {
+  return getCachedSomaRig()?.restWorldPositions[SOMA.hips]?.y ?? 0.999;
+}

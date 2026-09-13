@@ -278,6 +278,9 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
     onUpdateActor({
       ...actor,
       keyframePoses: updatedKeys,
+      // The generated take no longer matches these keys, and motionData takes
+      // playback priority, so drop it to return to pose-authoring mode.
+      motionData: undefined,
     });
   };
 
@@ -286,6 +289,7 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
     onUpdateActor({
       ...actor,
       keyframePoses: updated,
+      motionData: undefined,
     });
   };
 
@@ -294,6 +298,7 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
       ...actor,
       keyframePoses: [],
       customBoneRotations: {},
+      motionData: undefined,
     });
   };
 

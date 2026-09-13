@@ -5,6 +5,7 @@ import { KimodoService } from '../../services/kimodoService';
 import { ActorConstraintsPanel } from '../acting/ActorConstraintsPanel';
 import { ActorRigPosingPanel } from '../acting/ActorRigPosingPanel';
 import { MultiActorTimeline } from '../acting/MultiActorTimeline';
+import { loadOfficialSOMARig } from '../../services/somaSkeleton';
 
 interface ActingSetupViewProps {
   currentProject: Project;
@@ -248,6 +249,12 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
       // Everything that can throw now lives inside the try, so `finally` always
       // clears the generating flag. Previously a throw out here left the button
       // stuck on "generating" with no error surfaced and no request sent.
+      // buildFullBodyAxisAngle needs the rig's rest pose to fill untouched
+      // joints; the load is cached so this is a no-op once the viewport mounted.
+      if (selectedActor.keyframePoses && selectedActor.keyframePoses.length > 0) {
+        await loadOfficialSOMARig();
+      }
+
       const compiledConstraints = KimodoService.compileKimodoConstraints(
         constraintsToUse,
         durationSec,

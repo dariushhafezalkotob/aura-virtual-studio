@@ -1,4 +1,5 @@
 import { MotionData, ActorConstraint } from '../types';
+import { buildFullBodyAxisAngle, getRestHipHeight } from './somaSkeleton';
 
 export interface MotionGenerationParams {
   prompt: string;
@@ -369,22 +370,55 @@ export class KimodoService {
       });
     }
 
-    // 2. Timeline Keyframe Joint Pose Constraints
+    // 2. Timeline Keyframe Poses -> Kimodo 'fullbody' constraint
+    //
+    // Kimodo's load_constraints_lst does TYPE_TO_CLASS[el['type']], a plain dict
+    // lookup over {root2d, fullbody, left-hand, right-hand, left-foot,
+    // right-foot, end-effector}. The old 'keyframe_poses' type raised KeyError,
+    // and because the server wraps the whole list in one try/except that killed
+    // every constraint in the request -- including the root2d waypoints.
+    //
+    // The real schema wants per-joint LOCAL rotations as axis-angle vectors plus
+    // a root position per keyframe. All 77 joints are sent; kimodo's
+    // _convert_constraint_local_rots_to_skeleton handles 77 -> 30 itself.
     if (keyframePoses && keyframePoses.length > 0) {
-      const keyframeEntries = keyframePoses.map((kf: any) => {
-        const frameIdx = Math.min(totalFrames - 1, Math.max(0, Math.round((kf.time || 0) * fps)));
-        return {
-          frame_index: frameIdx,
-          time: kf.time,
-          bone_rotations: kf.boneRotations || {},
-          ik_targets: kf.ikTargets || {},
-        };
-      });
+      const restHipY = getRestHipHeight();
 
-      compiledList.push({
-        type: 'keyframe_poses',
-        keyframes: keyframeEntries,
-      });
+      const entries = keyframePoses
+        .map((kf: any) => {
+          const localJointsRot = buildFullBodyAxisAngle(kf.boneRotations);
+          if (!localJointsRot) return null;
+
+          const frameIdx = Math.min(totalFrames - 1, Math.max(0, Math.round((kf.time || 0) * fps)));
+          const kfRoot = kf.rootPosition || startPosition;
+
+          // Root is expressed relative to the actor's start, matching the
+          // root2d convention above. Y is hip height, which the hips IK
+          // effector moves when the pose is a crouch or a weight shift.
+          return {
+            frameIdx,
+            localJointsRot,
+            rootPosition: [
+              parseFloat((kfRoot[0] - startPosition[0]).toFixed(4)),
+              parseFloat((kf.ikTargets?.hips?.[1] ?? restHipY).toFixed(4)),
+              parseFloat((kfRoot[2] - startPosition[2]).toFixed(4)),
+            ] as [number, number, number],
+          };
+        })
+        .filter((e): e is NonNullable<typeof e> => e !== null);
+
+      // Kimodo indexes frames positionally, so they must be sorted and unique.
+      entries.sort((a, b) => a.frameIdx - b.frameIdx);
+      const deduped = entries.filter((e, i) => i === 0 || e.frameIdx !== entries[i - 1].frameIdx);
+
+      if (deduped.length > 0) {
+        compiledList.push({
+          type: 'fullbody',
+          frame_indices: deduped.map((e) => e.frameIdx),
+          local_joints_rot: deduped.map((e) => e.localJointsRot),
+          root_positions: deduped.map((e) => e.rootPosition),
+        });
+      }
     }
 
     return compiledList;
