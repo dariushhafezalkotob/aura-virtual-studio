@@ -78,6 +78,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [statusText, setStatusText] = useState<string | null>(null);
+  const [elapsedSec, setElapsedSec] = useState<number>(0);
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const selectedActor = characters.find((c) => c.id === selectedActorId) || characters[0];
@@ -141,6 +142,18 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
       if (selectedActor.duration) setDurationSec(selectedActor.duration);
     }
   }, [selectedActorId]);
+
+  // Kimodo generation is slow enough (tens of seconds) that a spinner alone
+  // reads as a hang. Count up so the wait is visibly progressing.
+  useEffect(() => {
+    if (!isGenerating) return;
+    setElapsedSec(0);
+    const startedAt = Date.now();
+    const id = window.setInterval(() => {
+      setElapsedSec((Date.now() - startedAt) / 1000);
+    }, 100);
+    return () => window.clearInterval(id);
+  }, [isGenerating]);
 
   // Master Timeline Animation Loop
   const lastTimeRef = useRef<number>(performance.now());
@@ -227,23 +240,44 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
     if (overridePrompt) {
       setMotionPrompt(overridePrompt);
     }
-    const compiledConstraints = KimodoService.compileKimodoConstraints(
-      constraintsToUse,
-      durationSec,
-      selectedActor.position,
-      30,
-      selectedActor.keyframePoses
-    );
 
     setIsGenerating(true);
     setErrorText(null);
-    setStatusText(
-      compiledConstraints.length > 0
-        ? `Synthesizing neural motion conditioned on ${compiledConstraints[0].frame_indices.length} waypoint keypoint(s)...`
-        : 'Synthesizing motion with NVIDIA Kimodo Stage on Hugging Face GPU...'
-    );
 
     try {
+      // Everything that can throw now lives inside the try, so `finally` always
+      // clears the generating flag. Previously a throw out here left the button
+      // stuck on "generating" with no error surfaced and no request sent.
+      const compiledConstraints = KimodoService.compileKimodoConstraints(
+        constraintsToUse,
+        durationSec,
+        selectedActor.position,
+        30,
+        selectedActor.keyframePoses
+      );
+
+      // The compiled list is heterogeneous: 'root2d' entries carry
+      // frame_indices, 'keyframe_poses' entries carry keyframes. Reading
+      // [0].frame_indices.length blindly threw whenever an actor had pose
+      // keyframes but no destination waypoint.
+      const waypointCount = compiledConstraints
+        .filter((c: any) => c?.type === 'root2d')
+        .reduce((n: number, c: any) => n + (c.frame_indices?.length || 0), 0);
+      const poseKeyCount = compiledConstraints
+        .filter((c: any) => c?.type === 'keyframe_poses')
+        .reduce((n: number, c: any) => n + (c.keyframes?.length || 0), 0);
+
+      const conditioning = [
+        waypointCount > 0 ? `${waypointCount} waypoint${waypointCount === 1 ? '' : 's'}` : null,
+        poseKeyCount > 0 ? `${poseKeyCount} pose key${poseKeyCount === 1 ? '' : 's'}` : null,
+      ].filter(Boolean);
+
+      setStatusText(
+        conditioning.length > 0
+          ? `Synthesizing neural motion conditioned on ${conditioning.join(' + ')}...`
+          : 'Synthesizing motion with NVIDIA Kimodo Stage on Hugging Face GPU...'
+      );
+
       const res = await KimodoService.generateMotion(
         {
           prompt: promptToUse,
@@ -344,6 +378,12 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             onSelectActor={(id) => setSelectedActorId(id || '')}
             onUpdateActorTransform={handleUpdateActorTransform}
             onUpdateActor={handleUpdateActor}
+            onSelectJoint={(jointIndex) =>
+              selectedActor && handleUpdateActor({ ...selectedActor, selectedJointIndex: jointIndex })
+            }
+            onSelectIkEffector={(effector) =>
+              selectedActor && handleUpdateActor({ ...selectedActor, selectedIkEffector: effector })
+            }
             currentTimelineTime={timelineSec}
             isPlaying={isPlaying}
             showTrajectories={showTrajectories}
@@ -362,6 +402,14 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
               <span className="font-label-caps text-xs text-primary tracking-wider uppercase font-medium">
                 {statusText}
               </span>
+              {isGenerating && (
+                <span
+                  className="font-mono text-xs text-on-surface-variant tabular-nums border-l border-outline-variant/40 pl-md"
+                  title="Kimodo runs on a Hugging Face GPU Space; cold containers take longer."
+                >
+                  {elapsedSec.toFixed(1)}s
+                </span>
+              )}
             </div>
           )}
 
@@ -863,7 +911,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             <span className={`material-symbols-outlined text-[18px] ${isGenerating ? 'animate-spin' : ''}`}>
               {isGenerating ? 'progress_activity' : 'auto_fix_high'}
             </span>
-            {isGenerating ? 'KIMODO GENERATING...' : 'GENERATE MOTION'}
+            {isGenerating ? `KIMODO GENERATING... ${elapsedSec.toFixed(0)}s` : 'GENERATE MOTION'}
           </button>
         </div>
 
