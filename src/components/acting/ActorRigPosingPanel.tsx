@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { CharacterActor, ActorKeyframePose, RigMode, IkEffectorType } from '../../types';
+import { SOMA, composeRestOffset } from '../../services/somaSkeleton';
 
 export interface ActorRigPosingPanelProps {
   actor: CharacterActor;
@@ -14,31 +15,36 @@ export interface PosePreset {
   icon: string;
   category: string;
   description: string;
+  /**
+   * Quaternion OFFSETS from each bone's rest orientation, not absolute local
+   * rotations. Applying these as absolute values discarded the rest pose baked
+   * into the skeleton, which threw limbs to arbitrary angles.
+   */
   boneRotations: Record<number, [number, number, number, number]>;
 }
 
 export const POSE_PRESETS: Record<string, PosePreset> = {
   t_pose: {
     id: 't_pose',
-    name: 'T-Pose',
+    name: 'Rest Pose',
     icon: 'accessibility_new',
     category: 'Standard',
-    description: 'Neutral calibration reference pose',
+    description: 'Clears all limb rotations back to the rig rest pose',
     boneRotations: {
-      11: [0, 0, 0, 1],
-      12: [0, 0, 0, 1],
-      13: [0, 0, 0, 1],
-      14: [0, 0, 0, 1],
-      39: [0, 0, 0, 1],
-      40: [0, 0, 0, 1],
-      41: [0, 0, 0, 1],
-      42: [0, 0, 0, 1],
-      66: [0, 0, 0, 1],
-      67: [0, 0, 0, 1],
-      68: [0, 0, 0, 1],
-      71: [0, 0, 0, 1],
-      72: [0, 0, 0, 1],
-      73: [0, 0, 0, 1],
+      [SOMA.leftShoulder]: [0, 0, 0, 1],
+      [SOMA.leftArm]: [0, 0, 0, 1],
+      [SOMA.leftForeArm]: [0, 0, 0, 1],
+      [SOMA.leftHand]: [0, 0, 0, 1],
+      [SOMA.rightShoulder]: [0, 0, 0, 1],
+      [SOMA.rightArm]: [0, 0, 0, 1],
+      [SOMA.rightForeArm]: [0, 0, 0, 1],
+      [SOMA.rightHand]: [0, 0, 0, 1],
+      [SOMA.leftLeg]: [0, 0, 0, 1],
+      [SOMA.leftShin]: [0, 0, 0, 1],
+      [SOMA.leftFoot]: [0, 0, 0, 1],
+      [SOMA.rightLeg]: [0, 0, 0, 1],
+      [SOMA.rightShin]: [0, 0, 0, 1],
+      [SOMA.rightFoot]: [0, 0, 0, 1],
     },
   },
   heroic_idle: {
@@ -48,11 +54,11 @@ export const POSE_PRESETS: Record<string, PosePreset> = {
     category: 'Standing',
     description: 'Balanced standing pose with relaxed arms',
     boneRotations: {
-      12: [0.05, 0.02, -0.15, 0.98],
-      13: [0.1, 0.2, -0.05, 0.97],
-      40: [0.05, -0.02, 0.15, 0.98],
-      41: [0.1, -0.2, 0.05, 0.97],
-      3: [0.02, 0, 0, 0.999],
+      [SOMA.leftArm]: [0.05, 0.02, -0.15, 0.98],
+      [SOMA.leftForeArm]: [0.1, 0.2, -0.05, 0.97],
+      [SOMA.rightArm]: [0.05, -0.02, 0.15, 0.98],
+      [SOMA.rightForeArm]: [0.1, -0.2, 0.05, 0.97],
+      [SOMA.chest]: [0.02, 0, 0, 0.999],
     },
   },
   crossed_arms: {
@@ -62,13 +68,13 @@ export const POSE_PRESETS: Record<string, PosePreset> = {
     category: 'Upper Body',
     description: 'Confident arms folded across chest',
     boneRotations: {
-      11: [0.05, 0.1, -0.1, 0.98],
-      12: [0.3, 0.2, -0.3, 0.88],
-      13: [0.1, 0.7, -0.2, 0.68],
-      39: [0.05, -0.1, 0.1, 0.98],
-      40: [0.35, -0.2, 0.3, 0.86],
-      41: [-0.1, -0.7, 0.2, 0.68],
-      3: [0.03, 0, 0, 0.999],
+      [SOMA.leftShoulder]: [0.05, 0.1, -0.1, 0.98],
+      [SOMA.leftArm]: [0.3, 0.2, -0.3, 0.88],
+      [SOMA.leftForeArm]: [0.1, 0.7, -0.2, 0.68],
+      [SOMA.rightShoulder]: [0.05, -0.1, 0.1, 0.98],
+      [SOMA.rightArm]: [0.35, -0.2, 0.3, 0.86],
+      [SOMA.rightForeArm]: [-0.1, -0.7, 0.2, 0.68],
+      [SOMA.chest]: [0.03, 0, 0, 0.999],
     },
   },
   hands_on_hips: {
@@ -78,12 +84,12 @@ export const POSE_PRESETS: Record<string, PosePreset> = {
     category: 'Standing',
     description: 'Authoritative stance with palms on waist',
     boneRotations: {
-      12: [-0.15, -0.1, -0.4, 0.89],
-      13: [0.05, 0.65, -0.25, 0.71],
-      40: [-0.15, 0.1, 0.4, 0.89],
-      41: [-0.05, -0.65, 0.25, 0.71],
-      66: [0.05, 0, -0.08, 0.99],
-      71: [0.05, 0, 0.08, 0.99],
+      [SOMA.leftArm]: [-0.15, -0.1, -0.4, 0.89],
+      [SOMA.leftForeArm]: [0.05, 0.65, -0.25, 0.71],
+      [SOMA.rightArm]: [-0.15, 0.1, 0.4, 0.89],
+      [SOMA.rightForeArm]: [-0.05, -0.65, 0.25, 0.71],
+      [SOMA.leftLeg]: [0.05, 0, -0.08, 0.99],
+      [SOMA.rightLeg]: [0.05, 0, 0.08, 0.99],
     },
   },
   point_forward: {
@@ -93,11 +99,11 @@ export const POSE_PRESETS: Record<string, PosePreset> = {
     category: 'Gestures',
     description: 'Right arm fully extended pointing forward',
     boneRotations: {
-      40: [0.65, -0.1, 0.15, 0.73],
-      41: [0.0, 0.0, 0.0, 1.0],
-      42: [-0.1, 0.0, 0.0, 0.99],
-      12: [0.05, 0.0, -0.15, 0.98],
-      6: [0.05, 0.1, 0, 0.99],
+      [SOMA.rightArm]: [0.65, -0.1, 0.15, 0.73],
+      [SOMA.rightForeArm]: [0.0, 0.0, 0.0, 1.0],
+      [SOMA.rightHand]: [-0.1, 0.0, 0.0, 0.99],
+      [SOMA.leftArm]: [0.05, 0.0, -0.15, 0.98],
+      [SOMA.head]: [0.05, 0.1, 0, 0.99],
     },
   },
   wave_hello: {
@@ -107,10 +113,10 @@ export const POSE_PRESETS: Record<string, PosePreset> = {
     category: 'Gestures',
     description: 'Right hand raised high in friendly wave',
     boneRotations: {
-      40: [0.75, 0.2, 0.45, 0.43],
-      41: [-0.2, -0.3, 0.5, 0.78],
-      42: [0.0, 0.3, 0.0, 0.95],
-      6: [0.05, -0.1, 0, 0.99],
+      [SOMA.rightArm]: [0.75, 0.2, 0.45, 0.43],
+      [SOMA.rightForeArm]: [-0.2, -0.3, 0.5, 0.78],
+      [SOMA.rightHand]: [0.0, 0.3, 0.0, 0.95],
+      [SOMA.head]: [0.05, -0.1, 0, 0.99],
     },
   },
   reach_forward: {
@@ -120,10 +126,10 @@ export const POSE_PRESETS: Record<string, PosePreset> = {
     category: 'Gestures',
     description: 'Both arms extended reaching forward',
     boneRotations: {
-      12: [0.55, 0.1, -0.15, 0.81],
-      13: [0.1, 0.1, 0.0, 0.99],
-      40: [0.55, -0.1, 0.15, 0.81],
-      41: [0.1, -0.1, 0.0, 0.99],
+      [SOMA.leftArm]: [0.55, 0.1, -0.15, 0.81],
+      [SOMA.leftForeArm]: [0.1, 0.1, 0.0, 0.99],
+      [SOMA.rightArm]: [0.55, -0.1, 0.15, 0.81],
+      [SOMA.rightForeArm]: [0.1, -0.1, 0.0, 0.99],
     },
   },
   martial_guard: {
@@ -133,14 +139,14 @@ export const POSE_PRESETS: Record<string, PosePreset> = {
     category: 'Action',
     description: 'Defensive combat stance with raised fists',
     boneRotations: {
-      12: [0.55, 0.15, -0.25, 0.77],
-      13: [0.15, 0.85, -0.1, 0.48],
-      40: [0.55, -0.15, 0.25, 0.77],
-      41: [-0.15, -0.85, 0.1, 0.48],
-      66: [0.25, 0.1, -0.1, 0.95],
-      67: [-0.4, 0, 0, 0.91],
-      71: [-0.2, -0.1, 0.1, 0.97],
-      72: [-0.3, 0, 0, 0.95],
+      [SOMA.leftArm]: [0.55, 0.15, -0.25, 0.77],
+      [SOMA.leftForeArm]: [0.15, 0.85, -0.1, 0.48],
+      [SOMA.rightArm]: [0.55, -0.15, 0.25, 0.77],
+      [SOMA.rightForeArm]: [-0.15, -0.85, 0.1, 0.48],
+      [SOMA.leftLeg]: [0.25, 0.1, -0.1, 0.95],
+      [SOMA.leftShin]: [-0.4, 0, 0, 0.91],
+      [SOMA.rightLeg]: [-0.2, -0.1, 0.1, 0.97],
+      [SOMA.rightShin]: [-0.3, 0, 0, 0.95],
     },
   },
   deep_crouch: {
@@ -150,41 +156,42 @@ export const POSE_PRESETS: Record<string, PosePreset> = {
     category: 'Action',
     description: 'Low center of gravity crouching posture',
     boneRotations: {
-      66: [-0.7, 0, 0, 0.71],
-      67: [1.1, 0, 0, 0.45],
-      68: [-0.4, 0, 0, 0.91],
-      71: [-0.7, 0, 0, 0.71],
-      72: [1.1, 0, 0, 0.45],
-      73: [-0.4, 0, 0, 0.91],
-      1: [0.3, 0, 0, 0.95],
-      3: [0.2, 0, 0, 0.97],
+      [SOMA.leftLeg]: [-0.7, 0, 0, 0.71],
+      [SOMA.leftShin]: [1.1, 0, 0, 0.45],
+      [SOMA.leftFoot]: [-0.4, 0, 0, 0.91],
+      [SOMA.rightLeg]: [-0.7, 0, 0, 0.71],
+      [SOMA.rightShin]: [1.1, 0, 0, 0.45],
+      [SOMA.rightFoot]: [-0.4, 0, 0, 0.91],
+      [SOMA.spine1]: [0.3, 0, 0, 0.95],
+      [SOMA.chest]: [0.2, 0, 0, 0.97],
     },
   },
 };
 
 export const MAJOR_BONES = [
-  { index: 6, name: 'Head', icon: 'face', group: 'Head & Neck' },
-  { index: 4, name: 'Neck', icon: 'account_box', group: 'Head & Neck' },
-  { index: 3, name: 'Chest', icon: 'shield', group: 'Torso' },
-  { index: 1, name: 'Spine', icon: 'view_agenda', group: 'Torso' },
-  { index: 0, name: 'Pelvis (Root)', icon: 'crop_square', group: 'Torso' },
-  { index: 11, name: 'L Shoulder', icon: 'accessibility', group: 'Left Arm' },
-  { index: 12, name: 'L Upper Arm', icon: 'sports_handball', group: 'Left Arm' },
-  { index: 13, name: 'L Forearm', icon: 'fitness_center', group: 'Left Arm' },
-  { index: 14, name: 'L Hand', icon: 'pan_tool', group: 'Left Arm' },
-  { index: 39, name: 'R Shoulder', icon: 'accessibility', group: 'Right Arm' },
-  { index: 40, name: 'R Upper Arm', icon: 'sports_handball', group: 'Right Arm' },
-  { index: 41, name: 'R Forearm', icon: 'fitness_center', group: 'Right Arm' },
-  { index: 42, name: 'R Hand', icon: 'pan_tool', group: 'Right Arm' },
-  { index: 66, name: 'L Hip / Thigh', icon: 'roller_skating', group: 'Left Leg' },
-  { index: 67, name: 'L Knee / Shin', icon: 'airline_seat_legroom_reduced', group: 'Left Leg' },
-  { index: 68, name: 'L Foot / Ankle', icon: 'snowshoeing', group: 'Left Leg' },
-  { index: 71, name: 'R Hip / Thigh', icon: 'roller_skating', group: 'Right Leg' },
-  { index: 72, name: 'R Knee / Shin', icon: 'airline_seat_legroom_reduced', group: 'Right Leg' },
-  { index: 73, name: 'R Foot / Ankle', icon: 'snowshoeing', group: 'Right Leg' },
+  { index: SOMA.head, name: 'Head', icon: 'face', group: 'Head & Neck' },
+  { index: SOMA.neck1, name: 'Neck', icon: 'account_box', group: 'Head & Neck' },
+  { index: SOMA.chest, name: 'Chest', icon: 'shield', group: 'Torso' },
+  { index: SOMA.spine1, name: 'Spine', icon: 'view_agenda', group: 'Torso' },
+  { index: SOMA.hips, name: 'Pelvis (Root)', icon: 'crop_square', group: 'Torso' },
+  { index: SOMA.leftShoulder, name: 'L Shoulder', icon: 'accessibility', group: 'Left Arm' },
+  { index: SOMA.leftArm, name: 'L Upper Arm', icon: 'sports_handball', group: 'Left Arm' },
+  { index: SOMA.leftForeArm, name: 'L Forearm', icon: 'fitness_center', group: 'Left Arm' },
+  { index: SOMA.leftHand, name: 'L Hand', icon: 'pan_tool', group: 'Left Arm' },
+  { index: SOMA.rightShoulder, name: 'R Shoulder', icon: 'accessibility', group: 'Right Arm' },
+  { index: SOMA.rightArm, name: 'R Upper Arm', icon: 'sports_handball', group: 'Right Arm' },
+  { index: SOMA.rightForeArm, name: 'R Forearm', icon: 'fitness_center', group: 'Right Arm' },
+  { index: SOMA.rightHand, name: 'R Hand', icon: 'pan_tool', group: 'Right Arm' },
+  { index: SOMA.leftLeg, name: 'L Hip / Thigh', icon: 'roller_skating', group: 'Left Leg' },
+  { index: SOMA.leftShin, name: 'L Knee / Shin', icon: 'airline_seat_legroom_reduced', group: 'Left Leg' },
+  { index: SOMA.leftFoot, name: 'L Foot / Ankle', icon: 'snowshoeing', group: 'Left Leg' },
+  { index: SOMA.rightLeg, name: 'R Hip / Thigh', icon: 'roller_skating', group: 'Right Leg' },
+  { index: SOMA.rightShin, name: 'R Knee / Shin', icon: 'airline_seat_legroom_reduced', group: 'Right Leg' },
+  { index: SOMA.rightFoot, name: 'R Foot / Ankle', icon: 'snowshoeing', group: 'Right Leg' },
 ];
 
 export const IK_EFFECTORS: { id: IkEffectorType; name: string; icon: string; color: string }[] = [
+  { id: 'hips', name: 'Hip Root (Body COG)', icon: 'crop_square', color: '#ffd60a' },
   { id: 'leftHand', name: 'Left Hand (Wrist IK)', icon: 'pan_tool', color: '#00ffcc' },
   { id: 'rightHand', name: 'Right Hand (Wrist IK)', icon: 'pan_tool', color: '#00ffcc' },
   { id: 'leftFoot', name: 'Left Foot (Ankle IK)', icon: 'snowshoeing', color: '#ff9500' },
@@ -200,7 +207,7 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'rig' | 'presets' | 'keyframes'>('rig');
   const rigMode = actor.activeRigMode || 'off';
-  const selectedJoint = actor.selectedJointIndex ?? 6;
+  const selectedJoint = actor.selectedJointIndex ?? SOMA.head;
   const selectedEffector = actor.selectedIkEffector || 'rightHand';
   const keyframes = useMemo(() => actor.keyframePoses || [], [actor.keyframePoses]);
 
@@ -237,11 +244,17 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
     const preset = POSE_PRESETS[presetKey];
     if (!preset) return;
 
+    const resolved: Record<number, [number, number, number, number]> = {};
+    for (const [idxStr, offset] of Object.entries(preset.boneRotations)) {
+      const idx = Number(idxStr);
+      resolved[idx] = composeRestOffset(idx, offset);
+    }
+
     onUpdateActor({
       ...actor,
       customBoneRotations: {
         ...(actor.customBoneRotations || {}),
-        ...preset.boneRotations,
+        ...resolved,
       },
       activeRigMode: 'fk',
     });
@@ -445,6 +458,10 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
                 </div>
                 <p className="text-[10px] text-on-surface-variant/80 italic pt-1">
                   Drag the 3D translation gizmo on the viewport effector to flex the limbs realistically.
+                  The <span className="font-bold text-[#ffd60a] not-italic">Hip Root</span> ring moves the whole
+                  body while the hands and feet stay planted &mdash; drop it to crouch, slide it to shift weight.
+                  To rotate the pelvis instead, switch to <span className="font-bold text-primary not-italic">FK</span>{' '}
+                  and pick <span className="font-mono not-italic">Pelvis (Root)</span>.
                 </p>
               </div>
             ) : (

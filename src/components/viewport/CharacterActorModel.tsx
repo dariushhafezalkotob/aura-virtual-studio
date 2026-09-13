@@ -15,6 +15,13 @@ import {
   isSelectionSuppressed,
 } from './ThreeStage';
 import { solveTwoBoneIK, solveLookAtIK } from '../../services/ikSolver';
+import {
+  SOMA,
+  IK_CHAINS,
+  IkChainId,
+  SOMARigCache,
+  loadOfficialSOMARig,
+} from '../../services/somaSkeleton';
 
 interface CharacterActorModelProps {
   actor: CharacterActor;
@@ -37,81 +44,9 @@ interface CharacterActorModelProps {
   onSelectIkEffector?: (effector: IkEffectorType | null) => void;
 }
 
-interface SOMARigCache {
-  geometry: THREE.BufferGeometry;
-  jointNames: string[];
-  jointConnections: [number, number][];
-  localTransforms: { pos: THREE.Vector3; quat: THREE.Quaternion; scl: THREE.Vector3 }[];
-}
-
-let cachedSOMARigData: SOMARigCache | null = null;
-let rigLoadPromise: Promise<SOMARigCache> | null = null;
-
-async function loadOfficialSOMARig(): Promise<SOMARigCache> {
-  if (cachedSOMARigData) return cachedSOMARigData;
-  if (rigLoadPromise) return rigLoadPromise;
-
-  rigLoadPromise = (async () => {
-    try {
-      const res = await fetch('/models/soma_official_rigged.json');
-      if (!res.ok) throw new Error('Failed to load /models/soma_official_rigged.json');
-      const data = await res.json();
-
-      const parentMap: Record<number, number> = {};
-      data.joint_connections.forEach(([p, c]: [number, number]) => {
-        parentMap[c] = p;
-      });
-
-      const worldMats = data.joint_transforms.map((t: number[][]) => {
-        const m = new THREE.Matrix4();
-        m.set(
-          t[0][0], t[0][1], t[0][2], t[0][3],
-          t[1][0], t[1][1], t[1][2], t[1][3],
-          t[2][0], t[2][1], t[2][2], t[2][3],
-          t[3][0], t[3][1], t[3][2], t[3][3]
-        );
-        return m;
-      });
-
-      const localTransforms: { pos: THREE.Vector3; quat: THREE.Quaternion; scl: THREE.Vector3 }[] = [];
-      for (let i = 0; i < data.joint_names.length; i++) {
-        const pIdx = parentMap[i];
-        let localM: THREE.Matrix4;
-        if (pIdx === undefined) {
-          localM = worldMats[i].clone();
-        } else {
-          const invParent = worldMats[pIdx].clone().invert();
-          localM = invParent.multiply(worldMats[i]);
-        }
-        const pos = new THREE.Vector3();
-        const quat = new THREE.Quaternion();
-        const scl = new THREE.Vector3();
-        localM.decompose(pos, quat, scl);
-        localTransforms.push({ pos, quat, scl });
-      }
-
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.vertices, 3));
-      geometry.setIndex(data.faces);
-      geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(data.skin_indices, 4));
-      geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(data.skin_weights, 4));
-      geometry.computeVertexNormals();
-
-      cachedSOMARigData = {
-        geometry,
-        jointNames: data.joint_names,
-        jointConnections: data.joint_connections,
-        localTransforms,
-      };
-      return cachedSOMARigData;
-    } catch (err) {
-      rigLoadPromise = null;
-      throw err;
-    }
-  })();
-
-  return rigLoadPromise;
-}
+// Scratch objects reused by the per-frame rig pass to avoid per-frame garbage.
+const _tmpQuat = new THREE.Quaternion();
+const _tmpVec = new THREE.Vector3();
 
 // 3D Motion Trajectory Floor Spline
 const TrajectoryPath: React.FC<{
@@ -322,7 +257,21 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
   // SOMA 77 Bones array and rest orientations
   const bonesRef = useRef<THREE.Bone[]>([]);
   const restQuatsRef = useRef<THREE.Quaternion[]>([]);
+  const rigDataRef = useRef<SOMARigCache | null>(null);
   const [isRigReady, setIsRigReady] = useState<boolean>(false);
+
+  // Bumped whenever an IK handle mounts, so the gizmo below can pick up a ref
+  // that was assigned during the same commit.
+  const [handleEpoch, setHandleEpoch] = useState<number>(0);
+
+  // While an FK gizmo is being dragged the animation pass must not stomp the
+  // bone the user is holding — it writes every bone every frame.
+  const fkDragRef = useRef<{ index: number; quat: THREE.Quaternion } | null>(null);
+
+  // Same problem for IK: the handle's `position` prop is re-applied on every
+  // React commit (e.g. the timeline ticking), which yanked the handle back to
+  // its stored value mid-drag.
+  const ikDragRef = useRef<{ eff: IkEffectorType; pos: THREE.Vector3 } | null>(null);
 
   const {
     position,
@@ -339,18 +288,63 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
 
   // IK Targets state in local coordinate space
   const ikTargetHandlesRef = useRef<{
+    hips: THREE.Group | null;
     leftHand: THREE.Group | null;
     rightHand: THREE.Group | null;
     leftFoot: THREE.Group | null;
     rightFoot: THREE.Group | null;
     lookAt: THREE.Group | null;
   }>({
+    hips: null,
     leftHand: null,
     rightHand: null,
     leftFoot: null,
     rightFoot: null,
     lookAt: null,
   });
+
+  // These must keep a stable identity across renders: React detaches and
+  // reattaches a ref whose callback identity changed, and a setState inside a
+  // freshly-created callback turns that into an infinite render loop.
+  const ikHandleRefSetters = useMemo(() => {
+    const make = (eff: IkEffectorType) => (el: THREE.Group | null) => {
+      const prev = ikTargetHandlesRef.current[eff];
+      ikTargetHandlesRef.current[eff] = el;
+      if (!!prev !== !!el) setHandleEpoch((v) => v + 1);
+    };
+    return {
+      hips: make('hips'),
+      leftHand: make('leftHand'),
+      rightHand: make('rightHand'),
+      leftFoot: make('leftFoot'),
+      rightFoot: make('rightFoot'),
+      lookAt: make('lookAt'),
+    };
+  }, []);
+
+  /**
+   * Default resting place for each IK handle, taken from the actual rest pose
+   * of the bone it drives. Hardcoded guesses put the "right hand" handle on the
+   * character's left side (this rig's +X is the character's LEFT) and both foot
+   * handles near the origin, so the handles never lined up with the limbs.
+   */
+  const ikHandleDefaults = useMemo(() => {
+    const rig = rigDataRef.current;
+    const p = (i: number, fallback: [number, number, number]): [number, number, number] => {
+      const v = rig?.restWorldPositions[i];
+      return v ? [v.x, v.y, v.z] : fallback;
+    };
+    const head = p(SOMA.head, [0, 1.595, -0.016]);
+    return {
+      hips: p(SOMA.hips, [0, 0.999, -0.051]),
+      leftHand: p(SOMA.leftHand, [0.53, 1.02, 0.063]),
+      rightHand: p(SOMA.rightHand, [-0.53, 1.02, 0.063]),
+      leftFoot: p(SOMA.leftFoot, [0.157, 0.073, -0.1]),
+      rightFoot: p(SOMA.rightFoot, [-0.158, 0.073, -0.101]),
+      // Straight ahead of the eyes, so look-at is a no-op until it is dragged.
+      lookAt: [head[0], head[1], head[2] + 2.0] as [number, number, number],
+    };
+  }, [isRigReady]);
 
   // Build SOMA 77-Bone Skeleton & SkinnedMesh on mount
   useEffect(() => {
@@ -385,6 +379,7 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
 
         bonesRef.current = bones;
         restQuatsRef.current = restQuats;
+        rigDataRef.current = rigData;
 
         // 2. Instantiate SkinnedMesh with Official SOMA Geometry
         const geom = rigData.geometry.clone();
@@ -565,45 +560,107 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
       }
     }
 
+    // The base pose above rewrites every bone each frame. Restore whatever the
+    // FK gizmo is currently holding, otherwise the drag is undone before it is
+    // ever rendered and the handle appears to do nothing.
+    const fkDrag = fkDragRef.current;
+    if (fkDrag && bones[fkDrag.index]) {
+      bones[fkDrag.index].quaternion.copy(fkDrag.quat);
+    }
+
+    const ikDrag = ikDragRef.current;
+    if (ikDrag) {
+      const handle = ikTargetHandlesRef.current[ikDrag.eff];
+      if (handle) handle.position.copy(ikDrag.pos);
+    }
+
+    // =========================================================================
+    // 2.5 HIP / ROOT TRANSLATION
+    // =========================================================================
+    // The pelvis is the skeleton root, so writing its position moves the whole
+    // body. The hand and foot goals live on the body group rather than inside
+    // the skeleton, so they stay put while the hips travel -- that is what
+    // turns a hip drop into a crouch instead of sinking the character through
+    // the floor.
+    const hipsRest = rigDataRef.current?.localTransforms[SOMA.hips]?.pos;
+    const hipsBone = bones[SOMA.hips];
+    if (hipsRest && hipsBone) {
+      const hipsHandle = ikTargetHandlesRef.current.hips;
+      const storedHips = actor.ikTargets?.hips;
+
+      if (activeRigMode === 'ik' && hipsHandle && hipsHandle.parent) {
+        // Handle position is already in body-group space, same as the bone's.
+        hipsBone.position.copy(hipsHandle.position);
+      } else if (storedHips) {
+        hipsBone.position.set(storedHips[0], storedHips[1], storedHips[2]);
+      } else {
+        hipsBone.position.copy(hipsRest);
+      }
+    }
+
     // =========================================================================
     // 3. ACTIVE USER IK SOLVER PASS (Two-Bone Analytical IK)
     // =========================================================================
-    if (activeRigMode === 'ik' || actor.ikTargets) {
-      const ikTargets = actor.ikTargets || {};
+    const bodyGroup = bodyGroupRef.current;
+    const ikActive = activeRigMode === 'ik' || !!actor.ikTargets;
 
-      // Right Arm IK (bones 39: shoulder, 40: arm, 41: forearm, 42: hand)
-      if (ikTargets.rightHand && ikTargetHandlesRef.current.rightHand) {
-        const targetWorld = new THREE.Vector3();
-        ikTargetHandlesRef.current.rightHand.getWorldPosition(targetWorld);
-        solveTwoBoneIK(bones[39], bones[40], bones[42], targetWorld);
-      }
+    if (ikActive && bodyGroup) {
+      bodyGroup.updateWorldMatrix(true, false);
 
-      // Left Arm IK (bones 11: shoulder, 12: arm, 13: forearm, 14: hand)
-      if (ikTargets.leftHand && ikTargetHandlesRef.current.leftHand) {
-        const targetWorld = new THREE.Vector3();
-        ikTargetHandlesRef.current.leftHand.getWorldPosition(targetWorld);
-        solveTwoBoneIK(bones[11], bones[12], bones[14], targetWorld);
-      }
+      // Character-space axes in world terms, so pole targets stay behind the
+      // elbow / in front of the knee no matter how the actor is turned.
+      const bodyQuat = bodyGroup.getWorldQuaternion(_tmpQuat);
+      const poleWorld = new THREE.Vector3();
+      const targetWorld = new THREE.Vector3();
 
-      // Right Leg IK (bones 71: hip, 72: knee, 73: ankle)
-      if (ikTargets.rightFoot && ikTargetHandlesRef.current.rightFoot) {
-        const targetWorld = new THREE.Vector3();
-        ikTargetHandlesRef.current.rightFoot.getWorldPosition(targetWorld);
-        solveTwoBoneIK(bones[71], bones[72], bones[73], targetWorld);
-      }
+      const resolveTarget = (eff: IkEffectorType, out: THREE.Vector3): boolean => {
+        const handle = ikTargetHandlesRef.current[eff];
+        if (handle && handle.parent) {
+          // Live handle position — read every frame so dragging is continuous
+          // instead of only applying once the pointer is released.
+          handle.getWorldPosition(out);
+          return true;
+        }
+        const stored = actor.ikTargets?.[eff];
+        if (stored) {
+          out.set(stored[0], stored[1], stored[2]);
+          bodyGroup.localToWorld(out);
+          return true;
+        }
+        return false;
+      };
 
-      // Left Leg IK (bones 66: hip, 67: knee, 68: ankle)
-      if (ikTargets.leftFoot && ikTargetHandlesRef.current.leftFoot) {
-        const targetWorld = new THREE.Vector3();
-        ikTargetHandlesRef.current.leftFoot.getWorldPosition(targetWorld);
-        solveTwoBoneIK(bones[66], bones[67], bones[68], targetWorld);
-      }
+      const hasTarget = (eff: IkEffectorType) =>
+        activeRigMode === 'ik' || !!actor.ikTargets?.[eff];
 
-      // Look-At Head IK (bones 6: head, 4: neck)
-      if (ikTargets.lookAt && ikTargetHandlesRef.current.lookAt) {
-        const targetWorld = new THREE.Vector3();
-        ikTargetHandlesRef.current.lookAt.getWorldPosition(targetWorld);
-        solveLookAtIK(bones[6], bones[4], targetWorld, 1.0);
+      (Object.keys(IK_CHAINS) as IkChainId[]).forEach((eff) => {
+        if (!hasTarget(eff)) return;
+        if (!resolveTarget(eff, targetWorld)) return;
+
+        const chain = IK_CHAINS[eff];
+        const root = bones[chain.root];
+        const mid = bones[chain.mid];
+        const end = bones[chain.end];
+        if (!root || !mid || !end) return;
+
+        // The pose pass above only wrote quaternions, so refresh before reading
+        // the limb's world origin.
+        root.updateWorldMatrix(true, false);
+        root.getWorldPosition(poleWorld);
+        _tmpVec
+          .set(chain.poleDir[0], chain.poleDir[1], chain.poleDir[2])
+          .applyQuaternion(bodyQuat)
+          .normalize();
+        poleWorld.addScaledVector(_tmpVec, 1.5);
+
+        solveTwoBoneIK(root, mid, end, targetWorld, poleWorld);
+      });
+
+      if (hasTarget('lookAt') && resolveTarget('lookAt', targetWorld)) {
+        const gazeAxis = rigDataRef.current?.headGazeAxisLocal;
+        if (gazeAxis) {
+          solveLookAtIK(bones[SOMA.head], bones[SOMA.neck1], targetWorld, gazeAxis, 1.0);
+        }
       }
     }
 
@@ -665,9 +722,12 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
       onDraggingChange(false);
     }, 200);
 
+    const dragged = ikDragRef.current?.eff === eff ? ikDragRef.current.pos : null;
     const handle = ikTargetHandlesRef.current[eff];
+    ikDragRef.current = null;
     if (handle && onUpdateActor) {
-      const pos: [number, number, number] = [handle.position.x, handle.position.y, handle.position.z];
+      const src = dragged ?? handle.position;
+      const pos: [number, number, number] = [src.x, src.y, src.z];
       onUpdateActor({
         ...actor,
         ikTargets: {
@@ -686,6 +746,10 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     ? bonesRef.current[selectedJointIndex]
     : null;
 
+  // handleEpoch forces this to be re-read after the handle groups mount; a ref
+  // assigned during a commit is still null on the render that assigned it, so
+  // without this the translate gizmo never appeared on first entry to IK mode.
+  void handleEpoch;
   const activeIkHandle = activeRigMode === 'ik' && selectedIkEffector
     ? ikTargetHandlesRef.current[selectedIkEffector]
     : null;
@@ -730,8 +794,8 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
             <group>
               {/* Right Hand IK Effector */}
               <group
-                ref={(el) => (ikTargetHandlesRef.current.rightHand = el)}
-                position={actor.ikTargets?.rightHand || [0.35, 1.0, 0.2]}
+                ref={ikHandleRefSetters.rightHand}
+                position={actor.ikTargets?.rightHand || ikHandleDefaults.rightHand}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelectIkEffector?.('rightHand');
@@ -749,8 +813,8 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
 
               {/* Left Hand IK Effector */}
               <group
-                ref={(el) => (ikTargetHandlesRef.current.leftHand = el)}
-                position={actor.ikTargets?.leftHand || [-0.35, 1.0, 0.2]}
+                ref={ikHandleRefSetters.leftHand}
+                position={actor.ikTargets?.leftHand || ikHandleDefaults.leftHand}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelectIkEffector?.('leftHand');
@@ -768,8 +832,8 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
 
               {/* Right Foot IK Effector */}
               <group
-                ref={(el) => (ikTargetHandlesRef.current.rightFoot = el)}
-                position={actor.ikTargets?.rightFoot || [0.12, 0.08, 0.0]}
+                ref={ikHandleRefSetters.rightFoot}
+                position={actor.ikTargets?.rightFoot || ikHandleDefaults.rightFoot}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelectIkEffector?.('rightFoot');
@@ -787,8 +851,8 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
 
               {/* Left Foot IK Effector */}
               <group
-                ref={(el) => (ikTargetHandlesRef.current.leftFoot = el)}
-                position={actor.ikTargets?.leftFoot || [-0.12, 0.08, 0.0]}
+                ref={ikHandleRefSetters.leftFoot}
+                position={actor.ikTargets?.leftFoot || ikHandleDefaults.leftFoot}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelectIkEffector?.('leftFoot');
@@ -804,10 +868,38 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
                 </mesh>
               </group>
 
+              {/* Hip / Root COG Handle -- drag to move the whole body */}
+              <group
+                ref={ikHandleRefSetters.hips}
+                position={actor.ikTargets?.hips || ikHandleDefaults.hips}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectIkEffector?.('hips');
+                }}
+              >
+                <mesh rotation={[-Math.PI / 2, 0, 0]}>
+                  <torusGeometry args={[0.13, 0.012, 8, 28]} />
+                  <meshStandardMaterial
+                    color={selectedIkEffector === 'hips' && activeRigMode === 'ik' ? '#ffd60a' : '#ffffff'}
+                    emissive={selectedIkEffector === 'hips' ? '#ffd60a' : '#000000'}
+                    emissiveIntensity={0.6}
+                  />
+                </mesh>
+                {/* Small hub so the ring is still clickable edge-on */}
+                <mesh>
+                  <sphereGeometry args={[0.03, 12, 12]} />
+                  <meshStandardMaterial
+                    color={selectedIkEffector === 'hips' && activeRigMode === 'ik' ? '#ffd60a' : '#ffffff'}
+                    emissive={selectedIkEffector === 'hips' ? '#ffd60a' : '#000000'}
+                    emissiveIntensity={0.6}
+                  />
+                </mesh>
+              </group>
+
               {/* Look-At Head IK Target */}
               <group
-                ref={(el) => (ikTargetHandlesRef.current.lookAt = el)}
-                position={actor.ikTargets?.lookAt || [0, 1.6, 1.5]}
+                ref={ikHandleRefSetters.lookAt}
+                position={actor.ikTargets?.lookAt || ikHandleDefaults.lookAt}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelectIkEffector?.('lookAt');
@@ -866,21 +958,33 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
         <TransformControls
           object={selectedBone}
           mode="rotate"
+          space="local"
           size={0.6}
           onMouseDown={() => {
             markTransformDragStart();
             onDraggingChange(true);
+            fkDragRef.current = {
+              index: selectedJointIndex ?? SOMA.head,
+              quat: selectedBone.quaternion.clone(),
+            };
+          }}
+          onObjectChange={() => {
+            // Capture every pointer move so the animation pass can replay it,
+            // which is what makes the joint follow the gizmo in real time.
+            if (fkDragRef.current) fkDragRef.current.quat.copy(selectedBone.quaternion);
           }}
           onMouseUp={() => {
             markTransformDragEnd();
             setTimeout(() => onDraggingChange(false), 200);
-            if (selectedBone && onUpdateActor && selectedJointIndex !== null) {
-              const q = selectedBone.quaternion;
+            const q = fkDragRef.current?.quat ?? selectedBone.quaternion;
+            const committed: [number, number, number, number] = [q.x, q.y, q.z, q.w];
+            fkDragRef.current = null;
+            if (onUpdateActor && selectedJointIndex !== null) {
               onUpdateActor({
                 ...actor,
                 customBoneRotations: {
                   ...(actor.customBoneRotations || {}),
-                  [selectedJointIndex]: [q.x, q.y, q.z, q.w],
+                  [selectedJointIndex]: committed,
                 },
               });
             }
@@ -897,6 +1001,13 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
           onMouseDown={() => {
             markTransformDragStart();
             onDraggingChange(true);
+            ikDragRef.current = {
+              eff: selectedIkEffector,
+              pos: activeIkHandle.position.clone(),
+            };
+          }}
+          onObjectChange={() => {
+            if (ikDragRef.current) ikDragRef.current.pos.copy(activeIkHandle.position);
           }}
           onMouseUp={() => handleIkEffectorTransformEnd(selectedIkEffector)}
         />

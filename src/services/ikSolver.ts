@@ -1,15 +1,72 @@
 import * as THREE from 'three';
 
 export interface TwoBoneIKChain {
-  rootBone: THREE.Bone;   // e.g. Shoulder / Hip
-  midBone: THREE.Bone;    // e.g. Elbow / Knee
-  endBone: THREE.Bone;    // e.g. Hand / Foot
-  poleTarget?: THREE.Vector3; // Direction hint for bend (e.g. knee forward, elbow back)
+  rootBone: THREE.Bone;   // Upper arm / thigh
+  midBone: THREE.Bone;    // Forearm / shin
+  endBone: THREE.Bone;    // Hand / foot
+  poleTarget?: THREE.Vector3; // Direction hint for bend (elbow back, knee forward)
 }
 
+const _bonePos = new THREE.Vector3();
+const _childPos = new THREE.Vector3();
+const _curDir = new THREE.Vector3();
+const _desDir = new THREE.Vector3();
+const _delta = new THREE.Quaternion();
+const _boneWorldQuat = new THREE.Quaternion();
+const _parentWorldQuat = new THREE.Quaternion();
+
 /**
- * Analytical Two-Bone IK Solver (Law of Cosines)
- * Solves root and mid bone rotations so that endBone reaches targetPosition.
+ * Rotates `bone` so that `childBone` (a descendant whose world position moves
+ * with `bone`) is aimed at `targetWorld`.
+ *
+ * This measures the bone's *actual* current aim direction rather than assuming
+ * the bone points down local +Y. Assuming a fixed local axis throws away the
+ * rest orientation baked into the skeleton and is what makes limbs snap to
+ * arbitrary angles and rotate along the wrong axis.
+ */
+function aimBoneAt(bone: THREE.Bone, childBone: THREE.Object3D, targetWorld: THREE.Vector3): void {
+  bone.updateWorldMatrix(true, true);
+
+  bone.getWorldPosition(_bonePos);
+  childBone.getWorldPosition(_childPos);
+
+  _curDir.subVectors(_childPos, _bonePos);
+  _desDir.subVectors(targetWorld, _bonePos);
+  if (_curDir.lengthSq() < 1e-10 || _desDir.lengthSq() < 1e-10) return;
+  _curDir.normalize();
+  _desDir.normalize();
+
+  // World-space delta rotation, applied on the left of the bone's world
+  // orientation so the bone's existing twist is preserved.
+  _delta.setFromUnitVectors(_curDir, _desDir);
+  bone.getWorldQuaternion(_boneWorldQuat);
+  _boneWorldQuat.premultiply(_delta);
+
+  if (bone.parent) {
+    bone.parent.getWorldQuaternion(_parentWorldQuat);
+    bone.quaternion.copy(_parentWorldQuat.invert().multiply(_boneWorldQuat));
+  } else {
+    bone.quaternion.copy(_boneWorldQuat);
+  }
+
+  bone.updateWorldMatrix(false, true);
+}
+
+const _rootPos = new THREE.Vector3();
+const _midPos = new THREE.Vector3();
+const _endPos = new THREE.Vector3();
+const _toTarget = new THREE.Vector3();
+const _poleVec = new THREE.Vector3();
+const _bendDir = new THREE.Vector3();
+const _currentBend = new THREE.Vector3();
+const _midDir = new THREE.Vector3();
+const _solvedMid = new THREE.Vector3();
+
+/**
+ * Analytical two-bone IK (law of cosines).
+ *
+ * Solves `rootBone` and `midBone` so `endBone` reaches `targetPosWorld`, with
+ * the joint between them bending toward `poleTargetWorld`.
  */
 export function solveTwoBoneIK(
   rootBone: THREE.Bone,
@@ -20,142 +77,193 @@ export function solveTwoBoneIK(
 ): boolean {
   if (!rootBone || !midBone || !endBone) return false;
 
-  // Global world positions
-  const rootPos = new THREE.Vector3();
-  const midPos = new THREE.Vector3();
-  const endPos = new THREE.Vector3();
+  // World matrices must reflect whatever the animation pass just wrote,
+  // otherwise every measurement below is one frame stale.
+  rootBone.updateWorldMatrix(true, true);
 
-  rootBone.getWorldPosition(rootPos);
-  midBone.getWorldPosition(midPos);
-  endBone.getWorldPosition(endPos);
+  rootBone.getWorldPosition(_rootPos);
+  midBone.getWorldPosition(_midPos);
+  endBone.getWorldPosition(_endPos);
 
-  const l1 = rootPos.distanceTo(midPos);
-  const l2 = midPos.distanceTo(endPos);
-  if (l1 <= 0.0001 || l2 <= 0.0001) return false;
+  const l1 = _rootPos.distanceTo(_midPos);
+  const l2 = _midPos.distanceTo(_endPos);
+  if (l1 <= 1e-4 || l2 <= 1e-4) return false;
 
-  // Vector from root to target
-  const rootToTarget = new THREE.Vector3().subVectors(targetPosWorld, rootPos);
-  let dist = rootToTarget.length();
+  _toTarget.subVectors(targetPosWorld, _rootPos);
+  let dist = _toTarget.length();
   const maxReach = (l1 + l2) * 0.999;
-  const minReach = Math.max(0.01, Math.abs(l1 - l2) * 1.05);
+  const minReach = Math.max(1e-3, Math.abs(l1 - l2) * 1.02);
 
+  if (dist < 1e-5) {
+    // Target sits on the root; nothing meaningful to aim at.
+    return false;
+  }
   if (dist > maxReach) {
     dist = maxReach;
-    rootToTarget.setLength(maxReach);
+    _toTarget.setLength(maxReach);
   } else if (dist < minReach) {
     dist = minReach;
-    rootToTarget.setLength(minReach);
+    _toTarget.setLength(minReach);
   }
 
-  // Law of Cosines for interior angles
+  const toTargetDir = _toTarget.clone().normalize();
+
+  // Interior angle at the root between root->target and root->mid.
   const cosAlpha = THREE.MathUtils.clamp(
     (l1 * l1 + dist * dist - l2 * l2) / (2 * l1 * dist),
-    -1.0,
-    1.0
+    -1,
+    1
   );
   const alpha = Math.acos(cosAlpha);
 
-
-  // Compute bend plane normal using pole target
-  const pole = poleTargetWorld
-    ? poleTargetWorld.clone()
-    : new THREE.Vector3(rootPos.x, rootPos.y - 1, rootPos.z + 1);
-  const rootToPole = new THREE.Vector3().subVectors(pole, rootPos);
-
-  let planeNormal = new THREE.Vector3().crossVectors(rootToTarget, rootToPole).normalize();
-  if (planeNormal.lengthSq() < 0.0001) {
-    planeNormal.set(0, 0, 1);
+  // Bend direction: the component of the pole vector perpendicular to the
+  // root->target axis. Building the mid direction from an explicit orthonormal
+  // basis (instead of rotating about a cross product) keeps the hinge on the
+  // pole side regardless of how the limb is oriented.
+  let haveBend = false;
+  if (poleTargetWorld) {
+    _poleVec.subVectors(poleTargetWorld, _rootPos);
+    _bendDir.copy(_poleVec).addScaledVector(toTargetDir, -_poleVec.dot(toTargetDir));
+    if (_bendDir.lengthSq() > 1e-8) {
+      _bendDir.normalize();
+      haveBend = true;
+    }
   }
 
-  // Direction from root to mid bone in world space
-  const rootToTargetDir = rootToTarget.clone().normalize();
-  const midDir = rootToTargetDir.clone().applyAxisAngle(planeNormal, alpha).normalize();
-  const solvedMidPos = rootPos.clone().addScaledVector(midDir, l1);
+  if (!haveBend) {
+    // Fall back to the limb's existing bend so the solve stays continuous
+    // rather than popping to an arbitrary plane.
+    _currentBend.subVectors(_midPos, _rootPos);
+    _bendDir.copy(_currentBend).addScaledVector(toTargetDir, -_currentBend.dot(toTargetDir));
+    if (_bendDir.lengthSq() > 1e-8) {
+      _bendDir.normalize();
+      haveBend = true;
+    }
+  }
 
-  // Orient root bone towards solvedMidPos
-  orientBoneWorld(rootBone, solvedMidPos);
+  if (!haveBend) {
+    // Perfectly straight limb with no hint: pick any stable perpendicular.
+    _bendDir.set(0, 0, 1).addScaledVector(toTargetDir, -toTargetDir.z);
+    if (_bendDir.lengthSq() < 1e-8) _bendDir.set(0, 1, 0).addScaledVector(toTargetDir, -toTargetDir.y);
+    _bendDir.normalize();
+  }
 
-  // Orient mid bone towards targetPosWorld
-  orientBoneWorld(midBone, targetPosWorld);
+  _midDir
+    .copy(toTargetDir)
+    .multiplyScalar(Math.cos(alpha))
+    .addScaledVector(_bendDir, Math.sin(alpha))
+    .normalize();
+
+  _solvedMid.copy(_rootPos).addScaledVector(_midDir, l1);
+
+  // Aim the upper bone at the solved hinge position, then the middle bone at
+  // the goal. aimBoneAt refreshes world matrices between the two steps, so the
+  // second solve sees the hinge where the first solve actually put it.
+  aimBoneAt(rootBone, midBone, _solvedMid);
+  aimBoneAt(midBone, endBone, targetPosWorld);
 
   return true;
 }
 
+const _headPos = new THREE.Vector3();
+const _curGaze = new THREE.Vector3();
+const _desGaze = new THREE.Vector3();
+const _lookDelta = new THREE.Quaternion();
+const _axis = new THREE.Vector3();
+const _headWorldQuat = new THREE.Quaternion();
+const _neckParentQuat = new THREE.Quaternion();
+
+const _WORLD_UP = new THREE.Vector3(0, 1, 0);
+
 /**
- * Rotates a bone so its local bone axis points toward targetWorld in world coordinates
+ * Shortest rotation from `from` to `to`, except when they are nearly opposite:
+ * THREE picks an arbitrary perpendicular axis there, which made a head asked to
+ * look straight backwards tip over vertically instead of turning sideways.
  */
-function orientBoneWorld(bone: THREE.Bone, targetWorld: THREE.Vector3) {
-  const currentWorldPos = new THREE.Vector3();
-  bone.getWorldPosition(currentWorldPos);
+function gazeDelta(out: THREE.Quaternion, from: THREE.Vector3, to: THREE.Vector3): THREE.Quaternion {
+  if (from.dot(to) > -0.9995) return out.setFromUnitVectors(from, to);
 
-  const desiredWorldDir = new THREE.Vector3().subVectors(targetWorld, currentWorldPos).normalize();
-  if (desiredWorldDir.lengthSq() < 0.0001) return;
-
-  const parent = bone.parent;
-  if (parent) {
-    const parentWorldQuat = new THREE.Quaternion();
-    parent.getWorldQuaternion(parentWorldQuat);
-    const invParentQuat = parentWorldQuat.clone().invert();
-
-    // Local target direction
-    const desiredLocalDir = desiredWorldDir.clone().applyQuaternion(invParentQuat).normalize();
-
-    // Default bone rest direction (along positive local Y)
-    const defaultDir = new THREE.Vector3(0, 1, 0);
-    const rot = new THREE.Quaternion().setFromUnitVectors(defaultDir, desiredLocalDir);
-    bone.quaternion.slerp(rot, 0.85);
+  _axis.copy(_WORLD_UP).addScaledVector(from, -_WORLD_UP.dot(from));
+  if (_axis.lengthSq() < 1e-6) {
+    // Gaze is already vertical; any perpendicular will do.
+    _axis.set(1, 0, 0).addScaledVector(from, -from.x);
   }
+  return out.setFromAxisAngle(_axis.normalize(), Math.PI);
+}
+
+/** Clamps a rotation to at most `maxRad` about its own axis. */
+function clampRotation(q: THREE.Quaternion, maxRad: number): THREE.Quaternion {
+  const w = THREE.MathUtils.clamp(Math.abs(q.w), -1, 1);
+  const angle = 2 * Math.acos(w);
+  if (angle <= maxRad || angle < 1e-6) return q;
+
+  const s = Math.sqrt(Math.max(1e-12, 1 - w * w));
+  const sign = q.w < 0 ? -1 : 1;
+  _axis.set((q.x * sign) / s, (q.y * sign) / s, (q.z * sign) / s).normalize();
+  return q.setFromAxisAngle(_axis, maxRad);
 }
 
 /**
- * Analytical Look-At IK Solver for Head / Neck
+ * Look-at IK for the head, optionally sharing the rotation with the neck.
+ *
+ * `gazeAxisLocal` is the head-local axis that points along the character's gaze
+ * in the rest pose (see SOMARigCache.headGazeAxisLocal). Deriving the current
+ * gaze from the bone's live world orientation means the head turns relative to
+ * wherever the spine currently is, instead of snapping to a world-axis euler.
  */
 export function solveLookAtIK(
   headBone: THREE.Bone,
   neckBone: THREE.Bone | null,
   targetPosWorld: THREE.Vector3,
+  gazeAxisLocal: THREE.Vector3,
   weight: number = 1.0,
-  maxPitchDeg: number = 60,
-  maxYawDeg: number = 80
-) {
+  maxAngleDeg: number = 70
+): void {
   if (!headBone || weight <= 0) return;
 
-  const headWorldPos = new THREE.Vector3();
-  headBone.getWorldPosition(headWorldPos);
+  headBone.updateWorldMatrix(true, true);
+  headBone.getWorldPosition(_headPos);
 
-  const lookDirWorld = new THREE.Vector3().subVectors(targetPosWorld, headWorldPos).normalize();
-  if (lookDirWorld.lengthSq() < 0.0001) return;
+  _desGaze.subVectors(targetPosWorld, _headPos);
+  if (_desGaze.lengthSq() < 1e-8) return;
+  _desGaze.normalize();
 
-  const parent = headBone.parent;
-  if (!parent) return;
+  const maxRad = THREE.MathUtils.degToRad(maxAngleDeg);
+  const neckShare = neckBone ? 0.4 : 0;
 
-  const parentWorldQuat = new THREE.Quaternion();
-  parent.getWorldQuaternion(parentWorldQuat);
-  const invParent = parentWorldQuat.clone().invert();
-
-  const lookDirLocal = lookDirWorld.clone().applyQuaternion(invParent).normalize();
-
-  // Clamp yaw and pitch
-  const yaw = THREE.MathUtils.clamp(
-    Math.atan2(lookDirLocal.x, lookDirLocal.z),
-    -THREE.MathUtils.degToRad(maxYawDeg),
-    THREE.MathUtils.degToRad(maxYawDeg)
-  );
-  const pitch = THREE.MathUtils.clamp(
-    Math.asin(THREE.MathUtils.clamp(-lookDirLocal.y, -1, 1)),
-    -THREE.MathUtils.degToRad(maxPitchDeg),
-    THREE.MathUtils.degToRad(maxPitchDeg)
-  );
-
-  const targetEuler = new THREE.Euler(pitch, yaw, 0, 'YXZ');
-  const targetQuat = new THREE.Quaternion().setFromEuler(targetEuler);
-
-  // Split look-at weight between neck and head if neck exists
   if (neckBone) {
-    const halfQuat = new THREE.Quaternion().slerp(targetQuat, 0.45 * weight);
-    neckBone.quaternion.slerp(halfQuat, 0.3);
-    headBone.quaternion.slerp(halfQuat, 0.55 * weight);
-  } else {
-    headBone.quaternion.slerp(targetQuat, weight);
+    headBone.getWorldQuaternion(_headWorldQuat);
+    _curGaze.copy(gazeAxisLocal).applyQuaternion(_headWorldQuat).normalize();
+
+    gazeDelta(_lookDelta, _curGaze, _desGaze);
+    clampRotation(_lookDelta, maxRad * neckShare);
+    _lookDelta.slerp(new THREE.Quaternion(), 1 - weight * neckShare);
+
+    neckBone.getWorldQuaternion(_headWorldQuat);
+    _headWorldQuat.premultiply(_lookDelta);
+    if (neckBone.parent) {
+      neckBone.parent.getWorldQuaternion(_neckParentQuat);
+      neckBone.quaternion.copy(_neckParentQuat.invert().multiply(_headWorldQuat));
+    } else {
+      neckBone.quaternion.copy(_headWorldQuat);
+    }
+    neckBone.updateWorldMatrix(false, true);
   }
+
+  // Remaining correction goes to the head itself.
+  headBone.getWorldQuaternion(_headWorldQuat);
+  _curGaze.copy(gazeAxisLocal).applyQuaternion(_headWorldQuat).normalize();
+
+  gazeDelta(_lookDelta, _curGaze, _desGaze);
+  clampRotation(_lookDelta, maxRad);
+  if (weight < 1) _lookDelta.slerp(new THREE.Quaternion(), 1 - weight);
+
+  _headWorldQuat.premultiply(_lookDelta);
+  if (headBone.parent) {
+    headBone.parent.getWorldQuaternion(_neckParentQuat);
+    headBone.quaternion.copy(_neckParentQuat.invert().multiply(_headWorldQuat));
+  } else {
+    headBone.quaternion.copy(_headWorldQuat);
+  }
+  headBone.updateWorldMatrix(false, true);
 }

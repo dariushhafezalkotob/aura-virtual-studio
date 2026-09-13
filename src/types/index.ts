@@ -157,9 +157,15 @@ export interface ActorConstraint {
 }
 
 export type RigMode = 'fk' | 'ik' | 'off';
-export type IkEffectorType = 'leftHand' | 'rightHand' | 'leftFoot' | 'rightFoot' | 'lookAt';
+export type IkEffectorType = 'hips' | 'leftHand' | 'rightHand' | 'leftFoot' | 'rightFoot' | 'lookAt';
 
 export interface IkTargets {
+  /**
+   * Pelvis / centre-of-gravity goal. Moving it translates the whole skeleton
+   * while the hand and foot goals stay where they are, which is what produces
+   * crouches, weight shifts and hip drops.
+   */
+  hips?: [number, number, number];
   leftHand?: [number, number, number];
   rightHand?: [number, number, number];
   leftFoot?: [number, number, number];
