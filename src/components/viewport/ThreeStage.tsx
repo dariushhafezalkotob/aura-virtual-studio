@@ -23,6 +23,7 @@ import {
 import { CharacterActorModel, ActorErrorBoundary } from './CharacterActorModel';
 import { computeDeviceQuaternion } from '../../services/cameraRemoteService';
 
+const _CAM_RIGHT_LOCAL = new THREE.Vector3(1, 0, 0);
 const _mirrorQuat = new THREE.Quaternion();
 const _mirrorPos = new THREE.Vector3();
 
@@ -674,10 +675,11 @@ const UnrealCameraNavigation: React.FC<{
 
     // 2. Apply fine touch pitch offset around camera horizontal right axis if swiped:
     if (Math.abs(alignPitchOffsetRef.current) > 0.001) {
-      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(alignedQ);
-      const rgt = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
-      const qPitchAlign = new THREE.Quaternion().setFromAxisAngle(rgt, alignPitchOffsetRef.current);
-      targetCamQuatRef.current = qPitchAlign.multiply(alignedQ);
+      // Pitch about the camera's own right axis. cross(forward, worldUp) is zero
+      // when the camera points straight up and flips sign as it crosses vertical,
+      // so the swipe offset vanished or reversed exactly when looking at a ceiling.
+      const qPitchAlign = new THREE.Quaternion().setFromAxisAngle(_CAM_RIGHT_LOCAL, alignPitchOffsetRef.current);
+      targetCamQuatRef.current = alignedQ.clone().multiply(qPitchAlign);
     } else {
       targetCamQuatRef.current = alignedQ;
     }
@@ -960,10 +962,9 @@ const UnrealCameraNavigation: React.FC<{
       const alignedQ = qYawAlign.multiply(currentDevQ);
 
       if (Math.abs(alignPitchOffsetRef.current) > 0.001) {
-        const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(alignedQ);
-        const rgt = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
-        const qPitchAlign = new THREE.Quaternion().setFromAxisAngle(rgt, alignPitchOffsetRef.current);
-        targetCamQuatRef.current = qPitchAlign.multiply(alignedQ);
+        // Pitch about the camera's own right axis; see the matching note above.
+        const qPitchAlign = new THREE.Quaternion().setFromAxisAngle(_CAM_RIGHT_LOCAL, alignPitchOffsetRef.current);
+        targetCamQuatRef.current = alignedQ.clone().multiply(qPitchAlign);
       } else {
         targetCamQuatRef.current = alignedQ;
       }

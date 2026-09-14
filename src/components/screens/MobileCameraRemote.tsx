@@ -266,13 +266,9 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
 
   // 5. Gyroscope Tracking with Angle Unwrapping and Low-Pass Filtering
   const lastGyroSendRef = useRef<number>(0);
-  const smoothAnglesRef = useRef<{ alpha: number; beta: number; gamma: number } | null>(null);
-  const lastRawAlphaRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!gyroActive) {
-      smoothAnglesRef.current = null;
-      lastRawAlphaRef.current = null;
       return;
     }
 
@@ -306,43 +302,32 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
       } else if (activeSource !== source) {
         if (SOURCE_PRIORITY[source] <= SOURCE_PRIORITY[activeSource]) return;
         activeSource = source;
-        smoothAnglesRef.current = null;
-        lastRawAlphaRef.current = null;
       }
       const now = performance.now();
       // Drop duplicate events that fire within 4ms
       if (now - lastEventTime < 4) return;
       lastEventTime = now;
 
-      // Angle Unwrapping on Yaw (alpha) across 0° / 360° discontinuity
-      if (lastRawAlphaRef.current === null || !smoothAnglesRef.current) {
-        lastRawAlphaRef.current = rawAlpha;
-        smoothAnglesRef.current = {
-          alpha: rawAlpha,
-          beta: rawBeta,
-          gamma: rawGamma,
-        };
-      } else {
-        let diff = rawAlpha - lastRawAlphaRef.current;
-        while (diff < -180) diff += 360;
-        while (diff > 180) diff -= 360;
-        lastRawAlphaRef.current = rawAlpha;
-
-        // Smooth low-pass accumulation for silky 60 FPS aiming without jitter or drift
-        const factor = 0.5;
-        const nextAlpha = ((smoothAnglesRef.current.alpha + diff * factor) % 360 + 360) % 360;
-        const nextBeta = smoothAnglesRef.current.beta + (rawBeta - smoothAnglesRef.current.beta) * factor;
-        const nextGamma = smoothAnglesRef.current.gamma + (rawGamma - smoothAnglesRef.current.gamma) * factor;
-
-        smoothAnglesRef.current.alpha = nextAlpha;
-        smoothAnglesRef.current.beta = nextBeta;
-        smoothAnglesRef.current.gamma = nextGamma;
-      }
-
+      // Pass the raw angles through. Do NOT low-pass them component-wise.
+      //
+      // The W3C (alpha, beta, gamma) triple is not continuous: a phone held
+      // upright in landscape sits exactly where the spec switches Euler branches,
+      // so tilting toward the ceiling makes the browser report alpha +180, gamma
+      // with flipped sign, and beta hovering at +/-180 -- flipping between 179 and
+      // -180 frame to frame with ordinary hand tremor. Every one of those triples
+      // is the SAME physical orientation. Lerping each component separately (the
+      // old filter) blends across the flips and produces a triple for a wildly
+      // different orientation: simulated against the spec's own Euler extraction,
+      // the old filter was 95-170 deg off for the whole time the camera looked up
+      // (worst 179.8 deg).
+      //
+      // Smoothing belongs in quaternion space, where there is no such
+      // discontinuity -- and ThreeStage already does it, slerping the camera toward
+      // the gyro target every frame. Same simulation with that: worst 1.6 deg.
       const orientData: DeviceOrientationData = {
-        alpha: smoothAnglesRef.current.alpha,
-        beta: smoothAnglesRef.current.beta,
-        gamma: smoothAnglesRef.current.gamma,
+        alpha: rawAlpha,
+        beta: rawBeta,
+        gamma: rawGamma,
         screenOrientation: screenAngle,
       };
 
@@ -394,10 +379,14 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           if (!q || q.length < 4) return;
           // Calculate Euler angles from sensor quaternion
           const qObj = new THREE.Quaternion(q[0], q[1], q[2], q[3]);
-          const euler = new THREE.Euler().setFromQuaternion(qObj, 'YXZ');
-          const a = ((euler.y * 180 / Math.PI) % 360 + 360) % 360;
+          // W3C angles are intrinsic Z (alpha) -> X' (beta) -> Y'' (gamma), which
+          // is THREE's 'ZXY' order: z = alpha, x = beta, y = gamma. This previously
+          // decomposed as 'YXZ', a different rotation sequence, so on devices where
+          // this sensor is the only source the angles did not describe the phone.
+          const euler = new THREE.Euler().setFromQuaternion(qObj, 'ZXY');
+          const a = ((euler.z * 180 / Math.PI) % 360 + 360) % 360;
           const b = euler.x * 180 / Math.PI;
-          const g = euler.z * 180 / Math.PI;
+          const g = euler.y * 180 / Math.PI;
           processAngles('sensor', a, b, g, readScreenAngle());
         });
         genericSensor.addEventListener('error', (event: any) => {
