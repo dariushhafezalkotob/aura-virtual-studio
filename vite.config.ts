@@ -1096,20 +1096,33 @@ function apiMiddlewarePlugin(): Plugin {
                 headers['Authorization'] = `Bearer ${token}`;
               }
 
-              console.log(`[API /api/generate-motion] Calling Kimodo Stage on ZeroGPU (${KIMODO_SPACE}/api/generate-motion) for prompt: "${prompt}"...`);
+              // Forward the client's request as-is rather than rebuilding it from a
+              // whitelist. The old whitelist (prompt, duration, seed, diffusion_steps,
+              // constraints) silently dropped every field added later -- segments,
+              // num_transition_frames, post_processing, root_margin -- so multi-text
+              // reached the Space as just the main prompt. Only client-side fields are
+              // stripped.
+              const { hfToken: _hfToken, durationSeconds, actorId: _actorId, trajectoryMode: _trajectoryMode, ...forwarded } = params;
+              const spaceBody = JSON.stringify({
+                ...forwarded,
+                prompt,
+                duration: params.duration || durationSeconds || 4.0,
+                diffusion_steps: params.diffusion_steps || 50,
+                bvh_standard_tpose: params.bvh_standard_tpose ?? true,
+              });
+
+              const segmentCount = Array.isArray(params.segments) ? params.segments.length : 0;
+              console.log(
+                segmentCount > 0
+                  ? `[API /api/generate-motion] Calling Kimodo Stage (${KIMODO_SPACE}) with ${segmentCount} multi-text segments: ${params.segments.map((sg: any) => `"${sg.prompt}" (${sg.duration}s)`).join(' -> ')}`
+                  : `[API /api/generate-motion] Calling Kimodo Stage (${KIMODO_SPACE}) for prompt: "${prompt}"...`
+              );
 
               // Call Kimodo FastAPI endpoint on Hugging Face Spaces
               let resp = await fetch(`${KIMODO_SPACE}/api/generate-motion`, {
                 method: 'POST',
                 headers,
-                body: JSON.stringify({
-                  prompt,
-                  duration: params.duration || params.durationSeconds || 4.0,
-                  seed: params.seed,
-                  diffusion_steps: params.diffusion_steps || 50,
-                  bvh_standard_tpose: true,
-                  constraints: params.constraints || undefined,
-                }),
+                body: spaceBody,
               });
 
               // Fallback to /generate_motion if /api/generate-motion returns 404
@@ -1118,14 +1131,7 @@ function apiMiddlewarePlugin(): Plugin {
                 resp = await fetch(`${KIMODO_SPACE}/generate_motion`, {
                   method: 'POST',
                   headers,
-                  body: JSON.stringify({
-                    prompt,
-                    duration: params.duration || params.durationSeconds || 4.0,
-                    seed: params.seed,
-                    diffusion_steps: params.diffusion_steps || 50,
-                    bvh_standard_tpose: true,
-                    constraints: params.constraints || undefined,
-                  }),
+                  body: spaceBody,
                 });
               }
 
