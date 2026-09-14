@@ -20,6 +20,8 @@ export interface CameraTake {
   focalLength?: string;
   fps?: number;
   thumbnail?: string; // Captured first frame / poster frame data URL
+  /** Handheld shake smoothing, 0-100, applied on playback/export. `keyframes` stay as recorded. */
+  stabilizer?: number;
 }
 
 export interface StagePointLight {
@@ -311,6 +313,8 @@ export interface CameraRemoteState {
   effectiveDuration: number;
   focalLength: string;
   activeTakeName?: string;
+  /** Host playback rate, so the phone's local clock runs at the same speed between syncs. */
+  playbackSpeed?: number;
 }
 
 export interface CameraPoseData {

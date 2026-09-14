@@ -26,6 +26,51 @@ interface MobileCameraRemoteProps {
   initialProject?: Project | null;
 }
 
+type StageProps = React.ComponentProps<typeof ThreeStage>;
+
+/** The host syncs every 250ms while playing; allow a few missed syncs before freezing. */
+const MAX_EXTRAPOLATION_SEC = 0.75;
+
+/**
+ * Runs the phone's own timeline clock between host syncs.
+ *
+ * The host only sends the playback time a few times a second. Advancing it locally every frame
+ * keeps the actors moving smoothly, and keeping the clock in this small component means only the
+ * 3D stage re-renders per frame, not the whole remote HUD.
+ */
+const LocalClockStage: React.FC<Omit<StageProps, 'currentTimelineTime' | 'isPlaying'> & { hostState: CameraRemoteState }> = ({
+  hostState,
+  ...stageProps
+}) => {
+  const [localTime, setLocalTime] = useState(hostState.timelineSec);
+  const syncRef = useRef({ hostTime: hostState.timelineSec, at: performance.now() });
+
+  useEffect(() => {
+    syncRef.current = { hostTime: hostState.timelineSec, at: performance.now() };
+    if (!hostState.isPlaying) setLocalTime(hostState.timelineSec);
+  }, [hostState]);
+
+  useEffect(() => {
+    if (!hostState.isPlaying) return;
+    let frame: number;
+    const tick = (now: number) => {
+      const { hostTime, at } = syncRef.current;
+      // Never run far past the last word from the host. If it stops sending (paused and the message
+      // was lost, tab hidden, host closed) the actors freeze instead of playing on by themselves.
+      const elapsed = Math.min((now - at) / 1000, MAX_EXTRAPOLATION_SEC);
+      let t = hostTime + elapsed * (hostState.playbackSpeed ?? 1);
+      const dur = hostState.effectiveDuration;
+      if (dur > 0 && t > dur) t = t % dur;
+      setLocalTime(t);
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [hostState.isPlaying, hostState.playbackSpeed, hostState.effectiveDuration]);
+
+  return <ThreeStage {...stageProps} currentTimelineTime={localTime} isPlaying={hostState.isPlaying} />;
+};
+
 export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialProject }) => {
   // 1. URL Query Extraction (Synchronous initialization on first mount)
   const [roomId, setRoomId] = useState<string>(() => {
@@ -174,7 +219,13 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
     });
 
     const unsubMsg = socket.onMessage((msg) => {
-      if (msg.type === 'init_scene') {
+      if (msg.type === 'peer_left' && msg.role === 'host') {
+        setHostState((prev) => ({ ...prev, isPlaying: false, isRecording: false }));
+      } else if (msg.type === 'peer_joined' && msg.role === 'host') {
+        // The host (re)joined after us, e.g. its page reloaded or it opened the camera screen.
+        // It only pushes the scene when a remote joins, so ask, or the actors stay without motion.
+        socket.send({ type: 'request_scene' } as any);
+      } else if (msg.type === 'init_scene') {
         if (msg.project) {
           setProject(msg.project);
         }
@@ -666,15 +717,14 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
 
       {/* LIVE 3D SCENE VIEWPORT (Renders Stage & Characters on Phone!) */}
       <div className="absolute inset-0 z-0">
-        <ThreeStage
+        <LocalClockStage
+          hostState={hostState}
           isMobileViewfinder={true}
           assets={project?.scenes || []}
           selectedAssetId={null}
           pointLights={project?.pointLights}
           characters={characters}
           stageSpecularity={project?.stageSpecularity}
-          currentTimelineTime={hostState.timelineSec}
-          isPlaying={hostState.isPlaying}
           showTrajectories={false}
           panoramaUrl={project?.panoramaUrl}
           panoramaRotation={project?.panoramaRotation || 0}

@@ -12,6 +12,7 @@ import {
 import { ThreeStage } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
 import { CameraRemoteSocket } from '../../services/cameraRemoteService';
+import { stabilizeKeyframes } from '../../services/cameraStabilizer';
 import qrcode from 'qrcode-generator';
 
 interface CameraRecordViewProps {
@@ -34,6 +35,9 @@ function formatTime(seconds: number): string {
   const ms = Math.floor((seconds % 1) * 10);
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms}`;
 }
+
+/** Stabilizer strength for newly recorded takes: removes typical hand shake, keeps deliberate moves. */
+const DEFAULT_STABILIZER = 35;
 
 export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProject, onUpdateProject }) => {
   // Mode: Live Camera Flight vs Playback Take Review
@@ -89,6 +93,12 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const activeTake = takes.find((t) => t.id === activeTakeId) || (takes.length > 0 ? takes[takes.length - 1] : null);
   const effectiveDuration = (viewMode === 'playback' && activeTake) ? activeTake.duration : maxDuration;
 
+  // What playback and export actually fly: the recorded path with the take's stabilizer applied.
+  const stabilizedTake = useMemo<CameraTake | null>(() => {
+    if (!activeTake || !activeTake.stabilizer) return activeTake;
+    return { ...activeTake, keyframes: stabilizeKeyframes(activeTake.keyframes, activeTake.stabilizer) };
+  }, [activeTake]);
+
   // Master Timeline Animation State
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [timelineSec, setTimelineSec] = useState<number>(0);
@@ -119,6 +129,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         keyframes: frames,
         focalLength,
         fps: 60,
+        stabilizer: DEFAULT_STABILIZER,
       };
 
       const updatedTakes = [...takes, newTake];
@@ -260,6 +271,11 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const handleRewindRef = useRef(handleRewind);
   handleRewindRef.current = handleRewind;
 
+  // The socket reads the project through a ref so a project edit does not tear the connection down
+  // and drop the phone mid-take; edits reach the phone through the resend effect below instead.
+  const currentProjectRef = useRef(currentProject);
+  currentProjectRef.current = currentProject;
+
   // Connect Host WebSocket
   useEffect(() => {
     const socket = new CameraRemoteSocket('host', remoteRoomId);
@@ -273,7 +289,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     const unsubMsg = socket.onMessage((msg) => {
       if (msg.type === 'peer_joined' && msg.role === 'remote') {
         setIsPhoneConnected(true);
-        socket.sendInitScene(currentProject);
+        socket.sendInitScene(currentProjectRef.current);
         setToastMessage('📱 Mobile Phone Connected! Ready for Landscape 16:9 Tracking.');
         setTimeout(() => setToastMessage(null), 4000);
       } else if (msg.type === 'peer_left' && msg.role === 'remote') {
@@ -311,7 +327,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       } else if (msg.type === 'toggle_play') {
         setIsPlaying((prev) => !prev);
       } else if ((msg as any).type === 'request_scene') {
-        socket.sendInitScene(currentProject);
+        socket.sendInitScene(currentProjectRef.current);
       }
     });
 
@@ -321,21 +337,57 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       socket.destroy();
       remoteSocketRef.current = null;
     };
-  }, [remoteRoomId, currentProject]);
+  }, [remoteRoomId]);
 
-  // Sync Host State back to Phone Remote Controller
+  // Resend the scene when the actors or set change while the phone is connected. Without this the
+  // phone keeps whatever it received on connect, so motion generated afterwards never animates there.
+  // Debounced because the project object changes in bursts (e.g. several updates per edit).
   useEffect(() => {
-    if (remoteSocketRef.current && isPhoneConnected) {
-      remoteSocketRef.current.sendHostState({
-        isRecording,
-        isPlaying,
-        timelineSec,
-        effectiveDuration,
-        focalLength,
-        activeTakeName: activeTake?.name,
-      });
-    }
-  }, [isRecording, isPlaying, timelineSec, effectiveDuration, focalLength, activeTake, isPhoneConnected]);
+    if (!isPhoneConnected) return;
+    const t = setTimeout(() => {
+      remoteSocketRef.current?.sendInitScene(currentProjectRef.current);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [
+    isPhoneConnected,
+    currentProject.characters,
+    currentProject.scenes,
+    currentProject.panoramaUrl,
+    currentProject.panoramaRotation,
+    currentProject.splatUrl,
+  ]);
+
+  // Sync Host State back to Phone Remote Controller.
+  // Discrete changes (play, record, lens, seek while paused) go out immediately. While playing, the
+  // phone advances its own clock, so the timeline only needs a periodic correction instead of a
+  // message every frame, which re-rendered the whole phone UI 60 times a second.
+  const timelineSecRef = useRef(timelineSec);
+  timelineSecRef.current = timelineSec;
+  const sendHostStateNow = useCallback(() => {
+    remoteSocketRef.current?.sendHostState({
+      isRecording,
+      isPlaying,
+      timelineSec: timelineSecRef.current,
+      effectiveDuration,
+      focalLength,
+      activeTakeName: activeTake?.name,
+      playbackSpeed,
+    });
+  }, [isRecording, isPlaying, effectiveDuration, focalLength, activeTake, playbackSpeed]);
+
+  useEffect(() => {
+    if (isPhoneConnected) sendHostStateNow();
+  }, [sendHostStateNow, isPhoneConnected]);
+
+  useEffect(() => {
+    if (isPhoneConnected && !isPlaying) sendHostStateNow();
+  }, [timelineSec, isPlaying, isPhoneConnected, sendHostStateNow]);
+
+  useEffect(() => {
+    if (!isPhoneConnected || !isPlaying) return;
+    const id = setInterval(sendHostStateNow, 250);
+    return () => clearInterval(id);
+  }, [isPhoneConnected, isPlaying, sendHostStateNow]);
 
   const cleanIp = (!lanIp || lanIp === 'localhost' || lanIp === '127.0.0.1') ? '192.168.100.38' : lanIp;
   // The phone's gyro only reports in a secure context, so pair over whatever scheme the dev server
@@ -354,6 +406,17 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       return null;
     }
   }, [remoteUrl]);
+
+  // Slider moves update the view live; the project (large, written to disk) is saved once it settles.
+  const stabilizerSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleStabilizerChange = (takeId: string, value: number) => {
+    const updated = takes.map((t) => (t.id === takeId ? { ...t, stabilizer: value } : t));
+    setTakes(updated);
+    if (stabilizerSaveTimerRef.current) clearTimeout(stabilizerSaveTimerRef.current);
+    stabilizerSaveTimerRef.current = setTimeout(() => {
+      onUpdateProject?.({ ...currentProjectRef.current, cameraTakes: updated });
+    }, 600);
+  };
 
   const handleDeleteTake = (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -647,7 +710,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         isRecordingCamera={isRecording}
         onRecordCameraFrame={handleRecordFrame}
         isPlaybackTake={viewMode === 'playback'}
-        playbackTake={activeTake}
+        playbackTake={stabilizedTake}
         showCameraTrajectory={!isExportingVideo}
         remoteOrientation={remoteOrientation}
         remoteOrientationRef={remoteOrientationRef}
@@ -1052,6 +1115,21 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
               </div>
 
               <div className="flex items-center gap-2 bg-background/90 px-3 py-1 rounded-full border border-cyan-500/40 backdrop-blur-md text-[11px] font-mono text-cyan-300 shadow-lg">
+                <label className="flex items-center gap-2" title="Smooths out hand shake in this take. Your original recording is kept.">
+                  <span className="material-symbols-outlined text-[14px]">blur_on</span>
+                  <span>Stabilizer</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={activeTake.stabilizer ?? 0}
+                    onChange={(e) => handleStabilizerChange(activeTake.id, Number(e.target.value))}
+                    className="w-24 accent-cyan-400 cursor-pointer"
+                  />
+                  <span className="w-8 text-right">{activeTake.stabilizer ? `${activeTake.stabilizer}%` : 'Off'}</span>
+                </label>
+                <span>•</span>
                 <span>{activeTake.keyframes.length} Frames</span>
                 <span>•</span>
                 <span>{activeTake.duration}s Sequence</span>
