@@ -23,6 +23,9 @@ import {
 import { CharacterActorModel, ActorErrorBoundary } from './CharacterActorModel';
 import { computeDeviceQuaternion } from '../../services/cameraRemoteService';
 
+const _mirrorQuat = new THREE.Quaternion();
+const _mirrorPos = new THREE.Vector3();
+
 export type TransformMode = 'translate' | 'rotate' | 'scale';
 export type LightingEnvironmentPreset = 'studio' | 'city' | 'sunset' | 'dawn' | 'park';
 
@@ -825,35 +828,64 @@ const UnrealCameraNavigation: React.FC<{
     if (!enabled) return;
     const orbit = orbitRef.current;
 
-    // Direct incoming camera pose mirror (e.g. Host mirroring Remote)
+    // Mirror the phone's camera.
+    //
+    // The phone runs this same controller locally -- gyro, its own heading
+    // calibration, joystick, touch look -- and streams the FINAL camera
+    // transform it renders. That pose is the single source of truth.
+    //
+    // This used to mirror only when no gyro data was arriving. With gyro on it
+    // fell through and rebuilt the camera here from the raw gyro/move/look
+    // packets, using THIS side's heading calibration, which is computed
+    // independently and generally differs from the phone's. Result: a different
+    // view angle on the Mac, and joystick moves applied along a forward vector
+    // rotated away from the phone's -- "forward" on the phone came out as
+    // "back and right" here.
+    //
+    // No staleness fallback, deliberately. Falling back to the raw inputs when
+    // pose packets pause (a network hiccup, the phone briefly throttling its
+    // render loop) re-enters exactly that divergent integration: measured with
+    // a simulated phone, the view swung 101.8 deg off the phone's heading the
+    // moment packets stopped. Holding the last pose is correct instead. The host
+    // clears the pose on peer_left, which is what hands control back here.
     const activeIncomingPose = incomingCameraPoseRef?.current || incomingCameraPose;
-    const hasActiveGyro = Boolean((remoteOrientationRef && remoteOrientationRef.current) || remoteOrientation);
 
     if (activeIncomingPose) {
-      orbit.target.set(
-        activeIncomingPose.position[0],
-        activeIncomingPose.position[1],
-        activeIncomingPose.position[2]
+      const px = activeIncomingPose.position[0];
+      const py = activeIncomingPose.position[1];
+      const pz = activeIncomingPose.position[2];
+      _mirrorQuat.set(
+        activeIncomingPose.quaternion[0],
+        activeIncomingPose.quaternion[1],
+        activeIncomingPose.quaternion[2],
+        activeIncomingPose.quaternion[3]
       );
-      if (!hasActiveGyro) {
-        camera.position.set(
-          activeIncomingPose.position[0],
-          activeIncomingPose.position[1],
-          activeIncomingPose.position[2]
-        );
-        camera.quaternion.set(
-          activeIncomingPose.quaternion[0],
-          activeIncomingPose.quaternion[1],
-          activeIncomingPose.quaternion[2],
-          activeIncomingPose.quaternion[3]
-        );
-        camera.updateMatrixWorld(true);
-        const fwd = new THREE.Vector3();
-        camera.getWorldDirection(fwd);
-        orbit.pitch = Math.asin(Math.max(-0.99, Math.min(0.99, fwd.y)));
-        orbit.yaw = Math.atan2(fwd.x, fwd.z);
-        return;
+
+      // Light smoothing hides network packet jitter without visible lag; big
+      // jumps (first packet, teleports) snap so the view never drifts behind.
+      const jump = camera.position.distanceTo(_mirrorPos.set(px, py, pz));
+      if (jump > 1.5) {
+        camera.position.set(px, py, pz);
+        camera.quaternion.copy(_mirrorQuat);
+      } else {
+        const k = Math.min(1, delta * 30);
+        camera.position.lerp(_mirrorPos, k);
+        camera.quaternion.slerp(_mirrorQuat, k);
       }
+      camera.updateMatrixWorld(true);
+
+      // Keep local orbit state in step so the host continues seamlessly from
+      // where the phone left off if the stream stops.
+      orbit.target.set(px, py, pz);
+      const fwd = new THREE.Vector3();
+      camera.getWorldDirection(fwd);
+      orbit.pitch = Math.asin(Math.max(-0.99, Math.min(0.99, fwd.y)));
+      orbit.yaw = Math.atan2(fwd.x, fwd.z);
+
+      // Raw inputs are already baked into the pose; consuming them here as well
+      // would double-apply them once mirroring stops.
+      if (remoteLookRef) remoteLookRef.current = null;
+      return;
     }
 
     // Desktop Keyboard Flight Controls
