@@ -12,6 +12,10 @@ export interface MotionGenerationParams {
   /** Actor's Y rotation in the scene; Kimodo motion is expressed in this frame. */
   actorRotationY?: number;
   constraints?: any[];
+  /** Multi-text sequence; when present it replaces the single prompt. */
+  segments?: { prompt: string; duration: number }[];
+  /** Frames blended between consecutive segments (Kimodo default 5). */
+  numTransitionFrames?: number;
 }
 
 export interface MotionPreset {
@@ -225,7 +229,14 @@ export class KimodoService {
     motionData?: MotionData;
   }> {
     const prompt = params.prompt.trim();
-    const duration = params.durationSeconds || 4.0;
+    const activeSegments = (params.segments || []).filter((s) => s.prompt.trim() && s.duration > 0);
+    // With a multi-text sequence the clip length IS the segments, so the
+    // trajectory and the returned take must be sized from their sum rather than
+    // the single-prompt duration control.
+    const duration =
+      activeSegments.length > 0
+        ? activeSegments.reduce((n, s) => n + s.duration, 0)
+        : params.durationSeconds || 4.0;
     const startPos = params.startPosition || [0, 0, 0];
 
     // Infer trajectory mode from prompt if not explicitly specified
@@ -246,9 +257,17 @@ export class KimodoService {
     try {
       if (onStatus) onStatus('Synthesizing neural motion diffusion with NVIDIA Kimodo Stage...');
 
+      const segments = activeSegments;
+
       const reqBody = JSON.stringify({
         prompt: prompt,
         duration: duration,
+        ...(segments.length > 0
+          ? {
+              segments: segments.map((s) => ({ prompt: s.prompt.trim(), duration: s.duration })),
+              num_transition_frames: params.numTransitionFrames ?? 5,
+            }
+          : {}),
         actorId: params.actorId,
         seed: params.seed,
         diffusion_steps: 50,

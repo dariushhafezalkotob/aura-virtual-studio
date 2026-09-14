@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Project, CharacterActor, WorkflowStage, ActorConstraint } from '../../types';
+import { Project, CharacterActor, WorkflowStage, ActorConstraint, MotionSegment } from '../../types';
 import { ThreeStage, TransformMode } from '../viewport/ThreeStage';
 import { KimodoService } from '../../services/kimodoService';
 import { ActorConstraintsPanel } from '../acting/ActorConstraintsPanel';
@@ -71,6 +71,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   // Kimodo's "Make Smooth Path": send the viewport trajectory as a dense
   // root2d constraint instead of sparse destination waypoints.
   const [useSmoothPath, setUseSmoothPath] = useState<boolean>(false);
+  const [showSegments, setShowSegments] = useState<boolean>(false);
   const [renderMode, setRenderMode] = useState<'mesh' | 'skeleton' | 'hybrid'>('mesh');
   const [showViserEmbed, setShowViserEmbed] = useState<boolean>(false);
   const [inspectorPanel, setInspectorPanel] = useState<'rig' | 'constraints' | null>('rig');
@@ -93,6 +94,36 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
     const updated = characters.map((c) => (c.id === updatedActor.id ? updatedActor : c));
     onUpdateProject({ ...currentProject, characters: updated });
   };
+
+  // --- Multi-text: a sequence of prompts Kimodo renders as ONE continuous
+  // motion with a per-segment frame budget, blended across the boundaries.
+  const segments = selectedActor?.motionSegments || [];
+  const segmentsTotal = segments.reduce((n, sg) => n + (sg.duration || 0), 0);
+
+  const setSegments = (next: MotionSegment[]) => {
+    if (!selectedActor) return;
+    handleUpdateActor({ ...selectedActor, motionSegments: next });
+  };
+
+  const handleAddSegment = () => {
+    if (!selectedActor) return;
+    // Seed the first two from the single prompt so the split is a starting
+    // point rather than an empty form.
+    const seeded: MotionSegment[] =
+      segments.length === 0
+        ? [
+            { id: `seg_${Date.now()}`, prompt: motionPrompt || 'walks forward', duration: durationSec },
+            { id: `seg_${Date.now() + 1}`, prompt: '', duration: 2.0 },
+          ]
+        : [...segments, { id: `seg_${Date.now()}`, prompt: '', duration: 2.0 }];
+    setSegments(seeded);
+    setShowSegments(true);
+  };
+
+  const handleUpdateSegment = (id: string, patch: Partial<MotionSegment>) =>
+    setSegments(segments.map((sg) => (sg.id === id ? { ...sg, ...patch } : sg)));
+
+  const handleDeleteSegment = (id: string) => setSegments(segments.filter((sg) => sg.id !== id));
 
   // Update constraints for a given actor and persist in project
   const handleUpdateConstraints = (actorId: string, constraints: ActorConstraint[]) => {
@@ -312,6 +343,9 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
           speed: speedMultiplier,
           startPosition: selectedActor.position,
           actorRotationY: selectedActor.rotation?.[1] || 0,
+          segments: segments
+            .filter((sg) => sg.prompt.trim() && sg.duration > 0)
+            .map((sg) => ({ prompt: sg.prompt, duration: sg.duration })),
           constraints: compiledConstraints.length > 0 ? compiledConstraints : undefined,
         },
         (s) => setStatusText(s)
@@ -876,6 +910,68 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
 
       {/* Bottom Director Choreographer & Timeline Panel */}
       <div className="w-full bg-surface-container border-t border-outline-variant/30 p-md z-30 flex flex-col gap-sm">
+        {/* Row 0: Multi-text segment sequence */}
+        {segments.length > 0 && showSegments && (
+          <div className="max-w-6xl mx-auto w-full bg-surface-container-low border border-outline-variant/40 rounded-xl p-sm space-y-1.5">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[10px] font-label-caps tracking-wider text-on-surface-variant uppercase flex items-center gap-1">
+                <span className="material-symbols-outlined text-[14px] text-primary">segment</span>
+                Multi-Text Sequence — one continuous take, {segmentsTotal.toFixed(1)}s total
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleAddSegment}
+                  className="text-[10px] font-mono text-primary hover:underline flex items-center gap-0.5"
+                >
+                  <span className="material-symbols-outlined text-[13px]">add</span>Add
+                </button>
+                <button
+                  onClick={() => setShowSegments(false)}
+                  className="text-[10px] font-mono text-on-surface-variant hover:text-on-surface"
+                >
+                  Hide
+                </button>
+              </div>
+            </div>
+            {segments.map((sg, i) => (
+              <div key={sg.id} className="flex items-center gap-sm">
+                <span className="text-[10px] font-mono text-on-surface-variant w-5 text-right shrink-0">{i + 1}.</span>
+                <input
+                  type="text"
+                  value={sg.prompt}
+                  onChange={(e) => handleUpdateSegment(sg.id, { prompt: e.target.value })}
+                  placeholder={i === 0 ? 'stands up from the chair' : i === 1 ? 'walks two steps forward' : 'talks and gestures'}
+                  className="flex-1 bg-surface-container border border-outline-variant/30 rounded-lg px-sm py-1 text-xs text-on-surface focus:outline-none focus:border-primary placeholder:text-on-surface-variant/40"
+                />
+                <div className="flex items-center gap-1 shrink-0">
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={20}
+                    step={0.5}
+                    value={sg.duration}
+                    onChange={(e) =>
+                      handleUpdateSegment(sg.id, { duration: Math.max(0.5, parseFloat(e.target.value) || 0.5) })
+                    }
+                    className="w-14 bg-surface-container border border-outline-variant/30 rounded-lg px-1.5 py-1 text-xs font-mono text-on-surface focus:outline-none focus:border-primary"
+                  />
+                  <span className="text-[10px] font-mono text-on-surface-variant">s</span>
+                </div>
+                <button
+                  onClick={() => handleDeleteSegment(sg.id)}
+                  className="p-0.5 text-on-surface-variant hover:text-error transition-colors shrink-0"
+                  title="Remove segment"
+                >
+                  <span className="material-symbols-outlined text-[15px]">close</span>
+                </button>
+              </div>
+            ))}
+            <p className="text-[9px] text-on-surface-variant/70 italic px-1 pt-0.5">
+              Keyframes and waypoints still apply across the whole sequence.
+            </p>
+          </div>
+        )}
+
         {/* Row 1: Natural Language Prompt Input + Controls */}
         <div className="flex items-center gap-sm max-w-6xl mx-auto w-full">
           <div className="flex-1 bg-surface-container-low border border-outline-variant/40 rounded-xl flex items-center px-md py-xs focus-within:border-primary transition-all shadow-inner">
@@ -893,6 +989,20 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
               }}
             />
           </div>
+
+          {/* Multi-text toggle */}
+          <button
+            onClick={() => (segments.length === 0 ? handleAddSegment() : setShowSegments(!showSegments))}
+            title="Multi-text: a sequence of prompts rendered as one continuous motion"
+            className={`px-sm py-xs rounded-xl text-[11px] font-label-caps tracking-wider border transition-colors flex items-center gap-xs cursor-pointer shrink-0 ${
+              segments.length > 0
+                ? 'bg-primary/15 border-primary text-primary font-medium'
+                : 'bg-surface-container-low border-outline-variant/40 text-on-surface-variant hover:text-primary'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[15px]">segment</span>
+            {segments.length > 0 ? `${segments.length} SEGMENTS` : 'MULTI-TEXT'}
+          </button>
 
           {/* Trajectory Pattern Dropdown */}
           <select

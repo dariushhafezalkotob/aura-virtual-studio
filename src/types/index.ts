@@ -226,6 +226,13 @@ export interface ActorKeyframePose {
   constraintKinds?: KeyframeConstraintKind[];
 }
 
+/** One span of a multi-text prompt sequence. */
+export interface MotionSegment {
+  id: string;
+  prompt: string;
+  duration: number;
+}
+
 export interface CharacterActor {
   id: string;
   name: string;
@@ -259,6 +266,12 @@ export interface CharacterActor {
    * keyframes exist the override only applies near this time.
    */
   customPoseTime?: number;
+  /**
+   * Multi-text sequence. Kimodo generates these as ONE continuous motion with
+   * a per-segment frame budget, blending across the boundaries, rather than
+   * separate takes. Empty or absent means a single prompt.
+   */
+  motionSegments?: MotionSegment[];
 }
 
 export interface TrellisGenerateParams {
