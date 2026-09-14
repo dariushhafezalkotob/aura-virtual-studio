@@ -72,6 +72,12 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   // root2d constraint instead of sparse destination waypoints.
   const [useSmoothPath, setUseSmoothPath] = useState<boolean>(false);
   const [showSegments, setShowSegments] = useState<boolean>(false);
+  // Frames of overlap blended between segments. Kimodo's default is 5, which
+  // carries momentum across the boundary -- good for continuity, bad when the
+  // next segment needs a different kind of motion. Measured on a walk->stand
+  // pair: 5 frames carries 6.81 m into the "stand" segment, 1 frame carries
+  // 3.47 m.
+  const [transitionFrames, setTransitionFrames] = useState<number>(5);
   const [renderMode, setRenderMode] = useState<'mesh' | 'skeleton' | 'hybrid'>('mesh');
   const [showViserEmbed, setShowViserEmbed] = useState<boolean>(false);
   const [inspectorPanel, setInspectorPanel] = useState<'rig' | 'constraints' | null>('rig');
@@ -346,6 +352,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
           segments: segments
             .filter((sg) => sg.prompt.trim() && sg.duration > 0)
             .map((sg) => ({ prompt: sg.prompt, duration: sg.duration })),
+          numTransitionFrames: transitionFrames,
           constraints: compiledConstraints.length > 0 ? compiledConstraints : undefined,
         },
         (s) => setStatusText(s)
@@ -919,6 +926,24 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
                 Multi-Text Sequence — one continuous take, {segmentsTotal.toFixed(1)}s total
               </span>
               <div className="flex items-center gap-2">
+                <label
+                  className="flex items-center gap-1 text-[10px] font-mono text-on-surface-variant"
+                  title="Frames blended between segments. Lower values let the next segment change character (e.g. stop walking); higher values keep motion continuous."
+                >
+                  blend
+                  <input
+                    type="number"
+                    min={1}
+                    max={15}
+                    step={1}
+                    value={transitionFrames}
+                    onChange={(e) =>
+                      setTransitionFrames(Math.max(1, Math.min(15, parseInt(e.target.value) || 1)))
+                    }
+                    className="w-10 bg-surface-container border border-outline-variant/30 rounded px-1 py-[1px] text-[10px] font-mono text-on-surface focus:outline-none focus:border-primary"
+                  />
+                  f
+                </label>
                 <button
                   onClick={handleAddSegment}
                   className="text-[10px] font-mono text-primary hover:underline flex items-center gap-0.5"
