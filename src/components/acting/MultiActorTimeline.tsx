@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { CharacterActor, WorkflowStage } from '../../types';
+import { CharacterActor, WorkflowStage, MotionSegment } from '../../types';
 
 interface MultiActorTimelineProps {
   characters: CharacterActor[];
@@ -17,6 +17,20 @@ interface MultiActorTimelineProps {
   onNavigateStage?: (stage: WorkflowStage) => void;
   onUpdateActorProps?: (actorId: string, updates: Partial<CharacterActor>) => void;
 }
+
+/**
+ * Per-segment colours, cycled. Mirrors the reference demo, which renders each
+ * multi-text prompt as its own coloured region on the timeline.
+ */
+const SEGMENT_COLORS = [
+  { bg: 'bg-sky-500/25', border: 'border-sky-400/70', text: 'text-sky-200', grip: 'bg-sky-400' },
+  { bg: 'bg-violet-500/25', border: 'border-violet-400/70', text: 'text-violet-200', grip: 'bg-violet-400' },
+  { bg: 'bg-amber-500/25', border: 'border-amber-400/70', text: 'text-amber-200', grip: 'bg-amber-400' },
+  { bg: 'bg-emerald-500/25', border: 'border-emerald-400/70', text: 'text-emerald-200', grip: 'bg-emerald-400' },
+  { bg: 'bg-rose-500/25', border: 'border-rose-400/70', text: 'text-rose-200', grip: 'bg-rose-400' },
+];
+
+const MIN_SEGMENT_SEC = 0.5;
 
 const PRESET_ACTOR_COLORS = [
   '#00ffcc', '#af52de', '#ff9500', '#ff2d55', '#34c759',
@@ -59,6 +73,96 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
 
   // Time ruler ticks (e.g. 0s, 1s, 2s, 3s...)
   const totalSeconds = Math.max(4, Math.ceil(maxDuration));
+
+  // Dragging a segment edge retimes it. Live state is kept in a ref so the
+  // pointermove handler does not re-subscribe on every frame; the committed
+  // value lands in the actor on pointerup.
+  const trackRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const segDragRef = useRef<{
+    actorId: string;
+    index: number;
+    startX: number;
+    startDuration: number;
+    pxPerSec: number;
+  } | null>(null);
+  const [segDragPreview, setSegDragPreview] = useState<{ actorId: string; index: number; duration: number } | null>(
+    null
+  );
+
+  const beginSegmentDrag = useCallback(
+    (e: React.PointerEvent, actor: CharacterActor, index: number, trackEl: HTMLElement | null) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const segs = actor.motionSegments || [];
+      if (!segs[index] || !trackEl) return;
+      const trackWidth = trackEl.getBoundingClientRect().width;
+      if (trackWidth <= 0) return;
+      segDragRef.current = {
+        actorId: actor.id,
+        index,
+        startX: e.clientX,
+        startDuration: segs[index].duration,
+        // The track spans maxDuration, so seconds-per-pixel comes from that.
+        pxPerSec: trackWidth / Math.max(0.1, maxDuration),
+      };
+      setSegDragPreview({ actorId: actor.id, index, duration: segs[index].duration });
+      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    },
+    [maxDuration]
+  );
+
+  useEffect(() => {
+    if (!segDragPreview) return;
+
+    const onMove = (ev: PointerEvent) => {
+      const d = segDragRef.current;
+      if (!d) return;
+      const deltaSec = (ev.clientX - d.startX) / d.pxPerSec;
+      const next = Math.max(MIN_SEGMENT_SEC, Math.round((d.startDuration + deltaSec) * 10) / 10);
+      setSegDragPreview({ actorId: d.actorId, index: d.index, duration: next });
+    };
+
+    const onUp = () => {
+      const d = segDragRef.current;
+      segDragRef.current = null;
+      setSegDragPreview((preview) => {
+        if (d && preview && onUpdateActorProps) {
+          const actor = characters.find((a) => a.id === d.actorId);
+          const segs = actor?.motionSegments;
+          if (segs && segs[d.index]) {
+            const nextSegs = segs.map((sg, i) => (i === d.index ? { ...sg, duration: preview.duration } : sg));
+            onUpdateActorProps(d.actorId, { motionSegments: nextSegs });
+          }
+        }
+        return null;
+      });
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [segDragPreview !== null, characters, onUpdateActorProps]);
+
+  /** Segment start/width in seconds, honouring any in-flight drag. */
+  const layoutSegments = useCallback(
+    (actor: CharacterActor): { seg: MotionSegment; start: number; duration: number }[] => {
+      const segs = actor.motionSegments || [];
+      let cursor = 0;
+      return segs.map((seg, i) => {
+        const duration =
+          segDragPreview && segDragPreview.actorId === actor.id && segDragPreview.index === i
+            ? segDragPreview.duration
+            : seg.duration;
+        const entry = { seg, start: cursor, duration };
+        cursor += duration;
+        return entry;
+      });
+    },
+    [segDragPreview]
+  );
   const tickMarks = Array.from({ length: totalSeconds + 1 }, (_, i) => i);
 
   // Playhead percentage
@@ -389,7 +493,10 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
               {/* Right Column: Track Lane & Motion Duration Block */}
               <div
                 onMouseDown={handleMouseDown}
-                className="flex-1 relative h-12 flex items-center px-0 overflow-hidden select-none bg-surface-container-lowest/30"
+                ref={(el) => (trackRefs.current[actor.id] = el)}
+                className={`flex-1 relative flex items-center px-0 overflow-hidden select-none bg-surface-container-lowest/30 ${
+                  (actor.motionSegments || []).length > 0 ? 'h-[68px]' : 'h-12'
+                }`}
               >
                 {/* Background Vertical Seconds Grid Lines */}
                 {tickMarks.map((sec) => {
@@ -466,6 +573,49 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
                     </div>
                   )}
                 </div>
+
+                {/* Multi-text segment lane: one region per prompt, drag the
+                    right edge to retime. Mirrors the reference demo, which
+                    renders each prompt as a coloured timeline region. */}
+                {(actor.motionSegments || []).length > 0 &&
+                  layoutSegments(actor).map((entry, si) => {
+                    const c = SEGMENT_COLORS[si % SEGMENT_COLORS.length];
+                    const leftPct = (entry.start / maxDuration) * 100;
+                    const widthPct = (entry.duration / maxDuration) * 100;
+                    if (leftPct >= 100) return null;
+                    const dragging =
+                      segDragPreview?.actorId === actor.id && segDragPreview?.index === si;
+                    return (
+                      <div
+                        key={entry.seg.id}
+                        className={`absolute bottom-1 h-[22px] rounded-md border flex items-center px-1 overflow-hidden group ${c.bg} ${c.border} ${c.text} ${
+                          dragging ? 'ring-1 ring-white/70 z-30' : 'z-10'
+                        }`}
+                        style={{ left: `${leftPct}%`, width: `${Math.max(1.5, widthPct)}%` }}
+                        title={`${si + 1}. ${entry.seg.prompt || '(empty)'} — ${entry.duration.toFixed(1)}s. Drag the right edge to retime.`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectActor(actor.id);
+                          onSeek(Math.min(maxDuration, entry.start));
+                        }}
+                      >
+                        <span className="text-[9px] font-medium truncate leading-none flex-1">
+                          {si + 1}. {entry.seg.prompt || '(empty)'}
+                        </span>
+                        <span className="font-mono text-[8px] bg-black/40 px-1 rounded shrink-0 ml-1">
+                          {entry.duration.toFixed(1)}s
+                        </span>
+                        {/* Drag grip on the right edge */}
+                        <div
+                          onPointerDown={(e) =>
+                            beginSegmentDrag(e, actor, si, trackRefs.current[actor.id] || null)
+                          }
+                          className={`absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize ${c.grip} opacity-50 group-hover:opacity-100 transition-opacity`}
+                          title="Drag to change this segment's duration"
+                        />
+                      </div>
+                    );
+                  })}
 
                 {/* Keyframe Pose Diamond Markers */}
                 {actor.keyframePoses &&

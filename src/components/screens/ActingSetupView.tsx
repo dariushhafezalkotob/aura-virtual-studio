@@ -163,7 +163,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   // Update actor properties (name, color, avatar, etc.)
   const handleUpdateActorProps = (
     actorId: string,
-    updates: Partial<Pick<CharacterActor, 'name' | 'color' | 'avatar'>>
+    updates: Partial<Pick<CharacterActor, 'name' | 'color' | 'avatar' | 'motionSegments'>>
   ) => {
     const updated = characters.map((c) => {
       if (c.id === actorId) {
