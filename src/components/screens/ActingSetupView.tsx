@@ -131,6 +131,14 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
 
   const handleDeleteSegment = (id: string) => setSegments(segments.filter((sg) => sg.id !== id));
 
+  const handleMoveSegment = (index: number, delta: number) => {
+    const to = index + delta;
+    if (to < 0 || to >= segments.length) return;
+    const next = [...segments];
+    [next[index], next[to]] = [next[to], next[index]];
+    setSegments(next);
+  };
+
   // Update constraints for a given actor and persist in project
   const handleUpdateConstraints = (actorId: string, constraints: ActorConstraint[]) => {
     const destWithPrompt = constraints.find(
@@ -429,7 +437,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   return (
     <div className="relative w-full h-[calc(100vh-61px)] overflow-hidden bg-background flex flex-col">
       {/* Viewport Area */}
-      <div className="flex-1 relative w-full h-full flex">
+      <div className="flex-1 min-h-0 relative w-full flex">
         {/* Main 3D Three.js Virtual Stage */}
         <div className="flex-1 relative w-full h-full">
           <ThreeStage
@@ -916,7 +924,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
       </div>
 
       {/* Bottom Director Choreographer & Timeline Panel */}
-      <div className="w-full bg-surface-container border-t border-outline-variant/30 p-md z-30 flex flex-col gap-sm">
+      <div className="w-full shrink-0 bg-surface-container border-t border-outline-variant/30 p-md z-30 flex flex-col gap-sm">
         {/* Row 0: Multi-text segment sequence */}
         {segments.length > 0 && showSegments && (
           <div className="max-w-6xl mx-auto w-full bg-surface-container-low border border-outline-variant/40 rounded-xl p-sm space-y-1.5">
@@ -958,6 +966,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
                 </button>
               </div>
             </div>
+            <div className="space-y-1.5 max-h-36 overflow-y-auto custom-scrollbar pr-0.5">
             {segments.map((sg, i) => (
               <div key={sg.id} className="flex items-center gap-sm">
                 <span className="text-[10px] font-mono text-on-surface-variant w-5 text-right shrink-0">{i + 1}.</span>
@@ -982,6 +991,24 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
                   />
                   <span className="text-[10px] font-mono text-on-surface-variant">s</span>
                 </div>
+                <div className="flex flex-col shrink-0 -space-y-1">
+                  <button
+                    onClick={() => handleMoveSegment(i, -1)}
+                    disabled={i === 0}
+                    className="text-on-surface-variant hover:text-primary disabled:opacity-25 disabled:hover:text-on-surface-variant transition-colors leading-none"
+                    title="Move earlier in the sequence"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">keyboard_arrow_up</span>
+                  </button>
+                  <button
+                    onClick={() => handleMoveSegment(i, 1)}
+                    disabled={i === segments.length - 1}
+                    className="text-on-surface-variant hover:text-primary disabled:opacity-25 disabled:hover:text-on-surface-variant transition-colors leading-none"
+                    title="Move later in the sequence"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">keyboard_arrow_down</span>
+                  </button>
+                </div>
                 <button
                   onClick={() => handleDeleteSegment(sg.id)}
                   className="p-0.5 text-on-surface-variant hover:text-error transition-colors shrink-0"
@@ -991,6 +1018,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
                 </button>
               </div>
             ))}
+            </div>
             <p className="text-[9px] text-on-surface-variant/70 italic px-1 pt-0.5">
               Keyframes and waypoints still apply across the whole sequence.
             </p>
