@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { CharacterActor, WorkflowStage, MotionSegment } from '../../types';
+import { CharacterActor, WorkflowStage, MotionSegment, DialogueScene } from '../../types';
 
 interface MultiActorTimelineProps {
   characters: CharacterActor[];
@@ -16,6 +16,7 @@ interface MultiActorTimelineProps {
   onAddActor?: (type: 'soma' | 'g1') => void;
   onNavigateStage?: (stage: WorkflowStage) => void;
   onUpdateActorProps?: (actorId: string, updates: Partial<CharacterActor>) => void;
+  dialogue?: DialogueScene;
 }
 
 /**
@@ -63,6 +64,7 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
   onAddActor,
   onNavigateStage,
   onUpdateActorProps,
+  dialogue,
 }) => {
   const rulerRef = useRef<HTMLDivElement>(null);
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
@@ -163,7 +165,10 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
     },
     [segDragPreview]
   );
-  const tickMarks = Array.from({ length: totalSeconds + 1 }, (_, i) => i);
+  // One label per second stops fitting past ~12s (dialogue scenes run a minute or more), so widen
+  // the step to keep roughly a dozen readable labels.
+  const tickStep = [1, 2, 5, 10, 15, 30, 60].find((step) => totalSeconds / step <= 12) || 60;
+  const tickMarks = Array.from({ length: Math.floor(totalSeconds / tickStep) + 1 }, (_, i) => i * tickStep);
 
   // Playhead percentage
   const playheadPercent = Math.min(100, Math.max(0, (timelineSec / maxDuration) * 100));
@@ -270,6 +275,51 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
           </div>
         </div>
       </div>
+
+      {/* 1b. Dialogue lane: one block per line, coloured by the actor who speaks it */}
+      {dialogue && dialogue.lines.some((l) => l.end > l.start) && (
+        <div className="flex items-stretch border-b border-outline-variant/20 bg-surface-container-lowest/60">
+          <div className="w-44 shrink-0 px-1.5 flex items-center gap-1.5 border-r border-outline-variant/20 text-[10px] font-label-caps tracking-wider text-on-surface-variant">
+            <span className="material-symbols-outlined text-[16px] text-primary">record_voice_over</span>
+            DIALOGUE
+            <span className="font-mono text-[9px] text-on-surface-variant/70">{dialogue.lines.length} lines</span>
+          </div>
+          <div className="flex-1 relative h-9 overflow-hidden select-none">
+            {dialogue.lines.map((line) => {
+              if (line.end <= line.start) return null;
+              const cast = dialogue.cast.find((c) => c.speaker === line.speaker);
+              const actor = characters.find((a) => a.id === cast?.actorId);
+              const color = actor?.color || '#9ca3af';
+              const leftPct = (line.start / maxDuration) * 100;
+              const widthPct = ((line.end - line.start) / maxDuration) * 100;
+              const spoken = line.text.replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim();
+              return (
+                <button
+                  key={line.id}
+                  onClick={() => onSeek(line.start)}
+                  title={`${line.speaker}: ${spoken}`}
+                  className="absolute top-1 bottom-1 rounded-md border px-1 text-left overflow-hidden cursor-pointer hover:brightness-125"
+                  style={{
+                    left: `${leftPct}%`,
+                    width: `${Math.max(0.8, widthPct)}%`,
+                    backgroundColor: `${color}33`,
+                    borderColor: `${color}aa`,
+                  }}
+                >
+                  <div className="text-[9px] leading-tight font-bold truncate" style={{ color }}>
+                    {line.speaker}
+                  </div>
+                  <div className="text-[9px] leading-tight text-on-surface/80 truncate">{spoken}</div>
+                </button>
+              );
+            })}
+            <div
+              className="absolute top-0 bottom-0 w-[2px] bg-primary z-20 pointer-events-none shadow-[0_0_8px_rgba(0,255,204,0.9)]"
+              style={{ left: `${playheadPercent}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* 2. Actors Track Lanes List */}
       <div className="flex flex-col divide-y divide-outline-variant/15 max-h-48 overflow-y-auto relative">

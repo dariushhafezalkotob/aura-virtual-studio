@@ -65,6 +65,40 @@ export interface Project {
   stageSpecularity?: number;
   lightIntensity?: number;
   environmentPreset?: LightingEnvironmentPreset;
+  dialogue?: DialogueScene;
+}
+
+/** A line of dialogue placed on the scene timeline. `text` keeps its inline [emotion] tags. */
+export interface DialogueLine {
+  id: string;
+  speaker: string;
+  text: string;
+  start: number; // seconds on the scene timeline
+  end: number;
+  /** Per-line voice clip, when generated line by line. */
+  audioUrl?: string;
+}
+
+export interface DialogueCastMember {
+  speaker: string; // name as written in the script, e.g. "DAVID"
+  actorId?: string;
+  voice: string; // Gemini prebuilt voice name
+}
+
+/**
+ * Dialogue previs: a script whose lines drive a voice track, per-actor talk/listen motion and
+ * timing. Whatever the audio source, it ends as one scene track plus per-line start/end times.
+ */
+export interface DialogueScene {
+  script: string;
+  audioMode: 'per_line' | 'whole_scene' | 'import';
+  cast: DialogueCastMember[];
+  lines: DialogueLine[];
+  /** Pause inserted between lines when assembling per-line clips. */
+  gapSec: number;
+  audioUrl?: string;
+  duration?: number;
+  ttsModel?: string;
 }
 
 export interface SavedStageTemplate {

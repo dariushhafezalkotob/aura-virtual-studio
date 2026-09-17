@@ -7,6 +7,7 @@ import {
   ActorConstraint,
   UpperBodyPosePreset,
   IkEffectorType,
+  IkTargets,
 } from '../../types';
 import {
   TransformMode,
@@ -15,13 +16,15 @@ import {
   isSelectionSuppressed,
 } from './ThreeStage';
 import { solveTwoBoneIK, solveLookAtIK } from '../../services/ikSolver';
-import { POSE_EDIT_TIME_TOLERANCE } from '../../types';
 import {
   SOMA,
   IK_CHAINS,
   IkChainId,
   SOMARigCache,
   loadOfficialSOMARig,
+  liveEditAppliesAt,
+  setLiveActorPose,
+  poseSourceOf,
 } from '../../services/somaSkeleton';
 
 interface CharacterActorModelProps {
@@ -46,6 +49,29 @@ interface CharacterActorModelProps {
 }
 
 // Scratch objects reused by the per-frame rig pass to avoid per-frame garbage.
+/**
+ * IK handles sit inside the (semi-transparent) body: the hands, the pelvis ring and the gaze target
+ * are all within or behind the mesh, so with normal depth testing they were hidden or barely
+ * visible from many angles. Draw them last and on top of everything.
+ */
+const HANDLE_RENDER_ORDER = 1000;
+
+const SOMA_JOINT_COUNT = 77;
+const JOINT_RADIUS = 0.018;
+/** Joints worth a bigger dot (the ones in the FK joint list); fingers and twist bones stay small. */
+const MAJOR_JOINTS = new Set<number>([
+  SOMA.hips, SOMA.spine1, SOMA.chest, SOMA.neck1, SOMA.head,
+  SOMA.leftShoulder, SOMA.leftArm, SOMA.leftForeArm, SOMA.leftHand,
+  SOMA.rightShoulder, SOMA.rightArm, SOMA.rightForeArm, SOMA.rightHand,
+  SOMA.leftLeg, SOMA.leftShin, SOMA.leftFoot, SOMA.rightLeg, SOMA.rightShin, SOMA.rightFoot,
+]);
+const _overlayInv = new THREE.Matrix4();
+const _overlayMat = new THREE.Matrix4();
+const _overlayVec = new THREE.Vector3();
+const _jointSelectedColor = new THREE.Color('#00ffcc');
+const _jointMajorColor = new THREE.Color('#ffffff');
+const _jointMinorColor = new THREE.Color('#9aa0a6');
+
 const _tmpQuat = new THREE.Quaternion();
 const _tmpVec = new THREE.Vector3();
 
@@ -242,7 +268,7 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
   isSelected,
   transformMode,
   currentTimelineTime,
-  isPlaying: _isPlaying = false,
+  isPlaying = false,
   showTrajectory = true,
   onSelect,
   onDraggingChange,
@@ -260,6 +286,44 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
   const restQuatsRef = useRef<THREE.Quaternion[]>([]);
   const rigDataRef = useRef<SOMARigCache | null>(null);
   const [isRigReady, setIsRigReady] = useState<boolean>(false);
+
+  // Skeleton overlay (bones as lines, joints as clickable dots) shown while editing, like Kimodo's
+  // demo. Without it there was no way to see or pick the joints being posed.
+  const skeletonOverlay = useMemo(() => {
+    if (!isRigReady || !rigDataRef.current) return null;
+    const connections = rigDataRef.current.jointConnections;
+    const lineGeom = new THREE.BufferGeometry();
+    lineGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(connections.length * 6), 3));
+    const lines = new THREE.LineSegments(
+      lineGeom,
+      new THREE.LineBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.9, depthTest: false, depthWrite: false })
+    );
+    lines.renderOrder = HANDLE_RENDER_ORDER - 1;
+    lines.frustumCulled = false;
+    lines.raycast = () => {}; // not pickable; joints are
+
+    const joints = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(JOINT_RADIUS, 10, 10),
+      new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, depthTest: false, depthWrite: false }),
+      SOMA_JOINT_COUNT
+    );
+    joints.renderOrder = HANDLE_RENDER_ORDER - 1;
+    joints.frustumCulled = false;
+    joints.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < SOMA_JOINT_COUNT; i++) joints.setColorAt(i, new THREE.Color('#ffffff'));
+    return { lines, joints, connections };
+  }, [isRigReady]);
+
+  useEffect(
+    () => () => {
+      if (!skeletonOverlay) return;
+      skeletonOverlay.lines.geometry.dispose();
+      (skeletonOverlay.lines.material as THREE.Material).dispose();
+      skeletonOverlay.joints.geometry.dispose();
+      (skeletonOverlay.joints.material as THREE.Material).dispose();
+    },
+    [skeletonOverlay]
+  );
 
   // Bumped whenever an IK handle mounts, so the gizmo below can pick up a ref
   // that was assigned during the same commit.
@@ -287,6 +351,9 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     selectedIkEffector = 'rightHand',
   } = actor;
 
+  // Editing mode (FK or IK) shows the skeleton; so does the explicit skeleton display mode.
+  const showBones = (isSelected && activeRigMode !== 'off') || renderMode === 'skeleton';
+
   // IK Targets state in local coordinate space
   const ikTargetHandlesRef = useRef<{
     hips: THREE.Group | null;
@@ -303,6 +370,14 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     rightFoot: null,
     lookAt: null,
   });
+
+  // Rig mode last seen by the frame loop, to catch FK <-> IK switches. IK handles don't follow FK
+  // edits, and IK results were never written back as joint rotations, so each switch snapped the
+  // limbs to wherever the other mode last left them. See the hand-off in the frame loop.
+  const prevRigModeRef = useRef(activeRigMode);
+  const pendingIkCaptureRef = useRef(false);
+  /** Timeline time of the last IK re-capture, so moving to another time re-seeds the handles once. */
+  const ikCaptureTimeRef = useRef<number | null>(null);
 
   // These must keep a stable identity across renders: React detaches and
   // reattaches a ref whose callback identity changed, and a setState inside a
@@ -438,11 +513,136 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     }
   }, [position[0], position[1], position[2], rotation[0], rotation[1], rotation[2], scale[0], scale[1], scale[2]]);
 
+  /** Hip position blended between the surrounding keys (keys made after a hip move store it). */
+  const keyframeHipsAt = (time: number): THREE.Vector3 | null => {
+    const hasMotion = !!(actor.motionData && actor.motionData.rotations && actor.motionData.rotations.length > 0);
+    const kfs = actor.keyframePoses;
+    const rest = rigDataRef.current?.localTransforms[SOMA.hips]?.pos;
+    if (hasMotion || !kfs || kfs.length === 0 || !rest || !kfs.some((k) => k.ikTargets?.hips)) return null;
+    const sorted = [...kfs].sort((a, b) => a.time - b.time);
+    let prev = sorted[0];
+    let next = sorted[sorted.length - 1];
+    for (const k of sorted) {
+      if (k.time <= time) prev = k;
+      if (k.time >= time) {
+        next = k;
+        break;
+      }
+    }
+    const span = next.time - prev.time;
+    const a = span > 0.001 ? THREE.MathUtils.clamp((time - prev.time) / span, 0, 1) : 0;
+    const e = a * a * (3 - 2 * a);
+    const h0 = prev.ikTargets?.hips ? new THREE.Vector3(...prev.ikTargets.hips) : rest.clone();
+    const h1 = next.ikTargets?.hips ? new THREE.Vector3(...next.ikTargets.hips) : rest.clone();
+    return h0.lerp(h1, e);
+  };
+
+  /**
+   * Leaving IK: keep the solved limbs by storing them as joint rotations (what FK edits and what
+   * Off mode shows), then drop the limb/gaze goals so FK owns those joints again. Hips stay a goal:
+   * the pelvis offset is a position, which joint rotations can't express.
+   */
+  const bakeIkPoseIntoFk = (bones: THREE.Bone[]) => {
+    if (!onUpdateActor) return;
+    // Only this time's edit is kept; an edit pinned to another time must not leak into this pose.
+    const editHere = liveEditAppliesAt(actor, currentTimelineTime);
+    const rotations = { ...(editHere ? actor.customBoneRotations || {} : {}) };
+    const keep = (index: number) => {
+      const q = bones[index]?.quaternion;
+      if (q) rotations[index] = [q.x, q.y, q.z, q.w];
+    };
+    (Object.keys(IK_CHAINS) as IkChainId[]).forEach((eff) => {
+      keep(IK_CHAINS[eff].root);
+      keep(IK_CHAINS[eff].mid);
+    });
+    keep(SOMA.head);
+    keep(SOMA.neck1);
+    const hips = editHere ? actor.ikTargets?.hips : undefined;
+    onUpdateActor({
+      ...actor,
+      customBoneRotations: rotations,
+      customPoseTime: currentTimelineTime,
+      ikTargets: hips ? { hips } : undefined,
+    });
+  };
+
+  /** Entering IK: put each goal on the current (FK-posed) hand, foot, pelvis and gaze. */
+  const captureIkTargetsFromPose = (bones: THREE.Bone[]) => {
+    const bodyGroup = bodyGroupRef.current;
+    const hipsBone = bones[SOMA.hips];
+    if (!bodyGroup || !hipsBone || !onUpdateActor) return;
+    bodyGroup.updateWorldMatrix(true, false);
+    hipsBone.updateWorldMatrix(true, true);
+
+    const toLocal = (v: THREE.Vector3): [number, number, number] => {
+      const local = bodyGroup.worldToLocal(v.clone());
+      return [local.x, local.y, local.z];
+    };
+    // Handles from an edit pinned to another time are stale here: start from this time's pose.
+    const editHere = liveEditAppliesAt(actor, currentTimelineTime);
+    const captured: IkTargets = editHere ? { ...(actor.ikTargets || {}) } : {};
+    (Object.keys(IK_CHAINS) as IkChainId[]).forEach((eff) => {
+      const end = bones[IK_CHAINS[eff].end];
+      if (end) captured[eff] = toLocal(end.getWorldPosition(new THREE.Vector3()));
+    });
+    if (!captured.hips) captured.hips = [hipsBone.position.x, hipsBone.position.y, hipsBone.position.z];
+
+    const head = bones[SOMA.head];
+    const gazeAxis = rigDataRef.current?.headGazeAxisLocal;
+    if (head && gazeAxis) {
+      const headPos = head.getWorldPosition(new THREE.Vector3());
+      const gazeDir = gazeAxis.clone().applyQuaternion(head.getWorldQuaternion(new THREE.Quaternion())).normalize();
+      captured.lookAt = toLocal(headPos.addScaledVector(gazeDir, 2.0));
+    }
+
+    // Move mounted handles now so this frame's solve already uses them.
+    (Object.keys(captured) as IkEffectorType[]).forEach((eff) => {
+      const handle = ikTargetHandlesRef.current[eff];
+      const pos = captured[eff];
+      if (handle && pos) handle.position.set(pos[0], pos[1], pos[2]);
+    });
+    ikCaptureTimeRef.current = currentTimelineTime;
+    onUpdateActor(
+      editHere
+        ? { ...actor, ikTargets: captured, customPoseTime: actor.customPoseTime ?? currentTimelineTime }
+        : // A new edit at this time: the old one (another key's pose) must not come along.
+          { ...actor, ikTargets: captured, customBoneRotations: {}, customPoseTime: currentTimelineTime }
+    );
+  };
+
   // Real-time Kinematic Animation Engine driving the SOMA 77-Bone Skeleton
   useFrame(() => {
     const bones = bonesRef.current;
     const restQuats = restQuatsRef.current;
     if (bones.length < 77 || restQuats.length < 77) return;
+
+    // -------------------------------------------------------------------------
+    // FK <-> IK hand-off. Runs before the pose pass rewrites the bones, so on
+    // leaving IK they still hold last frame's solved pose.
+    // -------------------------------------------------------------------------
+    // Whether the live pose edit belongs to the current time (see liveEditAppliesAt).
+    const poseEditApplies = liveEditAppliesAt(actor, currentTimelineTime);
+
+    const prevMode = prevRigModeRef.current;
+    if (prevMode !== activeRigMode) {
+      prevRigModeRef.current = activeRigMode;
+      if (prevMode === 'ik' && activeRigMode === 'fk') {
+        // IK -> FK only. Exiting editing (-> off) discards the live edit on purpose: what's worth
+        // keeping has been written into a constraint, and the generated motion must show again.
+        bakeIkPoseIntoFk(bones);
+      } else if (activeRigMode === 'ik') {
+        pendingIkCaptureRef.current = true;
+      }
+    } else if (
+      activeRigMode === 'ik' &&
+      !isPlaying &&
+      !poseEditApplies &&
+      ikCaptureTimeRef.current !== currentTimelineTime
+    ) {
+      // Still in IK but moved to another time (scrubbed, jumped to a key): seed the handles from the
+      // pose here instead of dragging this time's limbs to the goals authored somewhere else.
+      pendingIkCaptureRef.current = true;
+    }
 
     // =========================================================================
     // 1. BASE POSE: TIMELINE KEYFRAME BLENDING, KIMODO DIFFUSION, OR REST BREATHING
@@ -562,17 +762,9 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     // blend at EVERY time, so the most recent edit masks every key and they all
     // look identical. Once keys exist, only honour the edit near the timeline
     // position it was authored at; elsewhere the blend owns the pose.
-    const poseEditTime = actor.customPoseTime;
     // Scope the edit whenever something else already drives the pose over time
     // -- a generated take or a keyframe track. With neither, the edit IS the
-    // pose and must show everywhere.
-    const hasPoseTrack =
-      !!(actor.motionData && actor.motionData.rotations && actor.motionData.rotations.length > 0) ||
-      !!(actor.keyframePoses && actor.keyframePoses.length > 0);
-    const poseEditApplies =
-      !hasPoseTrack ||
-      poseEditTime === undefined ||
-      Math.abs(currentTimelineTime - poseEditTime) <= POSE_EDIT_TIME_TOLERANCE;
+    // pose and must show everywhere. (poseEditApplies, computed at frame start.)
 
     if (actor.customBoneRotations && poseEditApplies) {
       for (const [idxStr, qRaw] of Object.entries(actor.customBoneRotations)) {
@@ -597,6 +789,12 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
       if (handle) handle.position.copy(ikDrag.pos);
     }
 
+    // Entering IK: start every handle where the posed limb already is.
+    if (pendingIkCaptureRef.current) {
+      pendingIkCaptureRef.current = false;
+      captureIkTargetsFromPose(bones);
+    }
+
     // =========================================================================
     // 2.5 HIP / ROOT TRANSLATION
     // =========================================================================
@@ -609,13 +807,17 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     const hipsBone = bones[SOMA.hips];
     if (hipsRest && hipsBone) {
       const hipsHandle = ikTargetHandlesRef.current.hips;
-      const storedHips = actor.ikTargets?.hips;
+      // Like the joint edits, a hip offset only counts at the time it was made.
+      const storedHips = poseEditApplies ? actor.ikTargets?.hips : undefined;
+      const keyHips = !poseEditApplies || !storedHips ? keyframeHipsAt(currentTimelineTime) : null;
 
-      if (activeRigMode === 'ik' && hipsHandle && hipsHandle.parent) {
+      if (activeRigMode === 'ik' && poseEditApplies && hipsHandle && hipsHandle.parent) {
         // Handle position is already in body-group space, same as the bone's.
         hipsBone.position.copy(hipsHandle.position);
       } else if (storedHips) {
         hipsBone.position.set(storedHips[0], storedHips[1], storedHips[2]);
+      } else if (keyHips) {
+        hipsBone.position.copy(keyHips);
       } else {
         hipsBone.position.copy(hipsRest);
       }
@@ -625,7 +827,9 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     // 3. ACTIVE USER IK SOLVER PASS (Two-Bone Analytical IK)
     // =========================================================================
     const bodyGroup = bodyGroupRef.current;
-    const ikActive = activeRigMode === 'ik' || !!actor.ikTargets;
+    // IK goals are part of the live edit, so they only act at its time. Applied everywhere, an IK
+    // tweak made at one key dragged the limbs at every other key too.
+    const ikActive = poseEditApplies && (activeRigMode === 'ik' || !!actor.ikTargets);
 
     if (ikActive && bodyGroup) {
       bodyGroup.updateWorldMatrix(true, false);
@@ -668,13 +872,29 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
 
         // The pose pass above only wrote quaternions, so refresh before reading
         // the limb's world origin.
-        root.updateWorldMatrix(true, false);
+        root.updateWorldMatrix(true, true);
         root.getWorldPosition(poleWorld);
-        _tmpVec
-          .set(chain.poleDir[0], chain.poleDir[1], chain.poleDir[2])
-          .applyQuaternion(bodyQuat)
-          .normalize();
-        poleWorld.addScaledVector(_tmpVec, 1.5);
+
+        // Keep the elbow/knee pointing the way the underlying pose (FK edit or
+        // animation) already bends it. A fixed pole swung the joint to another
+        // plane: the hand still hit its goal, but switching FK -> IK visibly
+        // changed the pose, and anything layered on top (constraints) moved it.
+        const rootPos = poleWorld.clone();
+        const midPos = mid.getWorldPosition(new THREE.Vector3());
+        const endPos = end.getWorldPosition(new THREE.Vector3());
+        const axis = endPos.sub(rootPos);
+        const bend = midPos.clone().sub(rootPos);
+        if (axis.lengthSq() > 1e-8) bend.addScaledVector(axis, -bend.dot(axis) / axis.lengthSq());
+        if (bend.length() > 0.01) {
+          poleWorld.copy(midPos).addScaledVector(bend.normalize(), 1.5);
+        } else {
+          // Limb (nearly) straight: no bend to preserve, use the rig's default direction.
+          _tmpVec
+            .set(chain.poleDir[0], chain.poleDir[1], chain.poleDir[2])
+            .applyQuaternion(bodyQuat)
+            .normalize();
+          poleWorld.addScaledVector(_tmpVec, 1.5);
+        }
 
         solveTwoBoneIK(root, mid, end, targetWorld, poleWorld);
       });
@@ -685,6 +905,22 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
           solveLookAtIK(bones[SOMA.head], bones[SOMA.neck1], targetWorld, gazeAxis, 1.0);
         }
       }
+    }
+
+    // Record the pose on screen (before constraint post-effects, which re-apply on playback) so
+    // "Set Key" stores exactly this. Only while authoring, to avoid per-frame allocations in playback.
+    if (isSelected && !isPlaying && hipsBone) {
+      const rotations: Record<number, [number, number, number, number]> = {};
+      for (let b = 0; b < bones.length; b++) {
+        const q = bones[b].quaternion;
+        rotations[b] = [q.x, q.y, q.z, q.w];
+      }
+      setLiveActorPose(actor.id, {
+        time: currentTimelineTime,
+        rotations,
+        hips: [hipsBone.position.x, hipsBone.position.y, hipsBone.position.z],
+        source: poseSourceOf(actor),
+      });
     }
 
     // =========================================================================
@@ -709,6 +945,35 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
           }
         }
       }
+    }
+
+    // =========================================================================
+    // 5. SKELETON OVERLAY (bones + joints, in body-group space)
+    // =========================================================================
+    if (skeletonOverlay && showBones && bodyGroup) {
+      bodyGroup.updateWorldMatrix(true, false);
+      bones[0].updateWorldMatrix(true, true);
+      const inv = _overlayInv.copy(bodyGroup.matrixWorld).invert();
+      const posAttr = skeletonOverlay.lines.geometry.getAttribute('position') as THREE.BufferAttribute;
+      skeletonOverlay.connections.forEach(([a, b], i) => {
+        if (!bones[a] || !bones[b]) return;
+        _overlayVec.setFromMatrixPosition(bones[a].matrixWorld).applyMatrix4(inv);
+        posAttr.setXYZ(i * 2, _overlayVec.x, _overlayVec.y, _overlayVec.z);
+        _overlayVec.setFromMatrixPosition(bones[b].matrixWorld).applyMatrix4(inv);
+        posAttr.setXYZ(i * 2 + 1, _overlayVec.x, _overlayVec.y, _overlayVec.z);
+      });
+      posAttr.needsUpdate = true;
+
+      const selected = activeRigMode === 'fk' ? selectedJointIndex : null;
+      for (let j = 0; j < SOMA_JOINT_COUNT && j < bones.length; j++) {
+        _overlayVec.setFromMatrixPosition(bones[j].matrixWorld).applyMatrix4(inv);
+        const size = j === selected ? 2.2 : MAJOR_JOINTS.has(j) ? 1.25 : 0.7;
+        _overlayMat.makeScale(size, size, size).setPosition(_overlayVec);
+        skeletonOverlay.joints.setMatrixAt(j, _overlayMat);
+        skeletonOverlay.joints.setColorAt(j, j === selected ? _jointSelectedColor : MAJOR_JOINTS.has(j) ? _jointMajorColor : _jointMinorColor);
+      }
+      skeletonOverlay.joints.instanceMatrix.needsUpdate = true;
+      if (skeletonOverlay.joints.instanceColor) skeletonOverlay.joints.instanceColor.needsUpdate = true;
     }
   });
 
@@ -751,12 +1016,15 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     if (handle && onUpdateActor) {
       const src = dragged ?? handle.position;
       const pos: [number, number, number] = [src.x, src.y, src.z];
+      const editHere = liveEditAppliesAt(actor, currentTimelineTime);
       onUpdateActor({
         ...actor,
         ikTargets: {
-          ...(actor.ikTargets || {}),
+          ...(editHere ? actor.ikTargets || {} : {}),
           [eff]: pos,
         },
+        ...(editHere ? {} : { customBoneRotations: {} }),
+        customPoseTime: currentTimelineTime,
       });
     }
   };
@@ -812,6 +1080,21 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
             <ProxyMannequin color={jointColor} />
           )}
 
+          {/* Skeleton overlay: click a joint to select it for FK rotation */}
+          {skeletonOverlay && showBones && (
+            <>
+              <primitive object={skeletonOverlay.lines} />
+              <primitive
+                object={skeletonOverlay.joints}
+                onClick={(e: any) => {
+                  e.stopPropagation();
+                  if (e.instanceId === undefined || !onUpdateActor) return;
+                  onUpdateActor({ ...actor, selectedJointIndex: e.instanceId, activeRigMode: 'fk' });
+                }}
+              />
+            </>
+          )}
+
           {/* 3D Interactive IK Effector Handles */}
           {showSkeletonRig && (
             <group>
@@ -824,9 +1107,12 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
                   onSelectIkEffector?.('rightHand');
                 }}
               >
-                <mesh>
+                <mesh renderOrder={HANDLE_RENDER_ORDER}>
                   <sphereGeometry args={[0.045, 16, 16]} />
                   <meshStandardMaterial
+                    depthTest={false}
+                    depthWrite={false}
+                    transparent
                     color={selectedIkEffector === 'rightHand' && activeRigMode === 'ik' ? '#00ffcc' : '#ffffff'}
                     emissive={selectedIkEffector === 'rightHand' ? '#00ffcc' : '#000000'}
                     emissiveIntensity={0.6}
@@ -843,9 +1129,12 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
                   onSelectIkEffector?.('leftHand');
                 }}
               >
-                <mesh>
+                <mesh renderOrder={HANDLE_RENDER_ORDER}>
                   <sphereGeometry args={[0.045, 16, 16]} />
                   <meshStandardMaterial
+                    depthTest={false}
+                    depthWrite={false}
+                    transparent
                     color={selectedIkEffector === 'leftHand' && activeRigMode === 'ik' ? '#00ffcc' : '#ffffff'}
                     emissive={selectedIkEffector === 'leftHand' ? '#00ffcc' : '#000000'}
                     emissiveIntensity={0.6}
@@ -862,9 +1151,12 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
                   onSelectIkEffector?.('rightFoot');
                 }}
               >
-                <mesh>
+                <mesh renderOrder={HANDLE_RENDER_ORDER}>
                   <boxGeometry args={[0.08, 0.04, 0.16]} />
                   <meshStandardMaterial
+                    depthTest={false}
+                    depthWrite={false}
+                    transparent
                     color={selectedIkEffector === 'rightFoot' && activeRigMode === 'ik' ? '#ff9500' : '#ffffff'}
                     emissive={selectedIkEffector === 'rightFoot' ? '#ff9500' : '#000000'}
                     emissiveIntensity={0.6}
@@ -881,9 +1173,12 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
                   onSelectIkEffector?.('leftFoot');
                 }}
               >
-                <mesh>
+                <mesh renderOrder={HANDLE_RENDER_ORDER}>
                   <boxGeometry args={[0.08, 0.04, 0.16]} />
                   <meshStandardMaterial
+                    depthTest={false}
+                    depthWrite={false}
+                    transparent
                     color={selectedIkEffector === 'leftFoot' && activeRigMode === 'ik' ? '#ff9500' : '#ffffff'}
                     emissive={selectedIkEffector === 'leftFoot' ? '#ff9500' : '#000000'}
                     emissiveIntensity={0.6}
@@ -900,18 +1195,24 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
                   onSelectIkEffector?.('hips');
                 }}
               >
-                <mesh rotation={[-Math.PI / 2, 0, 0]}>
+                <mesh rotation={[-Math.PI / 2, 0, 0]} renderOrder={HANDLE_RENDER_ORDER}>
                   <torusGeometry args={[0.13, 0.012, 8, 28]} />
                   <meshStandardMaterial
+                    depthTest={false}
+                    depthWrite={false}
+                    transparent
                     color={selectedIkEffector === 'hips' && activeRigMode === 'ik' ? '#ffd60a' : '#ffffff'}
                     emissive={selectedIkEffector === 'hips' ? '#ffd60a' : '#000000'}
                     emissiveIntensity={0.6}
                   />
                 </mesh>
                 {/* Small hub so the ring is still clickable edge-on */}
-                <mesh>
+                <mesh renderOrder={HANDLE_RENDER_ORDER}>
                   <sphereGeometry args={[0.03, 12, 12]} />
                   <meshStandardMaterial
+                    depthTest={false}
+                    depthWrite={false}
+                    transparent
                     color={selectedIkEffector === 'hips' && activeRigMode === 'ik' ? '#ffd60a' : '#ffffff'}
                     emissive={selectedIkEffector === 'hips' ? '#ffd60a' : '#000000'}
                     emissiveIntensity={0.6}
@@ -928,9 +1229,12 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
                   onSelectIkEffector?.('lookAt');
                 }}
               >
-                <mesh>
+                <mesh renderOrder={HANDLE_RENDER_ORDER}>
                   <octahedronGeometry args={[0.06]} />
                   <meshStandardMaterial
+                    depthTest={false}
+                    depthWrite={false}
+                    transparent
                     color={selectedIkEffector === 'lookAt' && activeRigMode === 'ik' ? '#af52de' : '#ffffff'}
                     emissive={selectedIkEffector === 'lookAt' ? '#af52de' : '#000000'}
                     emissiveIntensity={0.6}
@@ -1003,12 +1307,16 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
             const committed: [number, number, number, number] = [q.x, q.y, q.z, q.w];
             fkDragRef.current = null;
             if (onUpdateActor && selectedJointIndex !== null) {
+              // Editing at a new time starts a new edit; merging the previous one would copy another
+              // key's whole pose into this one.
+              const editHere = liveEditAppliesAt(actor, currentTimelineTime);
               onUpdateActor({
                 ...actor,
                 customBoneRotations: {
-                  ...(actor.customBoneRotations || {}),
+                  ...(editHere ? actor.customBoneRotations || {} : {}),
                   [selectedJointIndex]: committed,
                 },
+                ikTargets: editHere ? actor.ikTargets : undefined,
                 customPoseTime: currentTimelineTime,
               });
             }

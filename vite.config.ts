@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { WebSocketServer } from 'ws';
+import { handleDialogueApi } from './server/dialogueApi';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 
 const env = { ...process.env, ...loadEnv('', process.cwd(), '') };
@@ -288,6 +289,10 @@ function apiMiddlewarePlugin(): Plugin {
       });
 
       server.middlewares.use(async (req, res, next) => {
+        if (req.url?.startsWith('/api/dialogue/')) {
+          if (await handleDialogueApi(req, res)) return;
+        }
+
         // -1. Network Host IP Discovery for Mobile Pairing QR Code
         if (req.url?.startsWith('/api/network-ip')) {
           const lanIp = getLocalIpAddress();
@@ -457,6 +462,8 @@ function apiMiddlewarePlugin(): Plugin {
             else if (ext === '.png') contentType = 'image/png';
             else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
             else if (ext === '.json') contentType = 'application/json';
+            else if (ext === '.wav') contentType = 'audio/wav';
+            else if (ext === '.mp3') contentType = 'audio/mpeg';
 
             res.setHeader('Content-Type', contentType);
             res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
@@ -1012,10 +1019,28 @@ function apiMiddlewarePlugin(): Plugin {
               }
 
               let client = await getTrellisClient(false, userToken);
+
+              // Step 1: Preprocess image (rembg, center, uniform aspect ratio pad to square)
+              // This is identical to the official Trellis demo UI and prevents non-square distortion (e.g. circle becoming ellipse)
+              let fileForGeneration = fileToPass;
+              try {
+                console.log('[TRELLIS] Running /preprocess_image for aspect ratio preservation & background isolation...');
+                const prepRes = await client.predict('/preprocess_image', [fileToPass]);
+                if (prepRes && prepRes.data && prepRes.data[0]) {
+                  const norm = normalizeGradioFileData(prepRes.data[0]);
+                  if (norm) {
+                    fileForGeneration = norm;
+                    console.log('[TRELLIS] ✓ Image successfully preprocessed with preserved 1:1 aspect ratio!');
+                  }
+                }
+              } catch (prepErr) {
+                console.warn('[TRELLIS] Preprocessing call warning (proceeding with raw image):', extractErrorMessage(prepErr));
+              }
+
               let result: any;
               try {
                 result = await client.predict('/generate_and_extract_glb', [
-                  fileToPass,
+                  fileForGeneration,
                   [],
                   null,
                   params.seed ?? Math.floor(Math.random() * 2147483647),
@@ -1031,7 +1056,7 @@ function apiMiddlewarePlugin(): Plugin {
                 console.warn('[TRELLIS] Reconnecting and retrying prediction...', extractErrorMessage(predErr));
                 client = await getTrellisClient(true, userToken);
                 result = await client.predict('/generate_and_extract_glb', [
-                  fileToPass,
+                  fileForGeneration,
                   [],
                   null,
                   params.seed ?? Math.floor(Math.random() * 2147483647),

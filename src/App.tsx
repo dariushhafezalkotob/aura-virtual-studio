@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Project, WorkflowStage } from './types';
 import { TopBar } from './components/common/TopBar';
 import { ProjectsView } from './components/screens/ProjectsView';
@@ -12,6 +12,9 @@ import {
   loadProjectsSafely,
   persistProjectsSafely,
 } from './services/storageService';
+
+/** Quiet period after the last edit before projects are written to disk and browser storage. */
+const SAVE_DEBOUNCE_MS = 1200;
 
 const INITIAL_PROJECTS: Project[] = [
   {
@@ -84,10 +87,55 @@ export function App() {
 
   // Persist project changes safely to Disk, IndexedDB, and LocalStorage
   // CRITICAL: Must wait until hydration has finished to prevent overwriting saved data!
+  //
+  // Saves are coalesced. Every save serialises ALL projects (tens of MB once motion takes pile up)
+  // three times over; saving on each change meant every keystroke in a prompt field started another
+  // full save while the previous ones were still in flight, until the browser ran out of memory.
+  // Now: wait until edits pause, run one save at a time, and save only the latest state.
+  const pendingSaveRef = useRef<Project[] | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isSavingRef = useRef(false);
+
+  const flushSave = async () => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (isSavingRef.current || !pendingSaveRef.current) return;
+    const snapshot = pendingSaveRef.current;
+    pendingSaveRef.current = null;
+    isSavingRef.current = true;
+    try {
+      await persistProjectsSafely(snapshot);
+    } finally {
+      isSavingRef.current = false;
+    }
+    // Edits made while that save ran: write the newest state once.
+    if (pendingSaveRef.current) flushSave();
+  };
+
   useEffect(() => {
     if (!isHydrated) return;
-    persistProjectsSafely(projects);
+    pendingSaveRef.current = projects;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projects, isHydrated]);
+
+  // Don't lose the last edits when the tab is hidden or closed during the debounce window.
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') flushSave();
+    };
+    const onUnload = () => flushSave();
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', onUnload);
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', onUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const currentProject = projects.find((p) => p.id === currentProjectId) || null;
 

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   CharacterActor,
   ActorKeyframePose,
@@ -12,6 +12,10 @@ import {
   composeRestOffset,
   sampleActorPose,
   sampleActorRootMotion,
+  getLiveActorPose,
+  liveEditAppliesAt,
+  poseSourceOf,
+  samePoseSource,
 } from '../../services/somaSkeleton';
 
 export interface ActorRigPosingPanelProps {
@@ -19,6 +23,11 @@ export interface ActorRigPosingPanelProps {
   currentTimelineTime: number;
   onUpdateActor: (updatedActor: CharacterActor) => void;
   onJumpToTime?: (time: number) => void;
+  /** Editing works on a still frame, so entering editing mode pauses playback. */
+  onPause?: () => void;
+  /** Regenerate this actor's motion with its constraints (the last step of the Kimodo workflow). */
+  onRegenerate?: () => void;
+  isGenerating?: boolean;
 }
 
 export interface PosePreset {
@@ -216,6 +225,9 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
   currentTimelineTime,
   onUpdateActor,
   onJumpToTime,
+  onPause,
+  onRegenerate,
+  isGenerating = false,
 }) => {
   const [activeTab, setActiveTab] = useState<'rig' | 'presets' | 'keyframes'>('rig');
   const rigMode = actor.activeRigMode || 'off';
@@ -227,6 +239,135 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
   const currentKeyframe = useMemo(() => {
     return keyframes.find((k) => Math.abs(k.time - currentTimelineTime) < 0.15);
   }, [keyframes, currentTimelineTime]);
+
+  // ===========================================================================
+  // Kimodo editing workflow: enter editing mode on a frame -> pose -> the pose becomes (or updates)
+  // a constraint at that frame -> exit editing mode -> regenerate so the motion meets the constraints.
+  // ===========================================================================
+  const isEditing = rigMode !== 'off';
+  const hasMotion = !!(actor.motionData && actor.motionData.rotations && actor.motionData.rotations.length > 0);
+  const actorRef = useRef(actor);
+  actorRef.current = actor;
+
+  /** Pose shown for the actor right now, if the viewport has drawn the current edit state. */
+  const liveHere = () => {
+    const a = actorRef.current;
+    const live = getLiveActorPose(a.id);
+    return live && samePoseSource(live.source, poseSourceOf(a)) && Math.abs(live.time - currentTimelineTime) < 0.02
+      ? live
+      : null;
+  };
+
+  const handleEnterEditing = () => {
+    onPause?.();
+    onUpdateActor({ ...actor, activeRigMode: 'fk', renderMode: 'hybrid' });
+  };
+
+  const hasUnsavedEdit =
+    liveEditAppliesAt(actor, currentTimelineTime) &&
+    !currentKeyframe &&
+    (Object.keys(actor.customBoneRotations || {}).length > 0 || Object.keys(actor.ikTargets || {}).length > 0);
+
+  const handleExitEditing = (thenRegenerate = false) => {
+    if (
+      hasUnsavedEdit &&
+      !window.confirm('This pose edit is not saved as a constraint yet and will be discarded. Exit editing anyway?')
+    ) {
+      return;
+    }
+    // Drop the live edit so the viewport shows the generated motion again; constraints hold the edits.
+    onUpdateActor({
+      ...actor,
+      activeRigMode: 'off',
+      renderMode: 'mesh',
+      customBoneRotations: {},
+      ikTargets: undefined,
+      customPoseTime: undefined,
+    });
+    snappedKeyRef.current = null;
+    if (thenRegenerate) setTimeout(() => onRegenerate?.(), 0);
+  };
+
+  /** Load a constraint's pose into the editor (Kimodo's "Snap to Constraint"). */
+  const snapToConstraint = (kf: ActorKeyframePose, extra: Partial<CharacterActor> = {}) => {
+    snappedKeyRef.current = `${kf.id}@${kf.time}`;
+    onUpdateActor({
+      ...actorRef.current,
+      customBoneRotations: { ...(kf.boneRotations || {}) },
+      ikTargets: kf.ikTargets?.hips ? { hips: kf.ikTargets.hips } : undefined,
+      customPoseTime: kf.time,
+      // IK handles are re-seeded from the snapped pose when IK is entered again.
+      activeRigMode: actorRef.current.activeRigMode === 'ik' ? 'fk' : actorRef.current.activeRigMode,
+      ...extra,
+    });
+  };
+
+  // Landing on a constraint while editing shows the constraint's pose, so edits adjust IT rather
+  // than overwriting it with the generated pose at that frame.
+  const snappedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isEditing || !currentKeyframe) {
+      if (!currentKeyframe) snappedKeyRef.current = null;
+      return;
+    }
+    const tag = `${currentKeyframe.id}@${currentKeyframe.time}`;
+    if (snappedKeyRef.current === tag) return;
+    snapToConstraint(currentKeyframe);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditing, currentKeyframe?.id, currentKeyframe?.time]);
+
+  // Editing at a frame that has a constraint updates that constraint (as in Kimodo's demo).
+  useEffect(() => {
+    if (!isEditing || !currentKeyframe) return;
+    if (snappedKeyRef.current !== `${currentKeyframe.id}@${currentKeyframe.time}`) return;
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const attempt = () => {
+      const live = liveHere();
+      if (!live) {
+        if (tries++ < 10) timer = setTimeout(attempt, 50);
+        return;
+      }
+      const a = actorRef.current;
+      const keys = a.keyframePoses || [];
+      const key = keys.find((k) => k.id === currentKeyframe.id);
+      if (!key) return;
+      const same =
+        JSON.stringify(key.boneRotations) === JSON.stringify(live.rotations) &&
+        JSON.stringify(key.ikTargets?.hips) === JSON.stringify(live.hips);
+      if (same) return;
+      onUpdateActor({
+        ...a,
+        keyframePoses: keys.map((k) =>
+          k.id === key.id ? { ...k, boneRotations: { ...live.rotations }, ikTargets: { hips: live.hips } } : k
+        ),
+      });
+    };
+    timer = setTimeout(attempt, 50);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actor.customBoneRotations, actor.ikTargets]);
+
+  /** Add a constraint of this kind at the current frame, using the pose on screen. */
+  const handleAddConstraint = (kind: KeyframeConstraintKind) => {
+    if (currentKeyframe) {
+      const kinds = currentKeyframe.constraintKinds?.length ? currentKeyframe.constraintKinds : ['fullbody'];
+      if (kinds.includes(kind)) return;
+      handleToggleKind(currentKeyframe.id, kind);
+      return;
+    }
+    handleAddOrUpdateKeyframe([kind]);
+  };
+
+  /** Kimodo's "Reset Constraint": put the generated pose back into the constraint at this frame. */
+  const handleResetConstraint = () => {
+    if (!currentKeyframe) return;
+    const base = { ...actor, customBoneRotations: {}, ikTargets: undefined, customPoseTime: undefined };
+    const generated = sampleActorPose({ ...base, keyframePoses: hasMotion ? base.keyframePoses : [] }, currentKeyframe.time);
+    const updatedKey = { ...currentKeyframe, boneRotations: generated || {}, ikTargets: {} };
+    const keys = keyframes.map((k) => (k.id === currentKeyframe.id ? updatedKey : k));
+    snapToConstraint(updatedKey, { keyframePoses: keys });
+  };
 
   const handleSetRigMode = (mode: RigMode) => {
     onUpdateActor({
@@ -262,25 +403,33 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
       resolved[idx] = composeRestOffset(idx, offset);
     }
 
+    const editHere = liveEditAppliesAt(actor, currentTimelineTime);
     onUpdateActor({
       ...actor,
       customBoneRotations: {
-        ...(actor.customBoneRotations || {}),
+        // Don't carry an edit made at another time into this pose.
+        ...(editHere ? actor.customBoneRotations || {} : {}),
         ...resolved,
       },
+      ikTargets: editHere ? actor.ikTargets : undefined,
       customPoseTime: currentTimelineTime,
       activeRigMode: 'fk',
     });
   };
 
-  const handleAddOrUpdateKeyframe = () => {
+  const handleAddOrUpdateKeyframe = (kinds?: KeyframeConstraintKind[]) => {
     const roundedTime = parseFloat(currentTimelineTime.toFixed(2));
 
     // Snapshot every joint as currently posed -- generated motion, keyframe
     // blend, plus your edits -- not just the handful of bones touched. A key
     // holding only the edited bones becomes a 'fullbody' constraint whose other
     // 70-odd joints default to REST, which rips the actor out of the animation.
-    const fullPose = sampleActorPose(actor, roundedTime);
+    // Prefer the pose the viewport is showing right now: it includes IK results and the hip offset,
+    // which sampling the data misses, so a key made in IK came back looking different.
+    const live = getLiveActorPose(actor.id);
+    // Only if drawn from this exact actor state and time; otherwise fall back to sampling.
+    const liveHere = live && samePoseSource(live.source, poseSourceOf(actor)) && Math.abs(live.time - currentTimelineTime) < 0.02 ? live : null;
+    const fullPose = liveHere ? { ...liveHere.rotations } : sampleActorPose(actor, roundedTime);
     // Where the hips actually are in the generated take at this instant, not
     // where the actor is parked in the scene.
     const rootMotion = sampleActorRootMotion(actor, roundedTime);
@@ -289,17 +438,24 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
       id: currentKeyframe ? currentKeyframe.id : `kf_${Date.now()}`,
       time: roundedTime,
       boneRotations: fullPose || (actor.customBoneRotations ? { ...actor.customBoneRotations } : {}),
-      ikTargets: actor.ikTargets ? { ...actor.ikTargets } : {},
+      // Limb goals are already baked into boneRotations; keep only the hip offset, which rotations
+      // can't express (Kimodo reads its height, and key playback blends it).
+      ikTargets: liveHere
+        ? { hips: liveHere.hips }
+        : liveEditAppliesAt(actor, roundedTime) && actor.ikTargets?.hips
+        ? { hips: actor.ikTargets.hips }
+        : {},
       rootPosition: [...actor.position],
       rootMotion: rootMotion || undefined,
       poseName: `Pose @ ${roundedTime}s`,
-      constraintKinds: currentKeyframe?.constraintKinds || ['fullbody'],
+      constraintKinds: kinds || currentKeyframe?.constraintKinds || ['fullbody'],
     };
 
     const updatedKeys = keyframes.filter((k) => k.id !== newKey.id);
     updatedKeys.push(newKey);
     updatedKeys.sort((a, b) => a.time - b.time);
 
+    snappedKeyRef.current = `${newKey.id}@${newKey.time}`;
     onUpdateActor({
       ...actor,
       keyframePoses: updatedKeys,
@@ -368,7 +524,7 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full bg-surface-container/60 backdrop-blur-md rounded-2xl border border-outline-variant/30 overflow-hidden select-none">
+    <div className="flex flex-col h-full min-h-0 bg-surface-container/60 backdrop-blur-md rounded-2xl border border-outline-variant/30 overflow-hidden select-none">
       {/* Top Header & Rig Mode Switcher */}
       <div className="p-3 border-b border-outline-variant/30 flex items-center justify-between gap-2 bg-surface-container-high/40">
         <div className="flex items-center gap-2">
@@ -381,44 +537,41 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
           </div>
         </div>
 
-        {/* Mode Selector */}
-        <div className="flex bg-surface-container-highest p-0.5 rounded-lg border border-outline-variant/40 text-[11px] font-mono">
+        {/* Editing mode: FK / IK while editing, otherwise a single Enter button */}
+        {isEditing ? (
+          <div className="flex items-center gap-1">
+            <div className="flex bg-surface-container-highest p-0.5 rounded-lg border border-outline-variant/40 text-[11px] font-mono">
+              {(['fk', 'ik'] as RigMode[]).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => handleSetRigMode(m)}
+                  className={`px-2 py-1 rounded-md transition-all flex items-center gap-1 ${
+                    rigMode === m ? 'bg-primary text-background font-bold shadow-sm' : 'text-on-surface-variant hover:text-on-surface'
+                  }`}
+                  title={m === 'fk' ? 'Rotate joints (click a joint on the skeleton)' : 'Drag hand, foot, hip or gaze goals'}
+                >
+                  <span className="material-symbols-outlined text-[14px]">{m === 'fk' ? 'rotate_right' : 'open_with'}</span>
+                  <span>{m.toUpperCase()}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => handleExitEditing()}
+              className="px-2 py-1 rounded-lg border border-outline-variant/40 text-[11px] font-mono text-on-surface-variant hover:text-on-surface"
+              title="Exit editing mode"
+            >
+              Exit
+            </button>
+          </div>
+        ) : (
           <button
-            onClick={() => handleSetRigMode('fk')}
-            className={`px-2 py-1 rounded-md transition-all flex items-center gap-1 ${
-              rigMode === 'fk'
-                ? 'bg-primary text-background font-bold shadow-sm'
-                : 'text-on-surface-variant hover:text-on-surface'
-            }`}
-            title="Forward Kinematics: Rotate individual bones directly"
+            onClick={handleEnterEditing}
+            className="px-2.5 py-1.5 rounded-lg bg-primary text-background text-[11px] font-mono font-bold flex items-center gap-1"
           >
-            <span className="material-symbols-outlined text-[14px]">rotate_right</span>
-            <span>FK</span>
+            <span className="material-symbols-outlined text-[14px]">edit</span>
+            Enter Editing
           </button>
-          <button
-            onClick={() => handleSetRigMode('ik')}
-            className={`px-2 py-1 rounded-md transition-all flex items-center gap-1 ${
-              rigMode === 'ik'
-                ? 'bg-primary text-background font-bold shadow-sm'
-                : 'text-on-surface-variant hover:text-on-surface'
-            }`}
-            title="Inverse Kinematics: Drag hand, foot, or look-at targets"
-          >
-            <span className="material-symbols-outlined text-[14px]">open_with</span>
-            <span>IK</span>
-          </button>
-          <button
-            onClick={() => handleSetRigMode('off')}
-            className={`px-2 py-1 rounded-md transition-all flex items-center gap-1 ${
-              rigMode === 'off'
-                ? 'bg-surface-variant text-on-surface font-semibold'
-                : 'text-on-surface-variant hover:text-on-surface'
-            }`}
-            title="Disable gizmos and view motion animation"
-          >
-            <span>Off</span>
-          </button>
-        </div>
+        )}
       </div>
 
       {/* Sub Tabs */}
@@ -463,30 +616,110 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
         {/* TAB 1: RIG CONTROLS (FK & IK) */}
         {activeTab === 'rig' && (
           <div className="space-y-3">
-            {rigMode === 'off' ? (
-              <div className="p-4 rounded-xl bg-surface-container-highest/40 border border-outline-variant/30 text-center space-y-2">
-                <span className="material-symbols-outlined text-primary text-[28px]">info</span>
-                <p className="text-xs text-on-surface font-medium">Rigging Gizmos are currently Off</p>
-                <p className="text-[11px] text-on-surface-variant">
-                  Select <span className="font-bold text-primary">FK</span> to rotate bone joints or{' '}
-                  <span className="font-bold text-primary">IK</span> to drag hand/foot goals in 3D.
-                </p>
-                <div className="flex justify-center gap-2 pt-2">
-                  <button
-                    onClick={() => handleSetRigMode('fk')}
-                    className="px-3 py-1.5 rounded-lg bg-primary text-background font-mono text-xs font-bold shadow-md hover:bg-primary/90 transition-all"
-                  >
-                    Enable FK Mode
-                  </button>
-                  <button
-                    onClick={() => handleSetRigMode('ik')}
-                    className="px-3 py-1.5 rounded-lg bg-surface-container-highest text-on-surface font-mono text-xs font-bold border border-outline-variant/40 hover:bg-surface-variant transition-all"
-                  >
-                    Enable IK Mode
-                  </button>
+            {isEditing && (
+              <div
+                className={`p-2.5 rounded-xl border space-y-2 ${
+                  currentKeyframe ? 'bg-primary/10 border-primary/50' : 'bg-surface-container-highest/40 border-outline-variant/30'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-mono font-bold text-on-surface flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[15px] text-primary">
+                      {currentKeyframe ? 'diamond' : 'add_diamond'}
+                    </span>
+                    {currentKeyframe
+                      ? `Constraint @ ${currentKeyframe.time.toFixed(2)}s`
+                      : `No constraint @ ${currentTimelineTime.toFixed(2)}s`}
+                  </span>
+                  {currentKeyframe && (
+                    <span className="text-[9px] font-mono text-primary">edits save to it</span>
+                  )}
                 </div>
+
+                <div className="flex flex-wrap gap-1">
+                  {KEYFRAME_CONSTRAINT_KINDS.map((k) => {
+                    const kinds = currentKeyframe
+                      ? currentKeyframe.constraintKinds?.length
+                        ? currentKeyframe.constraintKinds
+                        : ['fullbody']
+                      : [];
+                    const active = kinds.includes(k.id);
+                    return (
+                      <button
+                        key={k.id}
+                        onClick={() => (currentKeyframe ? handleToggleKind(currentKeyframe.id, k.id) : handleAddConstraint(k.id))}
+                        title={
+                          currentKeyframe
+                            ? `Toggle the ${k.label} constraint on this frame`
+                            : `Add a ${k.label} constraint here using the pose on screen`
+                        }
+                        className={`px-2 py-1 rounded-md text-[10px] font-mono border flex items-center gap-1 transition-all ${
+                          active
+                            ? 'bg-primary text-background border-primary font-bold'
+                            : 'bg-surface-container-highest/60 border-outline-variant/40 text-on-surface hover:border-primary/60'
+                        }`}
+                      >
+                        {!currentKeyframe && <span className="material-symbols-outlined text-[12px]">add</span>}
+                        {k.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {currentKeyframe ? (
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => snapToConstraint(currentKeyframe)}
+                      className="flex-1 py-1 rounded-md text-[10px] font-mono border border-outline-variant/40 hover:text-primary"
+                      title="Show the constraint's pose (e.g. if the generated motion doesn't match it)"
+                    >
+                      Snap to constraint
+                    </button>
+                    <button
+                      onClick={handleResetConstraint}
+                      disabled={!hasMotion}
+                      className="flex-1 py-1 rounded-md text-[10px] font-mono border border-outline-variant/40 hover:text-primary disabled:opacity-40"
+                      title="Put the generated motion's pose back into this constraint"
+                    >
+                      Reset to generated
+                    </button>
+                    <button
+                      onClick={() => handleDeleteKeyframe(currentKeyframe.id)}
+                      className="px-2 py-1 rounded-md text-[10px] font-mono border border-outline-variant/40 hover:text-error"
+                      title="Delete this constraint"
+                    >
+                      <span className="material-symbols-outlined text-[13px]">delete</span>
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-on-surface-variant/90">
+                    Pose the character, then add a constraint above. Scrub to another frame to constrain it too.
+                    {hasUnsavedEdit && <span className="text-amber-300"> Unsaved pose edit on this frame.</span>}
+                  </p>
+                )}
               </div>
-            ) : rigMode === 'ik' ? (
+            )}
+
+            {!isEditing ? (
+              <div className="p-3 rounded-xl bg-surface-container-highest/40 border border-outline-variant/30 space-y-2">
+                <p className="text-xs text-on-surface font-medium flex items-center gap-1">
+                  <span className="material-symbols-outlined text-primary text-[18px]">tune</span>
+                  Edit the motion with constraints
+                </p>
+                <ol className="text-[11px] text-on-surface-variant list-decimal pl-4 space-y-0.5">
+                  <li>{hasMotion ? 'Scrub to the frame you want to change.' : 'Generate a base motion first (optional), then scrub to a frame.'}</li>
+                  <li>
+                    <span className="font-bold text-primary">Enter Editing</span>: the skeleton appears. Click a joint to rotate
+                    it (FK) or drag hand/foot goals (IK).
+                  </li>
+                  <li>Add a Full Body / hand / foot constraint at that frame. Repeat on other frames.</li>
+                  <li>
+                    <span className="font-bold text-primary">Exit &amp; Regenerate</span>: Kimodo makes a new motion that meets the
+                    constraints.
+                  </li>
+                </ol>
+              </div>
+                        ) : rigMode === 'ik' ? (
               /* IK Effector Picker */
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -699,30 +932,54 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
         )}
       </div>
 
-      {/* Bottom Sticky Action Bar: Set Keyframe & Reset */}
+      {/* Bottom bar: editing workflow actions */}
       <div className="p-3 border-t border-outline-variant/30 bg-surface-container-high/40 flex items-center justify-between gap-2">
-        <button
-          onClick={handleResetPose}
-          className="px-3 py-2 rounded-xl border border-outline-variant/40 hover:bg-surface-container-highest text-on-surface font-mono text-xs flex items-center gap-1 transition-all"
-          title="Reset bone rotations to neutral rest pose"
-        >
-          <span className="material-symbols-outlined text-[14px]">restart_alt</span>
-          <span>Reset</span>
-        </button>
-
-        <button
-          onClick={handleAddOrUpdateKeyframe}
-          className="flex-1 py-2 px-3 rounded-xl bg-primary hover:bg-primary/90 text-background font-mono text-xs font-bold shadow-lg shadow-primary/20 flex items-center justify-center gap-1.5 transition-all"
-        >
-          <span className="material-symbols-outlined text-[16px]">
-            {currentKeyframe ? 'sync' : 'add_circle'}
-          </span>
-          <span>
-            {currentKeyframe
-              ? `Update Key @ ${currentTimelineTime.toFixed(2)}s`
-              : `+ Set Key @ ${currentTimelineTime.toFixed(2)}s`}
-          </span>
-        </button>
+        {isEditing ? (
+          <>
+            <button
+              onClick={handleResetPose}
+              className="px-3 py-2 rounded-xl border border-outline-variant/40 hover:bg-surface-container-highest text-on-surface font-mono text-xs flex items-center gap-1 transition-all"
+              title="Clear pose edits on this frame"
+            >
+              <span className="material-symbols-outlined text-[14px]">restart_alt</span>
+              <span>Reset</span>
+            </button>
+            <button
+              onClick={() => handleExitEditing(!!onRegenerate && keyframes.length > 0)}
+              disabled={isGenerating}
+              className="flex-1 py-2 px-3 rounded-xl bg-primary hover:bg-primary/90 text-background font-mono text-xs font-bold shadow-lg shadow-primary/20 flex items-center justify-center gap-1.5 transition-all disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined text-[16px]">
+                {onRegenerate && keyframes.length > 0 ? 'auto_awesome' : 'logout'}
+              </span>
+              <span>
+                {onRegenerate && keyframes.length > 0
+                  ? `Exit & Regenerate (${keyframes.length} constraint${keyframes.length === 1 ? '' : 's'})`
+                  : 'Exit Editing'}
+              </span>
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={handleEnterEditing}
+              className="px-3 py-2 rounded-xl border border-primary/60 text-primary font-mono text-xs font-bold flex items-center gap-1"
+            >
+              <span className="material-symbols-outlined text-[14px]">edit</span>
+              Enter Editing
+            </button>
+            {onRegenerate && keyframes.length > 0 && (
+              <button
+                onClick={onRegenerate}
+                disabled={isGenerating}
+                className="flex-1 py-2 px-3 rounded-xl bg-primary hover:bg-primary/90 text-background font-mono text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+                {isGenerating ? 'Generating…' : `Regenerate (${keyframes.length})`}
+              </button>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

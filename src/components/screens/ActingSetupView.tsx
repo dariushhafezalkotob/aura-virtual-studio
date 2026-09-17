@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Project, CharacterActor, WorkflowStage, ActorConstraint, MotionSegment } from '../../types';
+import { Project, CharacterActor, WorkflowStage, ActorConstraint, MotionSegment, DialogueScene } from '../../types';
 import { ThreeStage, TransformMode } from '../viewport/ThreeStage';
 import { KimodoService } from '../../services/kimodoService';
 import { ActorConstraintsPanel } from '../acting/ActorConstraintsPanel';
 import { ActorRigPosingPanel } from '../acting/ActorRigPosingPanel';
 import { MultiActorTimeline } from '../acting/MultiActorTimeline';
 import { loadOfficialSOMARig } from '../../services/somaSkeleton';
+import { DialoguePanel } from '../acting/DialoguePanel';
+import { buildActorSegments } from '../../services/dialogueScript';
+import { useDialogueAudioSync } from '../../services/dialogueService';
 
 interface ActingSetupViewProps {
   currentProject: Project;
@@ -80,7 +83,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   const [transitionFrames, setTransitionFrames] = useState<number>(5);
   const [renderMode, setRenderMode] = useState<'mesh' | 'skeleton' | 'hybrid'>('mesh');
   const [showViserEmbed, setShowViserEmbed] = useState<boolean>(false);
-  const [inspectorPanel, setInspectorPanel] = useState<'rig' | 'constraints' | null>('rig');
+  const [inspectorPanel, setInspectorPanel] = useState<'rig' | 'constraints' | 'dialogue' | null>('rig');
   const [showActorEditModal, setShowActorEditModal] = useState<boolean>(false);
 
   // Timeline playback state
@@ -93,7 +96,118 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const selectedActor = characters.find((c) => c.id === selectedActorId) || characters[0];
-  const maxDuration = Math.max(5.0, ...characters.map((c) => c.duration || 4.0));
+  const isPosing = !!selectedActor && !!selectedActor.activeRigMode && selectedActor.activeRigMode !== 'off';
+  const dialogue = currentProject.dialogue;
+  const maxDuration = Math.max(5.0, dialogue?.duration || 0, ...characters.map((c) => c.duration || 4.0));
+
+  // Async work (dialogue voice/motion generation) must build on the latest project, not the one
+  // captured when it started, or its saves would undo edits made while it ran.
+  const projectRef = useRef(currentProject);
+  projectRef.current = currentProject;
+
+  useDialogueAudioSync(dialogue?.audioUrl, isPlaying, timelineSec, playbackSpeed);
+
+  const [isGeneratingDialogueMotion, setIsGeneratingDialogueMotion] = useState(false);
+
+  const handleDialogueChange = (scene: DialogueScene) => {
+    onUpdateProject({ ...projectRef.current, dialogue: scene });
+  };
+
+  /** Writes each cast actor's talk/listen sequence, covering the whole scene. */
+  const applyDialogueSegments = (scene: DialogueScene): Project => {
+    const latest = projectRef.current;
+    const duration = scene.duration || Math.max(...scene.lines.map((l) => l.end)) + 1;
+    const chars = (latest.characters && latest.characters.length > 0 ? latest.characters : characters).map((c) => {
+      const member = scene.cast.find((m) => m.actorId === c.id);
+      return member ? { ...c, motionSegments: buildActorSegments(scene, member.speaker, duration) } : c;
+    });
+    // Always store the actors explicitly: a project still showing the built-in defaults has none saved.
+    const next = { ...latest, dialogue: scene, characters: chars };
+    onUpdateProject(next);
+    projectRef.current = next;
+    return next;
+  };
+
+  const handleApplyDialogue = (scene: DialogueScene) => {
+    applyDialogueSegments(scene);
+    setShowSegments(true);
+    setStatusText('✓ Actor timelines filled from the dialogue. Adjust any segment, then generate motion.');
+    setTimeout(() => setStatusText(null), 4000);
+  };
+
+  const handleGenerateDialogueMotion = async (scene: DialogueScene) => {
+    applyDialogueSegments(scene);
+    const cast = scene.cast.filter((m) => m.actorId);
+    setIsGeneratingDialogueMotion(true);
+    setIsGenerating(true);
+    setErrorText(null);
+    try {
+      for (let i = 0; i < cast.length; i++) {
+        const actor = (projectRef.current.characters || []).find((c) => c.id === cast[i].actorId);
+        if (!actor?.motionSegments?.length) continue;
+        setStatusText(`Generating ${actor.name}'s acting (${i + 1}/${cast.length})...`);
+        const sceneLength = actor.motionSegments.reduce((n, sg) => n + sg.duration, 0);
+        // Keep the actor's pose constraints and waypoints, timed against the whole scene.
+        const enabledConstraints = (actor.constraints || []).filter((c) => c.enabled);
+        if (actor.keyframePoses && actor.keyframePoses.length > 0) await loadOfficialSOMARig();
+        const compiled =
+          enabledConstraints.length > 0 || (actor.keyframePoses && actor.keyframePoses.length > 0)
+            ? KimodoService.compileKimodoConstraints(enabledConstraints, sceneLength, actor.position, 30, actor.keyframePoses, {
+                actorRotationY: actor.rotation?.[1] || 0,
+              })
+            : [];
+        const res = await KimodoService.generateMotion(
+          {
+            prompt: actor.motionSegments[0].prompt,
+            durationSeconds: sceneLength,
+            actorId: actor.id,
+            trajectoryMode: 'inplace',
+            speed: 1.0,
+            startPosition: actor.position,
+            actorRotationY: actor.rotation?.[1] || 0,
+            segments: actor.motionSegments.map((sg) => ({ prompt: sg.prompt, duration: sg.duration })),
+            numTransitionFrames: transitionFrames,
+            constraints: compiled.length > 0 ? compiled : undefined,
+          },
+          (st) => setStatusText(`${actor.name} (${i + 1}/${cast.length}): ${st}`)
+        );
+        const latest = projectRef.current;
+        const next = {
+          ...latest,
+          characters: (latest.characters || []).map((c) =>
+            c.id === actor.id
+              ? {
+                  ...c,
+                  motionPrompt: `Dialogue: ${cast[i].speaker}`,
+                  currentAnimation: res.animationName,
+                  duration: res.duration,
+                  trajectory: res.trajectory,
+                  motionData: res.motionData,
+                  bvhUrl: res.bvhUrl,
+                  customBoneRotations: {},
+                  ikTargets: undefined,
+                  customPoseTime: undefined,
+                  activeRigMode: 'off' as const,
+                }
+              : c
+          ),
+        };
+        onUpdateProject(next);
+        projectRef.current = next;
+      }
+      setTimelineSec(0);
+      setIsPlaying(true);
+      setStatusText('✓ Dialogue scene acted out. Playing from the start.');
+      setTimeout(() => setStatusText(null), 4000);
+    } catch (e: any) {
+      console.error('Dialogue motion generation failed:', e);
+      setErrorText(e.message || 'Kimodo generation encountered an issue.');
+      setStatusText(null);
+    } finally {
+      setIsGenerating(false);
+      setIsGeneratingDialogueMotion(false);
+    }
+  };
 
   // Update complete actor object (including rig mode, keyframes, poses)
   const handleUpdateActor = (updatedActor: CharacterActor) => {
@@ -303,9 +417,15 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
         await loadOfficialSOMARig();
       }
 
+      // The clip length is the multi-text sequence when there is one. Compiling against the single-
+      // prompt slider put every constraint past its value (4s by default) on that slider's last frame.
+      const activeSegments = segments.filter((sg) => sg.prompt.trim() && sg.duration > 0);
+      const clipDuration =
+        activeSegments.length > 0 ? activeSegments.reduce((n, sg) => n + sg.duration, 0) : durationSec;
+
       const compiledConstraints = KimodoService.compileKimodoConstraints(
         constraintsToUse,
-        durationSec,
+        clipDuration,
         selectedActor.position,
         30,
         selectedActor.keyframePoses,
@@ -326,8 +446,8 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
         .filter((c: any) => c?.type === 'root2d')
         .reduce((n: number, c: any) => n + (c.frame_indices?.length || 0), 0);
       const poseKeyCount = compiledConstraints
-        .filter((c: any) => c?.type === 'keyframe_poses')
-        .reduce((n: number, c: any) => n + (c.keyframes?.length || 0), 0);
+        .filter((c: any) => c?.type && c.type !== 'root2d')
+        .reduce((n: number, c: any) => n + (c.frame_indices?.length || 0), 0);
 
       const isDense = compiledConstraints.some(
         (c: any) => c?.type === 'root2d' && (c.frame_indices?.length || 0) > 8
@@ -339,7 +459,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
           : waypointCount > 0
           ? `${waypointCount} waypoint${waypointCount === 1 ? '' : 's'}`
           : null,
-        poseKeyCount > 0 ? `${poseKeyCount} pose key${poseKeyCount === 1 ? '' : 's'}` : null,
+        poseKeyCount > 0 ? `${poseKeyCount} pose constraint${poseKeyCount === 1 ? '' : 's'}` : null,
       ].filter(Boolean);
 
       setStatusText(
@@ -351,22 +471,25 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
       const res = await KimodoService.generateMotion(
         {
           prompt: promptToUse,
-          durationSeconds: durationSec,
+          durationSeconds: clipDuration,
           actorId: selectedActor.id,
           trajectoryMode,
           speed: speedMultiplier,
           startPosition: selectedActor.position,
           actorRotationY: selectedActor.rotation?.[1] || 0,
-          segments: segments
-            .filter((sg) => sg.prompt.trim() && sg.duration > 0)
-            .map((sg) => ({ prompt: sg.prompt, duration: sg.duration })),
+          segments: activeSegments.map((sg) => ({ prompt: sg.prompt, duration: sg.duration })),
           numTransitionFrames: transitionFrames,
           constraints: compiledConstraints.length > 0 ? compiledConstraints : undefined,
         },
         (s) => setStatusText(s)
       );
 
-      const updated = characters.map((c) => {
+      // Build on the latest project: generation takes a while, and this handler's closure is from when
+      // it started (e.g. still in editing mode). Pose edits are cleared so the new motion shows as
+      // generated; the constraints stay for the next round.
+      const latest = projectRef.current;
+      const latestChars = latest.characters && latest.characters.length > 0 ? latest.characters : characters;
+      const updated = latestChars.map((c) => {
         if (c.id === selectedActor.id) {
           return {
             ...c,
@@ -376,12 +499,16 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             trajectory: res.trajectory,
             motionData: res.motionData,
             bvhUrl: res.bvhUrl,
+            customBoneRotations: {},
+            ikTargets: undefined,
+            customPoseTime: undefined,
+            activeRigMode: 'off' as const,
           };
         }
         return c;
       });
 
-      onUpdateProject({ ...currentProject, characters: updated });
+      onUpdateProject({ ...latest, characters: updated });
       setIsPlaying(true);
       setTimelineSec(0);
       setStatusText(`✓ True Kimodo Neural Motion applied to ${selectedActor.name}`);
@@ -394,6 +521,10 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
       setIsGenerating(false);
     }
   };
+
+  // Always call the newest generate handler (the panel may call it right after an actor update).
+  const handleGenerateMotionRef = useRef(handleGenerateMotion);
+  handleGenerateMotionRef.current = handleGenerateMotion;
 
   // Add New Actor to Scene
   const handleAddActor = (type: 'soma' | 'g1') => {
@@ -445,12 +576,20 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             selectedAssetId={null}
             pointLights={currentProject.pointLights}
             characters={characters.map((c) => ({ ...c, renderMode }))}
-            selectedActorId={selectedActorId}
+            // While posing (FK/IK), the actor the Rig panel edits is always selected in the viewport.
+            // The panel falls back to the first actor when nothing is selected, so without this it
+            // could be in FK/IK mode on an actor whose handles weren't drawn at all.
+            selectedActorId={isPosing ? selectedActor.id : selectedActorId}
             transformMode={transformMode}
             lightIntensity={currentProject.lightIntensity}
             stageSpecularity={currentProject.stageSpecularity}
             environmentPreset={currentProject.environmentPreset}
-            onSelectActor={(id) => setSelectedActorId(id || '')}
+            onSelectActor={(id) => {
+              // A click on empty space or on the set used to deselect the actor mid-pose, which
+              // hid every FK/IK handle while the Rig panel still showed the pose mode.
+              if (!id && isPosing) return;
+              setSelectedActorId(id || '');
+            }}
             onUpdateActorTransform={handleUpdateActorTransform}
             onUpdateActor={handleUpdateActor}
             onSelectJoint={(jointIndex) =>
@@ -808,6 +947,28 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
 
           {/* Top Right: Rig & Pose Panel, Constraints Panel & Live Kimodo Viser Engine Toggle */}
           <div className="absolute top-md right-md z-30 flex items-center gap-xs">
+            {/* Dialogue Previs Toggle */}
+            <button
+              onClick={() => setInspectorPanel(inspectorPanel === 'dialogue' ? null : 'dialogue')}
+              className={`px-md py-sm rounded-xl font-label-caps text-xs tracking-wider border backdrop-blur-xl flex items-center gap-xs transition-all shadow-xl cursor-pointer ${
+                inspectorPanel === 'dialogue'
+                  ? 'bg-primary text-background border-primary font-medium'
+                  : 'bg-surface-container/90 border-outline-variant/40 text-on-surface-variant hover:text-primary'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[18px]">record_voice_over</span>
+              <span>DIALOGUE</span>
+              {dialogue && dialogue.lines.length > 0 && (
+                <span
+                  className={`text-[10px] px-1.5 py-[1px] rounded-full font-mono font-bold ${
+                    inspectorPanel === 'dialogue' ? 'bg-black text-primary' : 'bg-primary/20 text-primary'
+                  }`}
+                >
+                  {dialogue.lines.length}
+                </span>
+              )}
+            </button>
+
             {/* Rig & Pose Toggle */}
             <button
               onClick={() => setInspectorPanel(inspectorPanel === 'rig' ? null : 'rig')}
@@ -867,19 +1028,43 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
 
           {/* Floating Inspector Panel: 3D Rig & Pose Editor */}
           {inspectorPanel === 'rig' && selectedActor && (
-            <div className="absolute top-[68px] right-md z-30 w-80 max-h-[calc(100%-80px)] animate-fadeIn">
+            // Inspector panels are fixed to the window: the viewport they float over shrinks when the
+            // timeline/multi-text rows grow, which pushed them behind the timeline with no way to scroll.
+            <div className="fixed top-[128px] right-4 bottom-4 z-50 w-80 flex flex-col animate-fadeIn">
               <ActorRigPosingPanel
                 actor={selectedActor}
                 currentTimelineTime={timelineSec}
                 onUpdateActor={handleUpdateActor}
                 onJumpToTime={(t) => setTimelineSec(t)}
+                onPause={() => setIsPlaying(false)}
+                onRegenerate={() => handleGenerateMotionRef.current()}
+                isGenerating={isGenerating}
+              />
+            </div>
+          )}
+
+          {/* Floating Inspector Panel: Dialogue Previs */}
+          {inspectorPanel === 'dialogue' && (
+            // Fixed to the window, not the viewport: the viewport shrinks to a sliver when the
+            // multi-text row is open, which collapsed this panel to just its title bar.
+            <div className="fixed top-[128px] right-4 bottom-4 z-50 flex animate-fadeIn">
+              <DialoguePanel
+                scene={dialogue}
+                characters={characters}
+                timelineSec={timelineSec}
+                isGeneratingMotion={isGeneratingDialogueMotion}
+                onChange={handleDialogueChange}
+                onSeek={(t) => setTimelineSec(t)}
+                onApplyToActors={handleApplyDialogue}
+                onGenerateMotion={handleGenerateDialogueMotion}
+                onClose={() => setInspectorPanel(null)}
               />
             </div>
           )}
 
           {/* Floating Inspector Panel: Actor Constraints */}
           {inspectorPanel === 'constraints' && selectedActor && (
-            <div className="absolute top-[68px] right-md z-30 animate-fadeIn">
+            <div className="fixed top-[128px] right-4 bottom-4 z-50 flex flex-col animate-fadeIn">
               <ActorConstraintsPanel
                 actor={selectedActor}
                 allActors={characters}
@@ -1134,6 +1319,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
           onAddActor={(type) => handleAddActor(type)}
           onNavigateStage={onNavigateStage}
           onUpdateActorProps={handleUpdateActorProps}
+          dialogue={dialogue}
         />
       </div>
     </div>

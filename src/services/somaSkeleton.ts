@@ -267,6 +267,70 @@ export function getRestHipHeight(): number {
  * of the generated motion. Snapshotting the composed pose is what lets you key
  * on top of a walk the way the reference demo does.
  */
+/**
+ * Whether the actor's live pose edit (customBoneRotations / ikTargets) belongs to this time.
+ *
+ * The live edit is one scratch pose, pinned to `customPoseTime`. When a generated take or keyframes
+ * drive the pose over time, it only counts near that time; everywhere else the track owns the pose.
+ * Without a track, the edit IS the pose at every time.
+ */
+export function liveEditAppliesAt(
+  actor: {
+    motionData?: { rotations?: unknown[] } | null;
+    keyframePoses?: unknown[];
+    customPoseTime?: number;
+  },
+  timeSec: number
+): boolean {
+  const hasPoseTrack =
+    !!(actor.motionData && actor.motionData.rotations && actor.motionData.rotations.length > 0) ||
+    !!(actor.keyframePoses && actor.keyframePoses.length > 0);
+  return (
+    !hasPoseTrack ||
+    actor.customPoseTime === undefined ||
+    Math.abs(timeSec - actor.customPoseTime) <= POSE_EDIT_TIME_TOLERANCE
+  );
+}
+
+/**
+ * The pose the viewport is actually showing for an actor (after FK edits, IK and hip offset, before
+ * constraint post-effects), captured by the model each frame. "Set Key" stores this, so a key looks
+ * exactly like what was on screen; sampling the data instead missed IK results and the hip offset.
+ */
+export interface LiveActorPose {
+  time: number;
+  rotations: Record<number, [number, number, number, number]>;
+  hips: [number, number, number];
+  /** Edit state the frame was drawn from (see poseSourceOf); a snapshot of an older state is not reused. */
+  source: unknown[];
+}
+
+/**
+ * Identity of everything that shapes an actor's pose. The viewport receives shallow copies of actors,
+ * so compare these nested references rather than the actor object itself.
+ */
+export function poseSourceOf(actor: {
+  customBoneRotations?: unknown;
+  ikTargets?: unknown;
+  customPoseTime?: number;
+  keyframePoses?: unknown;
+  motionData?: unknown;
+  activeRigMode?: string;
+}): unknown[] {
+  return [actor.customBoneRotations, actor.ikTargets, actor.customPoseTime, actor.keyframePoses, actor.motionData, actor.activeRigMode];
+}
+
+export function samePoseSource(a: unknown[], b: unknown[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+const livePoses = new Map<string, LiveActorPose>();
+export function setLiveActorPose(actorId: string, pose: LiveActorPose) {
+  livePoses.set(actorId, pose);
+}
+export function getLiveActorPose(actorId: string): LiveActorPose | undefined {
+  return livePoses.get(actorId);
+}
+
 export function sampleActorPose(
   actor: {
     motionData?: { rotations?: number[][][]; num_frames?: number; duration?: number } | null;

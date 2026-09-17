@@ -268,7 +268,7 @@ export const ActorConstraintsPanel: React.FC<ActorConstraintsPanelProps> = ({
   ).length;
 
   return (
-    <div className="w-96 max-h-[82vh] bg-surface-container/95 border border-outline-variant/40 rounded-2xl backdrop-blur-2xl shadow-2xl flex flex-col overflow-hidden animate-fadeIn z-40 text-on-surface">
+    <div className="w-96 max-w-[calc(100vw-2rem)] max-h-full min-h-0 bg-surface-container/95 border border-outline-variant/40 rounded-2xl backdrop-blur-2xl shadow-2xl flex flex-col overflow-hidden animate-fadeIn z-40 text-on-surface">
       {/* Panel Header */}
       <div className="p-md bg-surface-container-high/60 border-b border-outline-variant/30 flex items-center justify-between">
         <div className="flex items-center gap-sm">
@@ -396,7 +396,7 @@ export const ActorConstraintsPanel: React.FC<ActorConstraintsPanelProps> = ({
       </div>
 
       {/* Constraints Scrollable Cards List */}
-      <div className="flex-1 overflow-y-auto p-md flex flex-col gap-sm max-h-[440px]">
+      <div className="flex-1 min-h-0 overflow-y-auto p-md flex flex-col gap-sm">
         {constraints.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-lg text-center gap-xs text-on-surface-variant/60">
             <span className="material-symbols-outlined text-[32px] text-outline-variant">

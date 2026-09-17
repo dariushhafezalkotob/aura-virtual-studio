@@ -13,6 +13,7 @@ import { ThreeStage } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
 import { CameraRemoteSocket } from '../../services/cameraRemoteService';
 import { stabilizeKeyframes } from '../../services/cameraStabilizer';
+import { useDialogueAudioSync } from '../../services/dialogueService';
 import qrcode from 'qrcode-generator';
 
 interface CameraRecordViewProps {
@@ -87,7 +88,11 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     : DEFAULT_INITIAL_ACTORS;
 
   const assets = currentProject.scenes || [];
-  const maxDuration = Math.max(5.0, ...characters.map((c) => c.duration || (c.motionData?.duration) || 4.0));
+  const maxDuration = Math.max(
+    5.0,
+    currentProject.dialogue?.duration || 0,
+    ...characters.map((c) => c.duration || (c.motionData?.duration) || 4.0)
+  );
 
   // Active Take Reference
   const activeTake = takes.find((t) => t.id === activeTakeId) || (takes.length > 0 ? takes[takes.length - 1] : null);
@@ -103,6 +108,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [timelineSec, setTimelineSec] = useState<number>(0);
   const [playbackSpeed] = useState<number>(1.0);
+  // Hear the scene's dialogue while recording or reviewing camera takes.
+  useDialogueAudioSync(currentProject.dialogue?.audioUrl, isPlaying, timelineSec, playbackSpeed);
 
   // Keyframes buffer collected while recording
   const recordedFramesRef = useRef<CameraKeyframe[]>([]);

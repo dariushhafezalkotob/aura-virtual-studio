@@ -186,10 +186,13 @@ export function sanitizeProjectsForLocalStorage(projects: Project[]): string {
  */
 export async function persistProjectsSafely(projects: Project[]): Promise<void> {
   // 1. Primary: Persist to local disk JSON file via Vite API
-  saveProjectsToDisk(projects).catch(() => {});
+  // Awaited (not fire-and-forget) so callers can keep saves from overlapping: each one holds a
+  // full serialised copy of every project in memory until the upload finishes.
+  const diskSave = saveProjectsToDisk(projects).catch(() => false);
 
   // 2. Secondary: High-capacity browser IndexedDB
   await saveProjectsToIndexedDB(projects);
+  await diskSave;
 
   // 3. Fallback: Lightweight metadata in localStorage
   try {
