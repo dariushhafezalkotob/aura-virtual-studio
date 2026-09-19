@@ -234,6 +234,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   );
   const [aiImagePrompt, setAiImagePrompt] = useState<string>('');
   const [isGeneratingAiImage, setIsGeneratingAiImage] = useState<boolean>(false);
+  const [generatedPreviewImages, setGeneratedPreviewImages] = useState<string[]>([]);
+  const [selectedPreviewImageIndex, setSelectedPreviewImageIndex] = useState<number>(0);
   const [generatedPreviewImage, setGeneratedPreviewImage] = useState<string | null>(null);
   const [generatedPreviewPrompt, setGeneratedPreviewPrompt] = useState<string>('');
 
@@ -554,10 +556,13 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
         }),
       });
       const data = await res.json();
-      if (!data.success || !data.imageBase64) {
+      if (!data.success || (!data.imageBase64 && (!data.images || data.images.length === 0))) {
         throw new Error(data.error || 'Failed to generate image');
       }
-      setGeneratedPreviewImage(data.imageBase64);
+      const imgs: string[] = data.images && data.images.length > 0 ? data.images : [data.imageBase64];
+      setGeneratedPreviewImages(imgs);
+      setSelectedPreviewImageIndex(0);
+      setGeneratedPreviewImage(imgs[0]);
       setGeneratedPreviewPrompt(aiImagePrompt.trim());
     } catch (err: any) {
       console.error(err);
@@ -2082,65 +2087,114 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             </button>
           </div>
 
-          {/* Generated Reference Image Preview & Accept Card */}
+          {/* Generated Reference Image Preview & 4-Candidate Selector Card */}
           {generatedPreviewImage && (
-            <div className="bg-surface-container-high/90 border-2 border-primary/60 p-md rounded-2xl flex flex-col sm:flex-row gap-md items-center shadow-2xl animate-fade-in">
-              <div className="relative w-44 h-44 rounded-xl overflow-hidden border border-primary/50 shadow-lg shrink-0 bg-background/50 flex items-center justify-center">
-                <img
-                  src={generatedPreviewImage}
-                  alt="Generated Reference"
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute top-1.5 left-1.5 bg-primary text-background font-label-caps text-[9px] font-bold px-2 py-[2px] rounded-full shadow-md flex items-center gap-1">
-                  <span className="material-symbols-outlined text-[12px]">auto_awesome</span>
-                  GEMINI 3.1 FLASH LITE
+            <div className="bg-surface-container-high/95 border-2 border-primary/60 p-md rounded-2xl flex flex-col gap-md shadow-2xl animate-fade-in">
+              <div className="flex items-center justify-between border-b border-outline-variant/30 pb-xs">
+                <div className="flex items-center gap-xs text-primary font-label-caps text-xs font-bold">
+                  <span className="material-symbols-outlined text-[18px]">collections</span>
+                  4 AI REFERENCE CANDIDATES — CHOOSE YOUR PREFERRED SHAPE & ANGLE
                 </div>
+                <span className="text-[10px] font-mono text-on-surface-variant font-medium">
+                  Active: #{selectedPreviewImageIndex + 1} of {generatedPreviewImages.length || 1}
+                </span>
               </div>
-              <div className="flex-1 flex flex-col justify-between h-full gap-sm w-full">
-                <div>
-                  <div className="flex items-center gap-xs text-primary font-label-caps text-xs font-bold">
-                    <span className="material-symbols-outlined text-[18px]">verified</span>
-                    AI REFERENCE IMAGE READY
-                  </div>
-                  <p className="text-xs text-on-surface-variant font-medium mt-1 line-clamp-3 italic bg-surface-container-low/60 p-xs rounded-lg border border-outline-variant/30">
-                    "{generatedPreviewPrompt}"
-                  </p>
+
+              {/* 4 Candidate Thumbnails Grid */}
+              {generatedPreviewImages.length > 1 && (
+                <div className="grid grid-cols-4 gap-2">
+                  {generatedPreviewImages.map((img, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => {
+                        setSelectedPreviewImageIndex(idx);
+                        setGeneratedPreviewImage(img);
+                      }}
+                      className={`relative aspect-square rounded-xl overflow-hidden border-2 transition-all cursor-pointer group bg-background/50 ${
+                        selectedPreviewImageIndex === idx
+                          ? 'border-primary ring-2 ring-primary/50 scale-[1.03] shadow-lg shadow-primary/20'
+                          : 'border-outline-variant/40 hover:border-outline-variant opacity-70 hover:opacity-100 hover:scale-[1.01]'
+                      }`}
+                    >
+                      <img src={img} alt={`Candidate ${idx + 1}`} className="w-full h-full object-cover" />
+                      <div className={`absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold font-mono shadow ${
+                        selectedPreviewImageIndex === idx ? 'bg-primary text-background' : 'bg-black/70 text-white'
+                      }`}>
+                        #{idx + 1}
+                      </div>
+                      {selectedPreviewImageIndex === idx && (
+                        <div className="absolute top-1.5 right-1.5 bg-primary text-background rounded-full w-4 h-4 flex items-center justify-center shadow">
+                          <span className="material-symbols-outlined text-[12px] font-bold">check</span>
+                        </div>
+                      )}
+                    </button>
+                  ))}
                 </div>
-                <div className="flex flex-col gap-xs pt-xs border-t border-outline-variant/20">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-xs">
-                    <button
-                      onClick={handleAcceptAndSendToTrellis}
-                      className="bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-label-caps text-xs font-bold py-2.5 px-sm rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow-lg hover:scale-[1.01]"
-                      title="TRELLIS extracts full-color PBR materials and textures into the 3D model"
-                    >
-                      <span className="material-symbols-outlined text-[18px]">palette</span>
-                      ✓ SEND TO TRELLIS (COLOR & TEXTURE)
-                    </button>
-                    <button
-                      onClick={handleAcceptAndSendToHunyuan}
-                      className="bg-surface-container-highest hover:bg-surface-container-high border border-outline-variant/60 text-on-surface font-label-caps text-xs font-semibold py-2.5 px-sm rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow hover:scale-[1.01]"
-                      title="Hunyuan3D-2 outputs clean high-poly geometry (shape only on ZeroGPU; can be painted in RoomBake)"
-                    >
-                      <span className="material-symbols-outlined text-[18px]">view_in_ar</span>
-                      ✓ SEND TO HUNYUAN (SHAPE ONLY)
-                    </button>
+              )}
+
+              {/* Active Large Preview & Actions */}
+              <div className="flex flex-col sm:flex-row gap-md items-center">
+                <div className="relative w-44 h-44 rounded-xl overflow-hidden border border-primary/50 shadow-lg shrink-0 bg-background/50 flex items-center justify-center">
+                  <img
+                    src={generatedPreviewImage}
+                    alt="Selected Reference Candidate"
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute top-1.5 left-1.5 bg-primary text-background font-label-caps text-[9px] font-bold px-2 py-[2px] rounded-full shadow-md flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[12px]">auto_awesome</span>
+                    GEMINI 3.1 #{selectedPreviewImageIndex + 1}
                   </div>
-                  <p className="text-[10px] text-on-surface-variant/80 text-center font-sans mt-[2px]">
-                    ✨ <strong>TRELLIS</strong> outputs full colors and textures directly. <strong>Hunyuan 3D</strong> outputs clean geometry (paint with RoomBake).
-                  </p>
-                  <div className="flex gap-xs mt-1">
-                    <button
-                      onClick={handleAcceptReferenceOnly}
-                      className="flex-1 text-on-surface hover:text-primary bg-surface-container hover:bg-surface-container-high border border-outline-variant/50 font-label-caps text-[10px] font-semibold py-1.5 px-sm rounded-lg transition-colors cursor-pointer text-center"
-                    >
-                      Accept as Reference Only
-                    </button>
-                    <button
-                      onClick={() => setGeneratedPreviewImage(null)}
-                      className="text-on-surface-variant hover:text-error bg-surface-container hover:bg-surface-container-high border border-outline-variant/50 font-label-caps text-[10px] py-1.5 px-sm rounded-lg transition-colors cursor-pointer"
-                    >
-                      ↺ Regenerate
-                    </button>
+                </div>
+                <div className="flex-1 flex flex-col justify-between h-full gap-sm w-full">
+                  <div>
+                    <div className="flex items-center gap-xs text-primary font-label-caps text-xs font-bold">
+                      <span className="material-symbols-outlined text-[18px]">verified</span>
+                      SELECTED CANDIDATE READY FOR 3D MESH RECONSTRUCTION
+                    </div>
+                    <p className="text-xs text-on-surface-variant font-medium mt-1 line-clamp-2 italic bg-surface-container-low/60 p-xs rounded-lg border border-outline-variant/30">
+                      "{generatedPreviewPrompt}"
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-xs pt-xs border-t border-outline-variant/20">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-xs">
+                      <button
+                        onClick={handleAcceptAndSendToTrellis}
+                        className="bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-label-caps text-xs font-bold py-2.5 px-sm rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow-lg hover:scale-[1.01]"
+                        title="TRELLIS extracts full-color PBR materials and textures into the 3D model"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">palette</span>
+                        ✓ SEND TO TRELLIS (COLOR & TEXTURE)
+                      </button>
+                      <button
+                        onClick={handleAcceptAndSendToHunyuan}
+                        className="bg-surface-container-highest hover:bg-surface-container-high border border-outline-variant/60 text-on-surface font-label-caps text-xs font-semibold py-2.5 px-sm rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow hover:scale-[1.01]"
+                        title="Hunyuan3D-2 outputs clean high-poly geometry"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">view_in_ar</span>
+                        ✓ SEND TO HUNYUAN (SHAPE ONLY)
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-on-surface-variant/80 text-center font-sans mt-[2px]">
+                      ✨ <strong>TRELLIS</strong> outputs full colors & textures. <strong>Hunyuan 3D</strong> outputs clean geometry.
+                    </p>
+                    <div className="flex gap-xs mt-1">
+                      <button
+                        onClick={handleAcceptReferenceOnly}
+                        className="flex-1 text-on-surface hover:text-primary bg-surface-container hover:bg-surface-container-high border border-outline-variant/50 font-label-caps text-[10px] font-semibold py-1.5 px-sm rounded-lg transition-colors cursor-pointer text-center"
+                      >
+                        Accept as Reference Only
+                      </button>
+                      <button
+                        onClick={() => {
+                          setGeneratedPreviewImage(null);
+                          setGeneratedPreviewImages([]);
+                        }}
+                        className="text-on-surface-variant hover:text-error bg-surface-container hover:bg-surface-container-high border border-outline-variant/50 font-label-caps text-[10px] py-1.5 px-sm rounded-lg transition-colors cursor-pointer"
+                      >
+                        ↺ Regenerate (4 New)
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

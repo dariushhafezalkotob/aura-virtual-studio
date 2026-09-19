@@ -788,60 +788,75 @@ function apiMiddlewarePlugin(): Plugin {
               const model = params.model || 'gemini-3.1-flash-lite-image';
               console.log(`[API /api/generate-image] Synthesizing reference image with ${model} (Key provided: ${!!geminiKey}): "${prompt}"...`);
 
-              let imageBase64: string | null = null;
+              let images: string[] = [];
 
               // 1. Try Gemini Multimodal / Image Generation if API key is present
               if (geminiKey) {
-                // Method A: Gemini generateContent with IMAGE output modality
+                // Method A: Gemini generateContent with IMAGE output modality (4 concurrent variations)
                 try {
-                  console.log(`[API /api/generate-image] Attempting Gemini ${model}:generateContent with pure black background isolate...`);
-                  const genRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      contents: [
-                        {
-                          parts: [
-                            { text: `Generate a single isolated 3D prop asset: ${prompt}. The object must be floating in the center on a pure solid pitch black background (#000000). Absolutely no floor, no ground, no shadow on ground, no table, no room, no walls, no environment. Only the standalone 3D object completely isolated against a black void background, photorealistic, crisp sharp edges, 8k resolution, cinematic studio lighting.` }
-                          ]
+                  console.log(`[API /api/generate-image] Attempting Gemini ${model}:generateContent (4 variations with pure black background isolate)...`);
+                  
+                  const callGeminiSingle = async (seedOffset: number, angleModifier: string) => {
+                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        contents: [
+                          {
+                            parts: [
+                              { text: `Generate a single isolated 3D prop asset: ${prompt}${angleModifier ? `, ${angleModifier}` : ''}. The object must be floating in the center on a pure solid pitch black background (#000000). Absolutely no floor, no ground, no shadow on ground, no table, no room, no walls, no environment. Only the standalone 3D object completely isolated against a black void background, photorealistic, crisp sharp edges, 8k resolution, cinematic studio lighting.` }
+                            ]
+                          }
+                        ],
+                        generationConfig: {
+                          responseModalities: ["IMAGE", "TEXT"],
+                          temperature: 0.7 + (seedOffset * 0.1),
                         }
-                      ],
-                      generationConfig: {
-                        responseModalities: ["IMAGE", "TEXT"]
-                      }
-                    }),
-                  });
-
-                  if (genRes.ok) {
-                    const genData = await genRes.json();
-                    const candidates = genData.candidates || [];
-                    for (const cand of candidates) {
-                      const parts = cand.content?.parts || [];
-                      for (const part of parts) {
-                        if (part.inlineData?.data) {
-                          const mime = part.inlineData.mimeType || 'image/png';
-                          imageBase64 = `data:${mime};base64,${part.inlineData.data}`;
-                          console.log(`[API /api/generate-image] Successfully generated image via Gemini ${model}!`);
-                          break;
+                      }),
+                    });
+                    if (res.ok) {
+                      const genData = await res.json();
+                      const candidates = genData.candidates || [];
+                      for (const cand of candidates) {
+                        const parts = cand.content?.parts || [];
+                        for (const part of parts) {
+                          if (part.inlineData?.data) {
+                            const mime = part.inlineData.mimeType || 'image/png';
+                            return `data:${mime};base64,${part.inlineData.data}`;
+                          }
                         }
                       }
-                      if (imageBase64) break;
                     }
-                  } else {
-                    const errTxt = await genRes.text();
-                    console.warn(`[Gemini ${model} generateContent failed]:`, errTxt);
+                    return null;
+                  };
+
+                  const variations = [
+                    'front 3/4 perspective hero angle',
+                    'alternate studio lighting and angle',
+                    'front eye-level view',
+                    'dynamic studio product showcase'
+                  ];
+
+                  const results = await Promise.allSettled(variations.map((v, i) => callGeminiSingle(i, v)));
+                  for (const r of results) {
+                    if (r.status === 'fulfilled' && r.value) {
+                      images.push(r.value);
+                    }
+                  }
+                  if (images.length > 0) {
+                    console.log(`[API /api/generate-image] Successfully generated ${images.length} candidate images via Gemini ${model}!`);
                   }
                 } catch (gErr) {
                   console.warn(`[Gemini ${model} call error]:`, gErr);
                 }
 
                 // Method B: Try Imagen 3.0 predict if generateContent was not available
-                if (!imageBase64) {
+                if (images.length === 0) {
                   try {
-                    console.log('[API /api/generate-image] Attempting imagen-3.0-generate-002:predict with black background isolate...');
+                    console.log('[API /api/generate-image] Attempting imagen-3.0-generate-002:predict with sampleCount: 4...');
                     const imgPayload = {
                       instances: [{ prompt: `${prompt}, single 3D prop asset centered, floating isolated on pure solid pitch black background (#000000), no floor, no ground plane, no shadow underneath, no table, no room, no walls, clean sharp silhouette, photorealistic, 8k resolution, octane render.` }],
-                      parameters: { sampleCount: 1, aspectRatio: '1:1', outputMimeType: 'image/png' },
+                      parameters: { sampleCount: 4, aspectRatio: '1:1', outputMimeType: 'image/png' },
                     };
                     const resG = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${geminiKey}`, {
                       method: 'POST',
@@ -850,10 +865,14 @@ function apiMiddlewarePlugin(): Plugin {
                     });
                     if (resG.ok) {
                       const j = await resG.json();
-                      const b64 = j.predictions?.[0]?.bytesBase64Encoded;
-                      if (b64) {
-                        imageBase64 = `data:image/png;base64,${b64}`;
-                        console.log('[API /api/generate-image] Successfully generated image via Imagen-3.0!');
+                      const preds = j.predictions || [];
+                      for (const p of preds) {
+                        if (p.bytesBase64Encoded) {
+                          images.push(`data:image/png;base64,${p.bytesBase64Encoded}`);
+                        }
+                      }
+                      if (images.length > 0) {
+                        console.log(`[API /api/generate-image] Successfully generated ${images.length} images via Imagen-3.0!`);
                       }
                     }
                   } catch (gErr) {
@@ -862,23 +881,38 @@ function apiMiddlewarePlugin(): Plugin {
                 }
               }
 
-              // 2. High-speed, high-quality Pollinations Flux / Turbo engine fallback
-              if (!imageBase64) {
-                console.log('[API /api/generate-image] Using Pollinations fast rendering engine fallback (black background isolate)...');
-                const encodedPrompt = encodeURIComponent(`${prompt}, single isolated 3d asset centered, floating on pure solid pitch black background, no floor, no ground, no table, no room, no walls, studio object isolate, sharp edges, octane render 8k`);
-                const seed = Math.floor(Math.random() * 1000000);
-                const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}`;
-                const fetchRes = await fetch(pollinationsUrl);
-                if (!fetchRes.ok) throw new Error(`Image generator returned ${fetchRes.status}`);
-                const arrayBuf = await fetchRes.arrayBuffer();
-                const b64 = Buffer.from(arrayBuf).toString('base64');
-                imageBase64 = `data:image/png;base64,${b64}`;
+              // 2. High-speed, high-quality Pollinations Flux / Turbo engine fallback (4 images)
+              if (images.length === 0) {
+                console.log('[API /api/generate-image] Using Pollinations fast rendering engine fallback (4 candidates)...');
+                const baseSeed = Math.floor(Math.random() * 1000000);
+                const fetchPollinations = async (idx: number) => {
+                  const seed = baseSeed + idx * 739;
+                  const encodedPrompt = encodeURIComponent(`${prompt}, single isolated 3d asset centered, floating on pure solid pitch black background, no floor, no ground, no table, no room, no walls, studio object isolate, sharp edges, octane render 8k`);
+                  const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}`;
+                  const fetchRes = await fetch(pollinationsUrl);
+                  if (!fetchRes.ok) return null;
+                  const arrayBuf = await fetchRes.arrayBuffer();
+                  const b64 = Buffer.from(arrayBuf).toString('base64');
+                  return `data:image/png;base64,${b64}`;
+                };
+
+                const polResults = await Promise.allSettled([0, 1, 2, 3].map(fetchPollinations));
+                for (const r of polResults) {
+                  if (r.status === 'fulfilled' && r.value) {
+                    images.push(r.value);
+                  }
+                }
+              }
+
+              if (images.length === 0) {
+                throw new Error('Failed to generate reference images. Please try again.');
               }
 
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify({
                 success: true,
-                imageBase64,
+                images,
+                imageBase64: images[0],
                 prompt,
                 model: geminiKey ? (model || 'imagen-3.0-generate-002') : 'pollinations-flux'
               }));
