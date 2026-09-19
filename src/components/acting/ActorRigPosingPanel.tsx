@@ -12,6 +12,10 @@ import {
   composeRestOffset,
   sampleActorPose,
   sampleActorRootMotion,
+  keyframeSpan,
+  absoluteHipsToBodySpace,
+  rootSpaceHipsToBodySpace,
+  bodySpaceHipsToRootSpace,
   getLiveActorPose,
   liveEditAppliesAt,
   poseSourceOf,
@@ -42,6 +46,8 @@ export interface PosePreset {
    * into the skeleton, which threw limbs to arbitrary angles.
    */
   boneRotations: Record<number, [number, number, number, number]>;
+  /** Optional pelvis position (body-group space). Seated/crouched poses need the hips lowered. */
+  hips?: [number, number, number];
 }
 
 export const POSE_PRESETS: Record<string, PosePreset> = {
@@ -170,6 +176,30 @@ export const POSE_PRESETS: Record<string, PosePreset> = {
       [SOMA.rightShin]: [-0.3, 0, 0, 0.95],
     },
   },
+  seated: {
+    id: 'seated',
+    name: 'Seated',
+    icon: 'airline_seat_recline_normal',
+    category: 'Action',
+    description: 'Sitting upright on a chair, hands resting on the knees',
+    // Thighs forward to horizontal, shins down, pelvis dropped to seat height.
+    boneRotations: {
+      [SOMA.leftLeg]: [-0.707, 0, 0, 0.707],
+      [SOMA.leftShin]: [0.707, 0, 0, 0.707],
+      [SOMA.leftFoot]: [-0.1, 0, 0, 0.995],
+      [SOMA.rightLeg]: [-0.707, 0, 0, 0.707],
+      [SOMA.rightShin]: [0.707, 0, 0, 0.707],
+      [SOMA.rightFoot]: [-0.1, 0, 0, 0.995],
+      [SOMA.spine1]: [0.05, 0, 0, 0.999],
+      [SOMA.chest]: [0.03, 0, 0, 0.9995],
+      [SOMA.leftArm]: [0.35, 0.05, -0.12, 0.93],
+      [SOMA.leftForeArm]: [0.3, 0.1, 0, 0.95],
+      [SOMA.rightArm]: [0.35, -0.05, 0.12, 0.93],
+      [SOMA.rightForeArm]: [0.3, -0.1, 0, 0.95],
+    },
+    hips: [0, 0.52, -0.03],
+  },
+
   deep_crouch: {
     id: 'deep_crouch',
     name: 'Crouch Stance',
@@ -220,6 +250,12 @@ export const IK_EFFECTORS: { id: IkEffectorType; name: string; icon: string; col
   { id: 'lookAt', name: 'Look-At Target (Head IK)', icon: 'visibility', color: '#af52de' },
 ];
 
+/**
+ * Copied constraint, kept outside the component so it survives closing the panel or switching
+ * actors: the same pose is often wanted on several frames, or on the other actor.
+ */
+let constraintClipboard: { pose: ActorKeyframePose; fromTime: number } | null = null;
+
 export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
   actor,
   currentTimelineTime,
@@ -237,7 +273,10 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
 
   // Check if there is an exact or near keyframe at current time
   const currentKeyframe = useMemo(() => {
-    return keyframes.find((k) => Math.abs(k.time - currentTimelineTime) < 0.15);
+    return keyframes.find((k) => {
+      const [start, end] = keyframeSpan(k);
+      return currentTimelineTime >= start - 0.15 && currentTimelineTime <= end + 0.15;
+    });
   }, [keyframes, currentTimelineTime]);
 
   // ===========================================================================
@@ -288,13 +327,30 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
     if (thenRegenerate) setTimeout(() => onRegenerate?.(), 0);
   };
 
+/**
+ * The pelvis stored on a constraint, in the body space the viewport poses in.
+ *
+ * Keys written since the pelvis became fully positionable carry all three axes in root space
+ * (`hipsSpace: 'root'`). Older keys only ever had a meaningful height, so their X/Z are passed
+ * through as the body-local values they always were.
+ */
+const keyHipsToBodySpace = (
+  a: CharacterActor,
+  kf: ActorKeyframePose
+): [number, number, number] | undefined => {
+  const h = kf.ikTargets?.hips;
+  if (!h) return undefined;
+  if (kf.hipsSpace === 'root') return rootSpaceHipsToBodySpace(a, kf.time, h);
+  return [h[0], absoluteHipsToBodySpace(a, kf.time, h[1]), h[2]];
+};
+
   /** Load a constraint's pose into the editor (Kimodo's "Snap to Constraint"). */
   const snapToConstraint = (kf: ActorKeyframePose, extra: Partial<CharacterActor> = {}) => {
     snappedKeyRef.current = `${kf.id}@${kf.time}`;
     onUpdateActor({
       ...actorRef.current,
       customBoneRotations: { ...(kf.boneRotations || {}) },
-      ikTargets: kf.ikTargets?.hips ? { hips: kf.ikTargets.hips } : undefined,
+      ikTargets: kf.ikTargets?.hips ? { hips: keyHipsToBodySpace(actorRef.current, kf)! } : undefined,
       customPoseTime: kf.time,
       // IK handles are re-seeded from the snapped pose when IK is entered again.
       activeRigMode: actorRef.current.activeRigMode === 'ik' ? 'fk' : actorRef.current.activeRigMode,
@@ -325,7 +381,9 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
     const attempt = () => {
       const live = liveHere();
       if (!live) {
-        if (tries++ < 10) timer = setTimeout(attempt, 50);
+        // Wait for the viewport to draw a frame with this edit (a few seconds, for slow machines or
+        // a backgrounded tab) before giving up.
+        if (tries++ < 40) timer = setTimeout(attempt, 100);
         return;
       }
       const a = actorRef.current;
@@ -339,7 +397,9 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
       onUpdateActor({
         ...a,
         keyframePoses: keys.map((k) =>
-          k.id === key.id ? { ...k, boneRotations: { ...live.rotations }, ikTargets: { hips: live.hips } } : k
+          k.id === key.id
+            ? { ...k, boneRotations: { ...live.rotations }, ikTargets: { hips: live.hips }, hipsSpace: 'root' as const }
+            : k
         ),
       });
     };
@@ -357,6 +417,75 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
       return;
     }
     handleAddOrUpdateKeyframe([kind]);
+  };
+
+  // Re-render when something is copied: the clipboard lives outside React so the Paste button has
+  // to be told to appear.
+  const [, setClipboardTick] = useState(0);
+
+  const handleCopyConstraint = (kf: ActorKeyframePose) => {
+    constraintClipboard = { pose: { ...kf }, fromTime: kf.time };
+    setClipboardTick((v) => v + 1);
+  };
+
+  /** Paste the copied pose at the playhead: onto the constraint here, or as a new one. */
+  const handlePasteConstraint = () => {
+    if (!constraintClipboard) return;
+    const src = constraintClipboard.pose;
+    const a = actorRef.current;
+    const roundedTime = parseFloat(currentTimelineTime.toFixed(2));
+    const keys = a.keyframePoses || [];
+    const existing = keys.find((k) => {
+      const [start, end] = keyframeSpan(k);
+      return roundedTime >= start - 0.15 && roundedTime <= end + 0.15;
+    });
+    const pasteTime = existing ? existing.time : roundedTime;
+    // The pelvis is copied as a SHAPE, not as a place on the floor: its height travels with the
+    // pose (a seated pelvis stays seated), but the ground position is re-anchored to wherever the
+    // take is at the paste time. Copying the ground position verbatim would drag the actor back to
+    // where the source pose happened to be standing.
+    const srcHips = src.ikTargets?.hips;
+    const pastedHips: [number, number, number] | undefined =
+      srcHips && src.hipsSpace === 'root'
+        ? (() => {
+            const shape = rootSpaceHipsToBodySpace(a, src.time, srcHips);
+            const here = bodySpaceHipsToRootSpace(a, pasteTime, shape);
+            return [here[0], srcHips[1], here[2]];
+          })()
+        : srcHips;
+
+    const pasted: ActorKeyframePose = {
+      id: existing ? existing.id : `kf_${Date.now()}`,
+      time: pasteTime,
+      endTime: existing ? existing.endTime : undefined,
+      boneRotations: { ...(src.boneRotations || {}) },
+      ikTargets: pastedHips ? { ...src.ikTargets, hips: pastedHips } : src.ikTargets ? { ...src.ikTargets } : {},
+      hipsSpace: src.hipsSpace,
+      rootPosition: [...a.position],
+      rootMotion: existing?.rootMotion ?? sampleActorRootMotion(a, roundedTime) ?? undefined,
+      poseName: `Pose @ ${roundedTime}s`,
+      constraintKinds: src.constraintKinds || ['fullbody'],
+    };
+    const nextKeys = [...keys.filter((k) => k.id !== pasted.id), pasted].sort((x, y) => x.time - y.time);
+    snappedKeyRef.current = `${pasted.id}@${pasted.time}`;
+    onUpdateActor({
+      ...a,
+      keyframePoses: nextKeys,
+      // Show the pasted pose straight away, as if it had just been posed here.
+      customBoneRotations: { ...(pasted.boneRotations || {}) },
+      ikTargets: pasted.ikTargets?.hips ? { hips: keyHipsToBodySpace(a, pasted)! } : undefined,
+      customPoseTime: pasted.time,
+    });
+  };
+
+  /** Hold a constraint's pose from its own time up to `until` (an interval), or back to one frame. */
+  const setHoldUntil = (id: string, until: number) => {
+    onUpdateActor({
+      ...actorRef.current,
+      keyframePoses: (actorRef.current.keyframePoses || []).map((k) =>
+        k.id === id ? { ...k, endTime: until > k.time + 0.05 ? parseFloat(until.toFixed(2)) : undefined } : k
+      ),
+    });
   };
 
   /** Kimodo's "Reset Constraint": put the generated pose back into the constraint at this frame. */
@@ -411,7 +540,18 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
         ...(editHere ? actor.customBoneRotations || {} : {}),
         ...resolved,
       },
-      ikTargets: editHere ? actor.ikTargets : undefined,
+      ikTargets: preset.hips
+        ? {
+            ...(editHere ? actor.ikTargets || {} : {}),
+            hips: [
+              preset.hips[0],
+              absoluteHipsToBodySpace(actor, currentTimelineTime, preset.hips[1]),
+              preset.hips[2],
+            ] as [number, number, number],
+          }
+        : editHere
+        ? actor.ikTargets
+        : undefined,
       customPoseTime: currentTimelineTime,
       activeRigMode: 'fk',
     });
@@ -438,17 +578,21 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
       id: currentKeyframe ? currentKeyframe.id : `kf_${Date.now()}`,
       time: roundedTime,
       boneRotations: fullPose || (actor.customBoneRotations ? { ...actor.customBoneRotations } : {}),
-      // Limb goals are already baked into boneRotations; keep only the hip offset, which rotations
-      // can't express (Kimodo reads its height, and key playback blends it).
+      // Limb goals are already baked into boneRotations; keep only the pelvis, which rotations can't
+      // express. Kimodo takes it as the root position of the constraint -- all three axes, so this
+      // is what says "the actor is HERE, on this frame" as well as how low the hips sit.
+      // Stored in root space: the live snapshot is already in it, a bare IK target is not.
       ikTargets: liveHere
         ? { hips: liveHere.hips }
         : liveEditAppliesAt(actor, roundedTime) && actor.ikTargets?.hips
-        ? { hips: actor.ikTargets.hips }
+        ? { hips: bodySpaceHipsToRootSpace(actor, roundedTime, actor.ikTargets.hips) }
         : {},
+      hipsSpace: 'root',
       rootPosition: [...actor.position],
       rootMotion: rootMotion || undefined,
       poseName: `Pose @ ${roundedTime}s`,
       constraintKinds: kinds || currentKeyframe?.constraintKinds || ['fullbody'],
+      endTime: currentKeyframe?.endTime,
     };
 
     const updatedKeys = keyframes.filter((k) => k.id !== newKey.id);
@@ -666,6 +810,57 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
                   })}
                 </div>
 
+                {constraintClipboard && (
+                  <button
+                    onClick={handlePasteConstraint}
+                    className="w-full py-1 rounded-md text-[10px] font-mono border border-primary/50 text-primary hover:bg-primary/10 flex items-center justify-center gap-1"
+                    title={`Paste the pose copied from ${constraintClipboard.fromTime.toFixed(2)}s at the playhead`}
+                  >
+                    <span className="material-symbols-outlined text-[13px]">content_paste</span>
+                    {currentKeyframe
+                      ? `Paste pose from ${constraintClipboard.fromTime.toFixed(2)}s onto this constraint`
+                      : `Paste constraint from ${constraintClipboard.fromTime.toFixed(2)}s here`}
+                  </button>
+                )}
+
+                {currentKeyframe && (
+                  <div className="flex items-center gap-1 text-[10px] font-mono text-on-surface-variant">
+                    <span title="Hold this pose over a range of frames instead of a single one">Hold until</span>
+                    <input
+                      type="number"
+                      step={0.1}
+                      min={currentKeyframe.time}
+                      value={(currentKeyframe.endTime ?? currentKeyframe.time).toFixed(2)}
+                      onChange={(e) => setHoldUntil(currentKeyframe.id, Number(e.target.value))}
+                      className="w-16 bg-background/60 border border-outline-variant/30 rounded px-1"
+                    />
+                    <span>s</span>
+                    <button
+                      onClick={() => setHoldUntil(currentKeyframe.id, currentTimelineTime)}
+                      className="px-1.5 py-0.5 rounded border border-outline-variant/40 hover:text-primary"
+                      title="Hold from this constraint up to the playhead"
+                    >
+                      to playhead
+                    </button>
+                    {currentKeyframe.endTime && currentKeyframe.endTime > currentKeyframe.time ? (
+                      <>
+                        <span className="text-primary">
+                          {(currentKeyframe.endTime - currentKeyframe.time).toFixed(2)}s hold
+                        </span>
+                        <button
+                          onClick={() => setHoldUntil(currentKeyframe.id, currentKeyframe.time)}
+                          className="px-1.5 py-0.5 rounded border border-outline-variant/40 hover:text-error"
+                          title="Back to a single frame"
+                        >
+                          clear
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-on-surface-variant/70">single frame</span>
+                    )}
+                  </div>
+                )}
+
                 {currentKeyframe ? (
                   <div className="flex gap-1">
                     <button
@@ -682,6 +877,13 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
                       title="Put the generated motion's pose back into this constraint"
                     >
                       Reset to generated
+                    </button>
+                    <button
+                      onClick={() => handleCopyConstraint(currentKeyframe)}
+                      className="px-2 py-1 rounded-md text-[10px] font-mono border border-outline-variant/40 hover:text-primary"
+                      title="Copy this constraint's pose, to paste on another frame"
+                    >
+                      <span className="material-symbols-outlined text-[13px]">content_copy</span>
                     </button>
                     <button
                       onClick={() => handleDeleteKeyframe(currentKeyframe.id)}
@@ -755,8 +957,10 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
                   Drag the 3D translation gizmo on the viewport effector to flex the limbs realistically.
                   The <span className="font-bold text-[#ffd60a] not-italic">Hip Root</span> ring moves the whole
                   body while the hands and feet stay planted &mdash; drop it to crouch, slide it to shift weight.
-                  To rotate the pelvis instead, switch to <span className="font-bold text-primary not-italic">FK</span>{' '}
-                  and pick <span className="font-mono not-italic">Pelvis (Root)</span>.
+                  Where you leave it is stored on the constraint in all three directions, so it also says where the
+                  actor stands. To rotate the pelvis instead, switch to{' '}
+                  <span className="font-bold text-primary not-italic">FK</span> and pick{' '}
+                  <span className="font-mono not-italic">Pelvis (Root)</span>.
                 </p>
               </div>
             ) : (
@@ -764,7 +968,7 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-mono text-on-surface-variant uppercase tracking-wider">
-                    Select Bone to Rotate:
+                    Select Bone to Pose:
                   </span>
                   <span className="text-[10px] font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded">
                     SOMA 77-Bone Skeleton
@@ -789,6 +993,14 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
                     </button>
                   ))}
                 </div>
+                {selectedJoint === SOMA.hips && (
+                  <p className="text-[10px] text-on-surface-variant/80 italic pt-1">
+                    The pelvis is the only bone that can also be <span className="font-bold not-italic text-primary">moved</span>:
+                    with <span className="font-mono not-italic">Move (W)</span> the gizmo slides the whole body, with{' '}
+                    <span className="font-mono not-italic">Rotate (E)</span> it turns it. Kimodo reads the pelvis position as
+                    where the actor stands on that frame, so a Full Body constraint holding it is what keeps them from drifting.
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -875,7 +1087,9 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
                         <span className="material-symbols-outlined text-primary text-[14px]">diamond</span>
                         <span>Key #{i + 1}</span>
                         <span className="text-[10px] text-on-surface-variant bg-surface-container-highest px-1.5 py-0.5 rounded">
-                          {kf.time.toFixed(2)}s
+                          {kf.endTime && kf.endTime > kf.time
+                            ? `${kf.time.toFixed(2)}–${kf.endTime.toFixed(2)}s`
+                            : `${kf.time.toFixed(2)}s`}
                         </span>
                       </button>
                       <div className="flex items-center gap-1">
@@ -885,6 +1099,13 @@ export const ActorRigPosingPanel: React.FC<ActorRigPosingPanelProps> = ({
                           title="Jump to keyframe"
                         >
                           <span className="material-symbols-outlined text-[14px]">directions_run</span>
+                        </button>
+                        <button
+                          onClick={() => handleCopyConstraint(kf)}
+                          className="p-1 text-on-surface-variant hover:text-primary transition-colors"
+                          title="Copy this constraint's pose"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">content_copy</span>
                         </button>
                         <button
                           onClick={() => handleDeleteKeyframe(kf.id)}

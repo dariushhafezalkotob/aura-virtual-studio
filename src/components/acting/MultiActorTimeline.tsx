@@ -17,6 +17,11 @@ interface MultiActorTimelineProps {
   onNavigateStage?: (stage: WorkflowStage) => void;
   onUpdateActorProps?: (actorId: string, updates: Partial<CharacterActor>) => void;
   dialogue?: DialogueScene;
+  /**
+   * Left-align instead of centring within the bottom bar. Set when the multi-text column is open,
+   * so the timeline sits right beside it rather than leaving the centring margin as a visible gap.
+   */
+  alignLeft?: boolean;
 }
 
 /**
@@ -65,6 +70,7 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
   onNavigateStage,
   onUpdateActorProps,
   dialogue,
+  alignLeft = false,
 }) => {
   const rulerRef = useRef<HTMLDivElement>(null);
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
@@ -210,7 +216,9 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
   }, [isScrubbing, handleSeekFromEvent]);
 
   return (
-    <div className="w-full max-w-6xl mx-auto flex flex-col bg-surface-container-low/90 rounded-2xl border border-outline-variant/30 shadow-2xl overflow-hidden backdrop-blur-xl">
+    <div
+      className={`w-full max-w-6xl ${alignLeft ? 'mr-auto' : 'mx-auto'} flex flex-col bg-surface-container-low/90 rounded-2xl border border-outline-variant/30 shadow-2xl overflow-hidden backdrop-blur-xl`}
+    >
       {/* 1. Multi-Track Sequencer Header & Ruler */}
       <div className="flex items-stretch border-b border-outline-variant/30 bg-surface-container-highest/50 select-none">
         {/* Left Column Header */}
@@ -667,12 +675,34 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
                     );
                   })}
 
-                {/* Keyframe Pose Diamond Markers */}
+                {/* Constraint markers: a diamond for one frame, a bar for a held interval */}
                 {actor.keyframePoses &&
                   actor.keyframePoses.map((kf, ki) => {
                     const kfLeftPct = (kf.time / maxDuration) * 100;
                     if (kfLeftPct > 100) return null;
-                    const isCurrentKey = Math.abs(timelineSec - kf.time) < 0.15;
+                    const holdEnd = kf.endTime && kf.endTime > kf.time ? Math.min(kf.endTime, maxDuration) : null;
+                    const isCurrentKey = holdEnd
+                      ? timelineSec >= kf.time - 0.15 && timelineSec <= holdEnd + 0.15
+                      : Math.abs(timelineSec - kf.time) < 0.15;
+                    if (holdEnd) {
+                      const widthPct = ((holdEnd - kf.time) / maxDuration) * 100;
+                      return (
+                        <div
+                          key={kf.id || ki}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSeek(kf.time);
+                          }}
+                          title={`Held constraint #${ki + 1}: ${kf.time.toFixed(2)}–${holdEnd.toFixed(2)}s — Click to jump`}
+                          className={`absolute top-1/2 -translate-y-1/2 h-3 rounded-sm border cursor-pointer z-20 transition-all ${
+                            isCurrentKey
+                              ? 'bg-amber-400/80 border-white shadow-amber-400/50'
+                              : 'bg-primary/70 border-background hover:bg-white/80'
+                          }`}
+                          style={{ left: `${kfLeftPct}%`, width: `${Math.max(0.6, widthPct)}%` }}
+                        />
+                      );
+                    }
                     return (
                       <div
                         key={kf.id || ki}

@@ -256,6 +256,16 @@ export function getRestHipHeight(): number {
 }
 
 /**
+ * Rest position of the pelvis in the rig. The hips are the root joint, so this is both its local
+ * and its world rest position; everything the user does to the pelvis is stored as an offset
+ * from here.
+ */
+export function getRestHipsLocal(): [number, number, number] {
+  const p = getCachedSomaRig()?.localTransforms[SOMA.hips]?.pos;
+  return p ? [p.x, p.y, p.z] : [0, getRestHipHeight(), 0];
+}
+
+/**
  * Resolves the full 77-joint pose an actor is showing at `timeSec`, composing
  * whatever the viewport is composing: generated motion, else keyframe blend,
  * else rest -- with any live pose edit laid on top.
@@ -331,10 +341,104 @@ export function getLiveActorPose(actorId: string): LiveActorPose | undefined {
   return livePoses.get(actorId);
 }
 
+/**
+ * Converts an ABSOLUTE pelvis height (what constraints store, and what Kimodo uses) into the
+ * body-space value the live edit / IK hip handle works in.
+ *
+ * While a generated take plays, the take's own hip height is applied as an offset on the body group,
+ * so a body-space value of 0.52 is not 0.52 above the floor. Mixing the two sank seated poses into
+ * the ground and stored standing pelvis heights on constraints.
+ */
+export function absoluteHipsToBodySpace(
+  actor: { motionData?: { root?: number[][]; num_frames?: number; duration?: number } | null; duration?: number },
+  timeSec: number,
+  absoluteY: number
+): number {
+  const root = sampleActorRootMotion(actor as any, timeSec);
+  if (!root) return absoluteY;
+  const restHipY = getRestHipHeight();
+  return absoluteY - (root[1] - restHipY);
+}
+
+type RootSampleActor = {
+  motionData?: { root?: number[][]; num_frames?: number; duration?: number } | null;
+  duration?: number;
+};
+
+/**
+ * ROOT space is where a pelvis lives on a saved constraint, and it is exactly what Kimodo's
+ * `root_positions` take: the take's own root track at that instant, plus however far the user moved
+ * the pelvis off its rest position. All three axes in one space.
+ *
+ * Height alone used to be stored this way (see absoluteHipsToBodySpace, which is this conversion for
+ * Y) while X and Z stayed body-local. Horizontal pelvis edits were therefore meaningless -- always
+ * ~0 whatever the actor was doing -- and the compiler dropped them, which is why nothing the user did
+ * to the pelvis could pin the actor's position.
+ */
+export function rootSpaceHipsToBodySpace(
+  actor: RootSampleActor,
+  timeSec: number,
+  hips: [number, number, number]
+): [number, number, number] {
+  const root = sampleActorRootMotion(actor as any, timeSec);
+  if (!root) return [hips[0], hips[1], hips[2]];
+  const rest = getRestHipsLocal();
+  return [rest[0] + hips[0] - root[0], rest[1] + hips[1] - root[1], rest[2] + hips[2] - root[2]];
+}
+
+/** The inverse: the body-space pelvis the viewport works in, expressed in root space for storage. */
+export function bodySpaceHipsToRootSpace(
+  actor: RootSampleActor,
+  timeSec: number,
+  hips: [number, number, number]
+): [number, number, number] {
+  const root = sampleActorRootMotion(actor as any, timeSec);
+  if (!root) return [hips[0], hips[1], hips[2]];
+  const rest = getRestHipsLocal();
+  return [root[0] + hips[0] - rest[0], root[1] + hips[1] - rest[1], root[2] + hips[2] - rest[2]];
+}
+
+/** Start/end of a key: equal for a single-frame key, a range for an interval constraint. */
+export function keyframeSpan(k: { time: number; endTime?: number }): [number, number] {
+  return [k.time, Math.max(k.time, k.endTime ?? k.time)];
+}
+
+/**
+ * Which keys drive the pose at this time, and how far between them. Inside an interval the key
+ * holds exactly; between keys the blend runs from the end of one to the start of the next.
+ */
+export function blendKeyframesAt<T extends { time: number; endTime?: number }>(
+  keyframes: T[],
+  timeSec: number
+): { prev: T; next: T; alpha: number } | null {
+  if (!keyframes || keyframes.length === 0) return null;
+  const sorted = [...keyframes].sort((a, b) => a.time - b.time);
+  const held = sorted.find((k) => {
+    const [s, e] = keyframeSpan(k);
+    return timeSec >= s && timeSec <= e;
+  });
+  if (held) return { prev: held, next: held, alpha: 0 };
+
+  let prev = sorted[0];
+  let next = sorted[sorted.length - 1];
+  for (const k of sorted) {
+    if (keyframeSpan(k)[1] <= timeSec) prev = k;
+    if (k.time >= timeSec) {
+      next = k;
+      break;
+    }
+  }
+  const from = keyframeSpan(prev)[1];
+  const to = next.time;
+  const span = to - from;
+  const t = span > 0.001 ? Math.min(1, Math.max(0, (timeSec - from) / span)) : 0;
+  return { prev, next, alpha: t * t * (3 - 2 * t) };
+}
+
 export function sampleActorPose(
   actor: {
     motionData?: { rotations?: number[][][]; num_frames?: number; duration?: number } | null;
-    keyframePoses?: { time: number; boneRotations?: Record<number, [number, number, number, number]> }[];
+    keyframePoses?: { time: number; endTime?: number; boneRotations?: Record<number, [number, number, number, number]> }[];
     customBoneRotations?: Record<number, [number, number, number, number]>;
     customPoseTime?: number;
     duration?: number;
@@ -374,16 +478,9 @@ export function sampleActorPose(
       out[b] = [q.x, q.y, q.z, q.w];
     }
   } else if (actor.keyframePoses && actor.keyframePoses.length > 0) {
-    const kfs = [...actor.keyframePoses].sort((a, b) => a.time - b.time);
-    let prev = kfs[0];
-    let next = kfs[kfs.length - 1];
-    for (const k of kfs) {
-      if (k.time <= timeSec) prev = k;
-      if (k.time >= timeSec) { next = k; break; }
-    }
-    const span = next.time - prev.time;
-    const t = span > 0.001 ? Math.min(1, Math.max(0, (timeSec - prev.time) / span)) : 0;
-    const ease = t * t * (3 - 2 * t);
+    const blend = blendKeyframesAt(actor.keyframePoses, timeSec)!;
+    const { prev, next } = blend;
+    const ease = blend.alpha;
 
     for (let b = 0; b < SOMA_BONE_COUNT; b++) {
       const a = prev.boneRotations?.[b];

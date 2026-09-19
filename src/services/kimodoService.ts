@@ -1,5 +1,5 @@
 import { MotionData, ActorConstraint } from '../types';
-import { buildFullBodyAxisAngle, getRestHipHeight } from './somaSkeleton';
+import { buildFullBodyAxisAngle, getRestHipHeight, getRestHipsLocal } from './somaSkeleton';
 
 export interface MotionGenerationParams {
   prompt: string;
@@ -385,13 +385,63 @@ export class KimodoService {
   /**
    * Compiles actor waypoint / destination constraints and keyframe poses into official Kimodo conditioning dictionaries
    */
+
+  /**
+   * Joins a freshly generated take onto the end of an existing one ("Continue from last frame").
+   *
+   * The new take always starts at its own origin, so its ground track is shifted to carry on from
+   * where the previous take ended. Hip height stays absolute (Kimodo outputs it that way), and the
+   * new take's first frame is dropped: it duplicates the pose it was constrained to.
+   */
+  static appendMotion(base: MotionData, next: MotionData): MotionData {
+    const baseRoot = base.root || [];
+    const nextRoot = next.root || [];
+    const last = baseRoot[baseRoot.length - 1] || [0, 0, 0];
+    const start = nextRoot[0] || [0, 0, 0];
+
+    const shifted: [number, number, number][] = nextRoot
+      .slice(1)
+      .map((r) => [r[0] - start[0] + last[0], r[1], r[2] - start[2] + last[2]]);
+
+    const baseTraj = base.trajectory || [];
+    const nextTraj = next.trajectory || [];
+    const lastTraj = baseTraj[baseTraj.length - 1] || [0, 0, 0];
+    const startTraj = nextTraj[0] || [0, 0, 0];
+    const shiftedTraj: [number, number, number][] = nextTraj
+      .slice(1)
+      .map((t) => [t[0] - startTraj[0] + lastTraj[0], t[1], t[2] - startTraj[2] + lastTraj[2]]);
+
+    const rotations = [...(base.rotations || []), ...(next.rotations || []).slice(1)];
+    const fps = base.fps || next.fps || 30;
+    return {
+      fps,
+      num_frames: rotations.length,
+      duration: (base.duration || 0) + (next.duration || 0),
+      root: [...baseRoot, ...shifted],
+      rotations,
+      trajectory: [...baseTraj, ...shiftedTraj],
+      // The BVH text belongs to a single take and can't be concatenated meaningfully.
+      bvh: undefined,
+      prompt: [base.prompt, next.prompt].filter(Boolean).join(' -> '),
+    };
+  }
+
   static compileKimodoConstraints(
     constraints: ActorConstraint[],
     durationSeconds: number,
     startPosition: [number, number, number] = [0, 0, 0],
     fps: number = 30,
     keyframePoses?: any[],
-    options?: { densePath?: [number, number, number][]; actorRotationY?: number }
+    options?: {
+      densePath?: [number, number, number][];
+      actorRotationY?: number;
+      /**
+       * Frame 0 of the take's own root track. root2d points are relative to the start of the take,
+       * while a key's pelvis is in the take's raw root space, so the two only line up once this is
+       * taken off. Kimodo canonicalises the root to (0,0) on frame 0, so it is usually ~zero.
+       */
+       rootOrigin?: [number, number, number];
+    }
   ): any[] {
     const rotY = options?.actorRotationY || 0;
     const toLocal = (wx: number, wz: number): [number, number] =>
@@ -527,6 +577,7 @@ export class KimodoService {
     // _convert_constraint_local_rots_to_skeleton does 77 -> 30 itself.
     if (keyframePoses && keyframePoses.length > 0) {
       const restHipY = getRestHipHeight();
+      const restHips = getRestHipsLocal();
 
       const byKind = new Map<
         string,
@@ -537,28 +588,45 @@ export class KimodoService {
         const localJointsRot = buildFullBodyAxisAngle(kf.boneRotations);
         if (!localJointsRot) continue;
 
-        const frameIdx = Math.min(totalFrames - 1, Math.max(0, Math.round((kf.time || 0) * fps)));
-        // Prefer the hip position sampled from the generated take. The fallback
-        // is the actor's scene placement, which is static for the whole take --
-        // using it pins the root back at the origin on that frame and cancels
-        // whatever locomotion was just generated.
+        // A constraint past the end of the clip isn't clamped onto the last frame: that would pin a
+        // pose at a moment the user never chose. It is simply not sent.
+        if ((kf.time || 0) > durationSeconds + 0.05) continue;
+        const clamp = (t: number) => Math.min(totalFrames - 1, Math.max(0, Math.round(t * fps)));
+        const frameIdx = clamp(kf.time || 0);
+        // Interval constraint: the same pose on EVERY frame of the run. Sampling it sparsely (every
+        // 3rd frame) left the frames in between unconstrained, and the limb was tugged back at each
+        // pinned frame -- visible as a judder, worst on foot constraints.
+        const endIdx = kf.endTime && kf.endTime > kf.time ? clamp(kf.endTime) : frameIdx;
+        const holdFrames: number[] = [];
+        for (let f = frameIdx; f <= endIdx && endIdx > frameIdx; f++) holdFrames.push(f);
+        // Where the pelvis is on this frame. A key written with hipsSpace 'root' carries all three
+        // axes in exactly this space, so a pelvis the user moved sideways or forward is what gets
+        // sent -- that is what pins the actor's position instead of just its height. Older keys only
+        // ever had a meaningful height, so their X/Z fall back to the take's own root track.
+        //
+        // The fallback when there is no take at all is the actor's scene placement, which is static
+        // for the whole take -- using it in place of the take's root would pin the character back at
+        // the origin on that frame and cancel whatever locomotion was just generated.
+        const hips = kf.ikTargets?.hips;
+        const hipsRoot = kf.hipsSpace === 'root' && hips ? (hips as [number, number, number]) : null;
         let rootPosition: [number, number, number];
         if (kf.rootMotion) {
           rootPosition = [
-            parseFloat(kf.rootMotion[0].toFixed(4)),
-            parseFloat((kf.ikTargets?.hips?.[1] ?? kf.rootMotion[1]).toFixed(4)),
-            parseFloat(kf.rootMotion[2].toFixed(4)),
+            parseFloat((hipsRoot ? hipsRoot[0] : kf.rootMotion[0]).toFixed(4)),
+            parseFloat((hips?.[1] ?? kf.rootMotion[1]).toFixed(4)),
+            parseFloat((hipsRoot ? hipsRoot[2] : kf.rootMotion[2]).toFixed(4)),
           ];
         } else {
           const kfRoot = kf.rootPosition || startPosition;
+          // With no take to anchor to, a root-space pelvis is only an offset from its rest position.
           rootPosition = [
-            parseFloat((kfRoot[0] - startPosition[0]).toFixed(4)),
-            parseFloat((kf.ikTargets?.hips?.[1] ?? restHipY).toFixed(4)),
-            parseFloat((kfRoot[2] - startPosition[2]).toFixed(4)),
+            parseFloat((kfRoot[0] - startPosition[0] + (hipsRoot ? hipsRoot[0] - restHips[0] : 0)).toFixed(4)),
+            parseFloat((hips?.[1] ?? restHipY).toFixed(4)),
+            parseFloat((kfRoot[2] - startPosition[2] + (hipsRoot ? hipsRoot[2] - restHips[2] : 0)).toFixed(4)),
           ];
         }
 
-        const entry = { frameIdx, localJointsRot, rootPosition };
+        const frames = holdFrames.length > 0 ? holdFrames : [frameIdx];
 
         const kinds: string[] =
           Array.isArray(kf.constraintKinds) && kf.constraintKinds.length > 0
@@ -567,7 +635,7 @@ export class KimodoService {
 
         for (const kind of kinds) {
           if (!byKind.has(kind)) byKind.set(kind, []);
-          byKind.get(kind)!.push(entry);
+          for (const f of frames) byKind.get(kind)!.push({ frameIdx: f, localJointsRot, rootPosition });
         }
       }
 
@@ -583,6 +651,66 @@ export class KimodoService {
           local_joints_rot: deduped.map((e) => e.localJointsRot),
           root_positions: deduped.map((e) => e.rootPosition),
         });
+      }
+    }
+
+    // 3. A HELD FULL-BODY POSE ALSO PINS THE GROUND TRACK
+    //
+    // root_positions inside a pose constraint is only as strong as the pose solve, and in practice
+    // the actor still creeps. root2d is Kimodo's dedicated ground-track constraint -- the same one
+    // the waypoint path uses -- so a "stand still here" hold is stated in the terms the model
+    // actually holds to.
+    //
+    // Only full-body holds. A held hand or foot during a walk must leave the root free, or the
+    // locomotion would be cancelled by the very constraint that was meant to steady one limb.
+    // Skipped entirely when the user authored a dense path: that path IS the ground track.
+    if (!densePath && keyframePoses && keyframePoses.length > 0) {
+      const origin = options?.rootOrigin || [0, 0, 0];
+      const clamp = (t: number) => Math.min(totalFrames - 1, Math.max(0, Math.round(t * fps)));
+      const holds = new Map<number, [number, number]>();
+
+      for (const kf of keyframePoses as any[]) {
+        const kinds: string[] =
+          Array.isArray(kf.constraintKinds) && kf.constraintKinds.length > 0 ? kf.constraintKinds : ['fullbody'];
+        if (!kinds.includes('fullbody')) continue;
+        if (kf.hipsSpace !== 'root' || !kf.ikTargets?.hips) continue;
+        if (!(kf.endTime > kf.time)) continue;
+        if ((kf.time || 0) > durationSeconds + 0.05) continue;
+
+        const startIdx = clamp(kf.time || 0);
+        const endIdx = clamp(Math.min(kf.endTime, durationSeconds));
+        const pt: [number, number] = [
+          parseFloat((kf.ikTargets.hips[0] - origin[0]).toFixed(4)),
+          parseFloat((kf.ikTargets.hips[2] - origin[2]).toFixed(4)),
+        ];
+        for (let f = startIdx; f <= endIdx; f++) holds.set(f, pt);
+      }
+
+      if (holds.size > 0) {
+        const existing = compiledList.find((e) => e.type === 'root2d');
+        if (existing) {
+          // Merge into the waypoint path rather than sending a second, contradictory root2d: the
+          // hold wins on its own frames, the waypoints keep the rest.
+          const merged = new Map<number, [number, number]>();
+          existing.frame_indices.forEach((f: number, i: number) => merged.set(f, existing.smooth_root_2d[i]));
+          const addsFrames = [...holds.keys()].some((f) => !merged.has(f));
+          for (const [f, pt] of holds) merged.set(f, pt);
+          const frames = [...merged.keys()].sort((a, b) => a - b);
+          existing.frame_indices = frames;
+          existing.smooth_root_2d = frames.map((f) => merged.get(f)!);
+          // global_root_heading must line up with frame_indices one for one, and a held frame has
+          // no path tangent to take a heading from.
+          if (addsFrames) delete existing.global_root_heading;
+        } else {
+          // Frame 0 anchors the track at the start, which is where Kimodo canonicalises it anyway.
+          const frames = [...holds.keys()].sort((a, b) => a - b);
+          const withStart = frames[0] === 0 ? frames : [0, ...frames];
+          compiledList.push({
+            type: 'root2d',
+            frame_indices: withStart,
+            smooth_root_2d: withStart.map((f) => holds.get(f) ?? [0, 0]),
+          });
+        }
       }
     }
 

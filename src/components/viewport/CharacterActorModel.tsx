@@ -22,9 +22,12 @@ import {
   IkChainId,
   SOMARigCache,
   loadOfficialSOMARig,
+  blendKeyframesAt,
   liveEditAppliesAt,
   setLiveActorPose,
   poseSourceOf,
+  sampleActorRootMotion,
+  getRestHipsLocal,
 } from '../../services/somaSkeleton';
 
 interface CharacterActorModelProps {
@@ -337,6 +340,8 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
   // React commit (e.g. the timeline ticking), which yanked the handle back to
   // its stored value mid-drag.
   const ikDragRef = useRef<{ eff: IkEffectorType; pos: THREE.Vector3 } | null>(null);
+  /** Set while the pelvis is being dragged in FK, so the rig pass leaves the bone to the gizmo. */
+  const hipsDragRef = useRef<THREE.Vector3 | null>(null);
 
   const {
     position,
@@ -519,19 +524,9 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     const kfs = actor.keyframePoses;
     const rest = rigDataRef.current?.localTransforms[SOMA.hips]?.pos;
     if (hasMotion || !kfs || kfs.length === 0 || !rest || !kfs.some((k) => k.ikTargets?.hips)) return null;
-    const sorted = [...kfs].sort((a, b) => a.time - b.time);
-    let prev = sorted[0];
-    let next = sorted[sorted.length - 1];
-    for (const k of sorted) {
-      if (k.time <= time) prev = k;
-      if (k.time >= time) {
-        next = k;
-        break;
-      }
-    }
-    const span = next.time - prev.time;
-    const a = span > 0.001 ? THREE.MathUtils.clamp((time - prev.time) / span, 0, 1) : 0;
-    const e = a * a * (3 - 2 * a);
+    const blend = blendKeyframesAt(kfs, time)!;
+    const { prev, next } = blend;
+    const e = blend.alpha;
     const h0 = prev.ikTargets?.hips ? new THREE.Vector3(...prev.ikTargets.hips) : rest.clone();
     const h1 = next.ikTargets?.hips ? new THREE.Vector3(...next.ikTargets.hips) : rest.clone();
     return h0.lerp(h1, e);
@@ -673,8 +668,12 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
         const ry = THREE.MathUtils.lerp(r0[1], r1[1], alpha);
         const rz = THREE.MathUtils.lerp(r0[2], r1[2], alpha);
 
+        // X/Z are relative: the actor's scene placement is where the take starts from.
+        // Y is ABSOLUTE hip height in Kimodo's output, so it must be used as-is -- taking it
+        // relative to frame 0 drew a seated take (hips ~0.5m) at standing height, feet in the air.
+        const restHipY = rigDataRef.current?.restWorldPositions[SOMA.hips]?.y ?? ry;
         const dx = rx - initRoot[0];
-        const dy = ry - initRoot[1];
+        const dy = ry - restHipY;
         const dz = rz - initRoot[2];
 
         bodyGroupRef.current.position.set(dx, dy, dz);
@@ -698,24 +697,12 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
         }
       }
     } else if (actor.keyframePoses && actor.keyframePoses.length > 0) {
-      // B. Timeline Keyframe Pose Blending (authoring preview)
-      const kfs = [...actor.keyframePoses].sort((a, b) => a.time - b.time);
-      let prevKf = kfs[0];
-      let nextKf = kfs[kfs.length - 1];
-
-      for (let i = 0; i < kfs.length; i++) {
-        if (kfs[i].time <= currentTimelineTime) {
-          prevKf = kfs[i];
-        }
-        if (kfs[i].time >= currentTimelineTime) {
-          nextKf = kfs[i];
-          break;
-        }
-      }
-
-      const span = nextKf.time - prevKf.time;
-      const alpha = span > 0.001 ? THREE.MathUtils.clamp((currentTimelineTime - prevKf.time) / span, 0, 1) : 0;
-      const easeAlpha = alpha * alpha * (3 - 2 * alpha);
+      // B. Timeline Keyframe Pose Blending (authoring preview). Inside an interval constraint the
+      // key holds exactly; between keys it eases from the end of one to the start of the next.
+      const blend = blendKeyframesAt(actor.keyframePoses, currentTimelineTime)!;
+      const prevKf = blend.prev;
+      const nextKf = blend.next;
+      const easeAlpha = blend.alpha;
 
       // Slerp bone rotations
       for (let b = 0; b < bones.length; b++) {
@@ -811,7 +798,11 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
       const storedHips = poseEditApplies ? actor.ikTargets?.hips : undefined;
       const keyHips = !poseEditApplies || !storedHips ? keyframeHipsAt(currentTimelineTime) : null;
 
-      if (activeRigMode === 'ik' && poseEditApplies && hipsHandle && hipsHandle.parent) {
+      if (hipsDragRef.current) {
+        // Mid-drag in FK: the gizmo is writing the bone directly, so re-applying the stored
+        // position here would snap it back under the pointer every frame.
+        hipsDragRef.current.copy(hipsBone.position);
+      } else if (activeRigMode === 'ik' && poseEditApplies && hipsHandle && hipsHandle.parent) {
         // Handle position is already in body-group space, same as the bone's.
         hipsBone.position.copy(hipsHandle.position);
       } else if (storedHips) {
@@ -910,6 +901,20 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     // Record the pose on screen (before constraint post-effects, which re-apply on playback) so
     // "Set Key" stores exactly this. Only while authoring, to avoid per-frame allocations in playback.
     if (isSelected && !isPlaying && hipsBone) {
+      const takeRoot = sampleActorRootMotion(actor, currentTimelineTime);
+      const restHips = getRestHipsLocal();
+      const liveHipsRootSpace = (p: THREE.Vector3): [number, number, number] =>
+        takeRoot
+          ? [
+              takeRoot[0] + p.x - restHips[0],
+              takeRoot[1] + p.y - restHips[1],
+              takeRoot[2] + p.z - restHips[2],
+            ]
+          : [
+              p.x + (bodyGroup?.position.x ?? 0),
+              p.y + (bodyGroup?.position.y ?? 0),
+              p.z + (bodyGroup?.position.z ?? 0),
+            ];
       const rotations: Record<number, [number, number, number, number]> = {};
       for (let b = 0; b < bones.length; b++) {
         const q = bones[b].quaternion;
@@ -918,7 +923,12 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
       setLiveActorPose(actor.id, {
         time: currentTimelineTime,
         rotations,
-        hips: [hipsBone.position.x, hipsBone.position.y, hipsBone.position.z],
+        // ROOT space on all three axes: the take's own root at this instant plus however far the
+        // pelvis has been moved off its rest position. That is what Kimodo's constraints take.
+        // During a generated take the travel lives in the body group's offset, not the hip bone --
+        // reading the bone alone stored a standing pelvis (~1.0m) on constraints taken from a seated
+        // take, and left every sideways edit reading as 0.
+        hips: liveHipsRootSpace(hipsBone.position),
         source: poseSourceOf(actor),
       });
     }
@@ -1029,6 +1039,31 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
     }
   };
 
+  /**
+   * Pelvis moved with the FK gizmo. It commits to the same place the IK hip ring does
+   * (`ikTargets.hips`, body-group space), so both controls and the constraint compiler read one
+   * value -- the pelvis is the only joint whose position, not just rotation, means anything to
+   * Kimodo.
+   */
+  const handleHipsTransformEnd = () => {
+    markTransformDragEnd();
+    setTimeout(() => onDraggingChange(false), 200);
+    const bone = bonesRef.current[SOMA.hips];
+    const src = hipsDragRef.current ?? bone?.position;
+    hipsDragRef.current = null;
+    if (!src || !onUpdateActor) return;
+    const editHere = liveEditAppliesAt(actor, currentTimelineTime);
+    onUpdateActor({
+      ...actor,
+      ikTargets: {
+        ...(editHere ? actor.ikTargets || {} : {}),
+        hips: [src.x, src.y, src.z],
+      },
+      ...(editHere ? {} : { customBoneRotations: {} }),
+      customPoseTime: currentTimelineTime,
+    });
+  };
+
   const isRobot = actor.characterType === 'g1';
   const jointColor = color || (isRobot ? '#ff9500' : '#00ffcc');
   const showSkeletonRig = isSelected && (activeRigMode !== 'off' || renderMode === 'skeleton' || renderMode === 'hybrid');
@@ -1036,6 +1071,10 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
   const selectedBone = isRigReady && selectedJointIndex !== null && bonesRef.current[selectedJointIndex]
     ? bonesRef.current[selectedJointIndex]
     : null;
+
+  // The pelvis is the skeleton root: with the Move tool selected its gizmo translates the body.
+  // Every other joint only ever rotates, and so does the pelvis under the Rotate tool.
+  const isPelvisMove = selectedJointIndex === SOMA.hips && transformMode === 'translate';
 
   // handleEpoch forces this to be re-read after the handle groups mount; a ref
   // assigned during a commit is still null on the render that assigned it, so
@@ -1280,8 +1319,28 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
         />
       )}
 
+      {/* 2a. FK Pelvis Translation Gizmo -- the toolbar's Move tool on the pelvis moves the whole
+           body instead of rotating it. Kimodo animates the pelvis in three directions, so without
+           this the app could only ever say which way the hips face, never where they are. */}
+      {isSelected && activeRigMode === 'fk' && selectedBone && isPelvisMove && (
+        <TransformControls
+          object={selectedBone}
+          mode="translate"
+          size={0.6}
+          onMouseDown={() => {
+            markTransformDragStart();
+            onDraggingChange(true);
+            hipsDragRef.current = selectedBone.position.clone();
+          }}
+          onObjectChange={() => {
+            if (hipsDragRef.current) hipsDragRef.current.copy(selectedBone.position);
+          }}
+          onMouseUp={handleHipsTransformEnd}
+        />
+      )}
+
       {/* 2. FK Bone Joint Rotation Gizmo (When activeRigMode is 'fk') */}
-      {isSelected && activeRigMode === 'fk' && selectedBone && (
+      {isSelected && activeRigMode === 'fk' && selectedBone && !isPelvisMove && (
         <TransformControls
           object={selectedBone}
           mode="rotate"

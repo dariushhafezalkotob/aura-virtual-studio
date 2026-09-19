@@ -239,6 +239,12 @@ export const KEYFRAME_CONSTRAINT_KINDS: {
 export interface ActorKeyframePose {
   id: string;
   time: number; // timestamp in seconds on timeline
+  /**
+   * Hold the pose until this time (an interval constraint). Absent or <= `time` means a single
+   * frame. Kimodo takes a list of frame indices, so an interval is the same pose on every frame of
+   * the range -- that is what keeps e.g. a sitting posture from drifting between keys.
+   */
+  endTime?: number;
   boneRotations?: Record<number, [number, number, number, number]>; // boneIndex -> quaternion [x, y, z, w]
   ikTargets?: IkTargets;
   rootPosition?: [number, number, number];
@@ -260,6 +266,17 @@ export interface ActorKeyframePose {
    * absent, which is how every key authored before this existed behaves.
    */
   constraintKinds?: KeyframeConstraintKind[];
+  /**
+   * Which space `ikTargets.hips` is written in on this key.
+   *
+   * 'root' (everything authored from now on) means all three axes are in the take's root space --
+   * the same space as `rootMotion` and as Kimodo's `root_positions` -- so a pelvis moved sideways
+   * or forward is carried into the next generation and actually pins the actor's position.
+   *
+   * Absent means an older key: Y is the real hip height, X and Z are body-local and meaningless
+   * (they were never the actor's position), so only the height is used.
+   */
+  hipsSpace?: 'root';
 }
 
 /** One span of a multi-text prompt sequence. */

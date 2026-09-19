@@ -5,7 +5,7 @@ import { KimodoService } from '../../services/kimodoService';
 import { ActorConstraintsPanel } from '../acting/ActorConstraintsPanel';
 import { ActorRigPosingPanel } from '../acting/ActorRigPosingPanel';
 import { MultiActorTimeline } from '../acting/MultiActorTimeline';
-import { loadOfficialSOMARig } from '../../services/somaSkeleton';
+import { loadOfficialSOMARig, sampleActorPose, sampleActorRootMotion } from '../../services/somaSkeleton';
 import { DialoguePanel } from '../acting/DialoguePanel';
 import { buildActorSegments } from '../../services/dialogueScript';
 import { useDialogueAudioSync } from '../../services/dialogueService';
@@ -98,7 +98,15 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   const selectedActor = characters.find((c) => c.id === selectedActorId) || characters[0];
   const isPosing = !!selectedActor && !!selectedActor.activeRigMode && selectedActor.activeRigMode !== 'off';
   const dialogue = currentProject.dialogue;
-  const maxDuration = Math.max(5.0, dialogue?.duration || 0, ...characters.map((c) => c.duration || 4.0));
+  // The clip an actor will generate is its multi-text sequence when it has one, so the timeline has
+  // to span that too -- otherwise you cannot scrub to (or constrain) the second half of the take.
+  const actorSpan = (c: CharacterActor) =>
+    Math.max(
+      c.duration || 4.0,
+      (c.motionSegments || []).reduce((n, sg) => n + (sg.duration || 0), 0),
+      ...(c.keyframePoses || []).map((k) => k.endTime ?? k.time)
+    );
+  const maxDuration = Math.max(5.0, dialogue?.duration || 0, ...characters.map(actorSpan));
 
   // Async work (dialogue voice/motion generation) must build on the latest project, not the one
   // captured when it started, or its saves would undo edits made while it ran.
@@ -154,6 +162,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
           enabledConstraints.length > 0 || (actor.keyframePoses && actor.keyframePoses.length > 0)
             ? KimodoService.compileKimodoConstraints(enabledConstraints, sceneLength, actor.position, 30, actor.keyframePoses, {
                 actorRotationY: actor.rotation?.[1] || 0,
+                rootOrigin: actor.motionData?.root?.[0] as [number, number, number] | undefined,
               })
             : [];
         const res = await KimodoService.generateMotion(
@@ -218,6 +227,8 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
   // --- Multi-text: a sequence of prompts Kimodo renders as ONE continuous
   // motion with a per-segment frame budget, blended across the boundaries.
   const segments = selectedActor?.motionSegments || [];
+  /** The sequence column is out of flow, so both it and the stack beside it test the same flag. */
+  const segmentsColumnOpen = segments.length > 0 && showSegments;
   const segmentsTotal = segments.reduce((n, sg) => n + (sg.duration || 0), 0);
 
   const setSegments = (next: MotionSegment[]) => {
@@ -431,6 +442,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
         selectedActor.keyframePoses,
         {
           actorRotationY: selectedActor.rotation?.[1] || 0,
+          rootOrigin: selectedActor.motionData?.root?.[0] as [number, number, number] | undefined,
           densePath:
             useSmoothPath && selectedActor.trajectory && selectedActor.trajectory.length >= 2
               ? selectedActor.trajectory
@@ -516,6 +528,96 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
     } catch (e: any) {
       console.error('Kimodo generation failed:', e);
       setErrorText(e.message || 'Kimodo generation encountered an issue.');
+      setStatusText(null);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  /**
+   * "Continue from last frame": generate the NEXT section starting from the pose the current take
+   * ends on, and append it. The end pose goes in as a full-body constraint at frame 0, which is how
+   * Kimodo is told where to start; the new section's ground track is then joined onto the old one.
+   */
+  const handleContinueFromLastFrame = async () => {
+    const actor = selectedActor;
+    const md = actor?.motionData;
+    if (!actor || !md || !md.rotations?.length) return;
+    const prompt = motionPrompt.trim();
+    if (!prompt) {
+      setErrorText('Write what happens next in the prompt box, then press Continue.');
+      return;
+    }
+
+    setIsGenerating(true);
+    setErrorText(null);
+    try {
+      await loadOfficialSOMARig();
+      const takeLength = md.duration || actor.duration || 4;
+      const endPose = sampleActorPose({ ...actor, customBoneRotations: {}, customPoseTime: undefined }, takeLength);
+      const endRoot = sampleActorRootMotion(actor, takeLength);
+      if (!endPose) throw new Error('Could not read the pose at the end of this take.');
+
+      // The new section starts at its own origin, so only the hip HEIGHT carries over.
+      const startConstraint = KimodoService.compileKimodoConstraints([], durationSec, actor.position, 30, [
+        {
+          time: 0,
+          boneRotations: endPose,
+          rootMotion: [0, endRoot ? endRoot[1] : 0, 0] as [number, number, number],
+          constraintKinds: ['fullbody'],
+        },
+      ]);
+
+      setStatusText(`Continuing ${actor.name} from the last frame (+${durationSec}s)...`);
+      const res = await KimodoService.generateMotion(
+        {
+          prompt,
+          durationSeconds: durationSec,
+          actorId: actor.id,
+          trajectoryMode: 'inplace',
+          speed: speedMultiplier,
+          startPosition: actor.position,
+          actorRotationY: actor.rotation?.[1] || 0,
+          numTransitionFrames: transitionFrames,
+          constraints: startConstraint.length > 0 ? startConstraint : undefined,
+        },
+        (st) => setStatusText(st)
+      );
+      if (!res.motionData) throw new Error('Kimodo returned no motion to append.');
+
+      const merged = KimodoService.appendMotion(md, res.motionData);
+      const latest = projectRef.current;
+      const chars = (latest.characters && latest.characters.length > 0 ? latest.characters : characters).map((c) =>
+        c.id === actor.id
+          ? {
+              ...c,
+              motionData: merged,
+              duration: merged.duration,
+              trajectory: merged.trajectory,
+              bvhUrl: undefined,
+              motionPrompt: merged.prompt || prompt,
+              // The new section is its own block on the multi-text row.
+              motionSegments: [
+                ...(c.motionSegments && c.motionSegments.length > 0
+                  ? c.motionSegments
+                  : [{ id: `seg_base_${Date.now()}`, prompt: c.motionPrompt || 'base motion', duration: takeLength }]),
+                { id: `seg_cont_${Date.now()}`, prompt, duration: res.duration },
+              ],
+              customBoneRotations: {},
+              ikTargets: undefined,
+              customPoseTime: undefined,
+              activeRigMode: 'off' as const,
+            }
+          : c
+      );
+      onUpdateProject({ ...latest, characters: chars });
+      setTimelineSec(takeLength);
+      setIsPlaying(true);
+      setStatusText(`✓ Added ${res.duration.toFixed(1)}s — ${actor.name}'s take is now ${merged.duration.toFixed(1)}s`);
+      setTimeout(() => setStatusText(null), 4000);
+    } catch (e: any) {
+      console.error('Continue from last frame failed:', e);
+      setErrorText(e.message || 'Could not continue the take.');
       setStatusText(null);
     } finally {
       setIsGenerating(false);
@@ -1109,16 +1211,27 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
       </div>
 
       {/* Bottom Director Choreographer & Timeline Panel */}
-      <div className="w-full shrink-0 bg-surface-container border-t border-outline-variant/30 p-md z-30 flex flex-col gap-sm">
-        {/* Row 0: Multi-text segment sequence */}
-        {segments.length > 0 && showSegments && (
-          <div className="max-w-6xl mx-auto w-full bg-surface-container-low border border-outline-variant/40 rounded-xl p-sm space-y-1.5">
-            <div className="flex items-center justify-between px-1">
-              <span className="text-[10px] font-label-caps tracking-wider text-on-surface-variant uppercase flex items-center gap-1">
-                <span className="material-symbols-outlined text-[14px] text-primary">segment</span>
-                Multi-Text Sequence — one continuous take, {segmentsTotal.toFixed(1)}s total
+      <div className="w-full shrink-0 bg-surface-container border-t border-outline-variant/30 p-md z-30 flex items-stretch relative">
+        {/* Multi-text sequence, in the bottom bar's own left margin.
+            It used to be a full-width row stacked ABOVE the prompt, so opening it grew this panel
+            by ~190px and stole that height from the 3D viewport -- exactly when you were trying to
+            watch the motion you were describing. As a column it takes width from the timeline,
+            which scrolls horizontally anyway, and the viewport never moves.
+
+            It is absolutely positioned on purpose: as a flex child its own content set the panel's
+            height, so a fifth or sixth segment grew the bar and ate the viewport again. Out of flow,
+            the panel is sized by the timeline alone and the list simply scrolls. */}
+        {segmentsColumnOpen && (
+          <div className="absolute left-md top-md bottom-md w-[260px] xl:w-[300px] 2xl:w-[340px] min-h-0 bg-surface-container-low border border-outline-variant/40 rounded-xl p-sm flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-1 px-0.5">
+              <span
+                className="text-[10px] font-label-caps tracking-wider text-on-surface-variant uppercase flex items-center gap-1 min-w-0"
+                title="A sequence of prompts rendered as one continuous take"
+              >
+                <span className="material-symbols-outlined text-[14px] text-primary shrink-0">segment</span>
+                <span className="truncate">Multi-Text &middot; {segmentsTotal.toFixed(1)}s</span>
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 shrink-0">
                 <label
                   className="flex items-center gap-1 text-[10px] font-mono text-on-surface-variant"
                   title="Frames blended between segments. Lower values let the next segment change character (e.g. stop walking); higher values keep motion continuous."
@@ -1133,86 +1246,112 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
                     onChange={(e) =>
                       setTransitionFrames(Math.max(1, Math.min(15, parseInt(e.target.value) || 1)))
                     }
-                    className="w-10 bg-surface-container border border-outline-variant/30 rounded px-1 py-[1px] text-[10px] font-mono text-on-surface focus:outline-none focus:border-primary"
+                    className="w-9 bg-surface-container border border-outline-variant/30 rounded px-1 py-[1px] text-[10px] font-mono text-on-surface focus:outline-none focus:border-primary"
                   />
                   f
                 </label>
                 <button
                   onClick={handleAddSegment}
-                  className="text-[10px] font-mono text-primary hover:underline flex items-center gap-0.5"
+                  title="Add a segment"
+                  className="text-primary hover:text-white transition-colors leading-none"
                 >
-                  <span className="material-symbols-outlined text-[13px]">add</span>Add
+                  <span className="material-symbols-outlined text-[16px]">add</span>
                 </button>
                 <button
                   onClick={() => setShowSegments(false)}
-                  className="text-[10px] font-mono text-on-surface-variant hover:text-on-surface"
+                  title="Hide the sequence"
+                  className="text-on-surface-variant hover:text-on-surface transition-colors leading-none"
                 >
-                  Hide
+                  <span className="material-symbols-outlined text-[16px]">close</span>
                 </button>
               </div>
             </div>
-            <div className="space-y-1.5 max-h-36 overflow-y-auto custom-scrollbar pr-0.5">
-            {segments.map((sg, i) => (
-              <div key={sg.id} className="flex items-center gap-sm">
-                <span className="text-[10px] font-mono text-on-surface-variant w-5 text-right shrink-0">{i + 1}.</span>
-                <input
-                  type="text"
-                  value={sg.prompt}
-                  onChange={(e) => handleUpdateSegment(sg.id, { prompt: e.target.value })}
-                  placeholder={i === 0 ? 'stands up from the chair' : i === 1 ? 'walks two steps forward' : 'talks and gestures'}
-                  className="flex-1 bg-surface-container border border-outline-variant/30 rounded-lg px-sm py-1 text-xs text-on-surface focus:outline-none focus:border-primary placeholder:text-on-surface-variant/40"
-                />
-                <div className="flex items-center gap-1 shrink-0">
-                  <input
-                    type="number"
-                    min={0.5}
-                    max={20}
-                    step={0.5}
-                    value={sg.duration}
-                    onChange={(e) =>
-                      handleUpdateSegment(sg.id, { duration: Math.max(0.5, parseFloat(e.target.value) || 0.5) })
-                    }
-                    className="w-14 bg-surface-container border border-outline-variant/30 rounded-lg px-1.5 py-1 text-xs font-mono text-on-surface focus:outline-none focus:border-primary"
-                  />
-                  <span className="text-[10px] font-mono text-on-surface-variant">s</span>
-                </div>
-                <div className="flex flex-col shrink-0 -space-y-1">
-                  <button
-                    onClick={() => handleMoveSegment(i, -1)}
-                    disabled={i === 0}
-                    className="text-on-surface-variant hover:text-primary disabled:opacity-25 disabled:hover:text-on-surface-variant transition-colors leading-none"
-                    title="Move earlier in the sequence"
-                  >
-                    <span className="material-symbols-outlined text-[14px]">keyboard_arrow_up</span>
-                  </button>
-                  <button
-                    onClick={() => handleMoveSegment(i, 1)}
-                    disabled={i === segments.length - 1}
-                    className="text-on-surface-variant hover:text-primary disabled:opacity-25 disabled:hover:text-on-surface-variant transition-colors leading-none"
-                    title="Move later in the sequence"
-                  >
-                    <span className="material-symbols-outlined text-[14px]">keyboard_arrow_down</span>
-                  </button>
-                </div>
-                <button
-                  onClick={() => handleDeleteSegment(sg.id)}
-                  className="p-0.5 text-on-surface-variant hover:text-error transition-colors shrink-0"
-                  title="Remove segment"
+
+            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar space-y-1.5 pr-0.5">
+              {segments.map((sg, i) => (
+                <div
+                  key={sg.id}
+                  className="bg-surface-container border border-outline-variant/30 rounded-lg p-1.5 space-y-1"
                 >
-                  <span className="material-symbols-outlined text-[15px]">close</span>
-                </button>
-              </div>
-            ))}
+                  <div className="flex items-start gap-1">
+                    <span className="text-[10px] font-mono text-on-surface-variant w-4 pt-1.5 text-right shrink-0">
+                      {i + 1}.
+                    </span>
+                    <input
+                      type="text"
+                      value={sg.prompt}
+                      onChange={(e) => handleUpdateSegment(sg.id, { prompt: e.target.value })}
+                      placeholder={i === 0 ? 'stands up from the chair' : i === 1 ? 'walks two steps forward' : 'talks and gestures'}
+                      className="flex-1 min-w-0 bg-surface-container-low border border-outline-variant/30 rounded-lg px-sm py-1 text-xs text-on-surface focus:outline-none focus:border-primary placeholder:text-on-surface-variant/40"
+                    />
+                  </div>
+                  <div className="flex items-center justify-end gap-1 pl-5">
+                    <input
+                      type="number"
+                      min={0.5}
+                      max={20}
+                      step={0.5}
+                      value={sg.duration}
+                      onChange={(e) =>
+                        handleUpdateSegment(sg.id, { duration: Math.max(0.5, parseFloat(e.target.value) || 0.5) })
+                      }
+                      className="w-14 bg-surface-container-low border border-outline-variant/30 rounded-lg px-1.5 py-[2px] text-xs font-mono text-on-surface focus:outline-none focus:border-primary"
+                    />
+                    <span className="text-[10px] font-mono text-on-surface-variant mr-1">s</span>
+                    <button
+                      onClick={() => handleMoveSegment(i, -1)}
+                      disabled={i === 0}
+                      className="text-on-surface-variant hover:text-primary disabled:opacity-25 disabled:hover:text-on-surface-variant transition-colors leading-none"
+                      title="Move earlier in the sequence"
+                    >
+                      <span className="material-symbols-outlined text-[15px]">keyboard_arrow_up</span>
+                    </button>
+                    <button
+                      onClick={() => handleMoveSegment(i, 1)}
+                      disabled={i === segments.length - 1}
+                      className="text-on-surface-variant hover:text-primary disabled:opacity-25 disabled:hover:text-on-surface-variant transition-colors leading-none"
+                      title="Move later in the sequence"
+                    >
+                      <span className="material-symbols-outlined text-[15px]">keyboard_arrow_down</span>
+                    </button>
+                    <button
+                      onClick={() => handleDeleteSegment(sg.id)}
+                      className="text-on-surface-variant hover:text-error transition-colors leading-none"
+                      title="Remove segment"
+                    >
+                      <span className="material-symbols-outlined text-[15px]">close</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
-            <p className="text-[9px] text-on-surface-variant/70 italic px-1 pt-0.5">
-              Keyframes and waypoints still apply across the whole sequence.
+
+            <p
+              className="text-[9px] text-on-surface-variant/70 italic px-0.5 truncate shrink-0"
+              title="One continuous take. Keyframes and waypoints still apply across the whole sequence."
+            >
+              One continuous take &middot; keys still apply
             </p>
           </div>
         )}
 
-        {/* Row 1: Natural Language Prompt Input + Controls */}
-        <div className="flex items-center gap-sm max-w-6xl mx-auto w-full">
-          <div className="flex-1 bg-surface-container-low border border-outline-variant/40 rounded-xl flex items-center px-md py-xs focus-within:border-primary transition-all shadow-inner">
+        {/* Everything else keeps its own vertical stack beside the column, clearing it by 4px. */}
+        <div
+          className={`flex-1 min-w-0 flex flex-col gap-sm ${
+            segmentsColumnOpen ? 'ml-[264px] xl:ml-[304px] 2xl:ml-[344px]' : ''
+          }`}
+        >
+        {/* Row 1: Natural Language Prompt Input + Controls.
+            Wraps rather than clipping: every control after the prompt is shrink-0, so on a narrower
+            window (or with the sequence column open) the row would otherwise push GENERATE MOTION
+            off the screen edge. The prompt keeps a usable minimum width instead of collapsing to
+            an empty square. */}
+        <div
+          className={`flex flex-wrap items-center gap-sm max-w-6xl w-full ${
+            segmentsColumnOpen ? 'mr-auto' : 'mx-auto'
+          }`}
+        >
+          <div className="flex-1 min-w-[160px] bg-surface-container-low border border-outline-variant/40 rounded-xl flex items-center px-md py-xs focus-within:border-primary transition-all shadow-inner">
             <span className="material-symbols-outlined text-[20px] text-primary mr-sm">
               directions_run
             </span>
@@ -1290,6 +1429,19 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             </select>
           </div>
 
+          {/* Continue the existing take from its last frame */}
+          {selectedActor?.motionData?.rotations?.length ? (
+            <button
+              onClick={handleContinueFromLastFrame}
+              disabled={isGenerating}
+              title="Generate the next section starting from the pose this take ends on, and add it to the end"
+              className="bg-surface-container-low border border-primary/60 text-primary font-label-caps text-label-caps px-md py-sm rounded-xl hover:bg-primary/10 transition-all font-semibold shrink-0 flex items-center gap-xs cursor-pointer disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined text-[18px]">playlist_add</span>
+              {`CONTINUE +${durationSec}s`}
+            </button>
+          ) : null}
+
           {/* Kimodo AI Generate Action Button */}
           <button
             onClick={() => handleGenerateMotion()}
@@ -1320,7 +1472,9 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
           onNavigateStage={onNavigateStage}
           onUpdateActorProps={handleUpdateActorProps}
           dialogue={dialogue}
+          alignLeft={segmentsColumnOpen}
         />
+        </div>
       </div>
     </div>
   );
