@@ -1031,6 +1031,12 @@ export class RoomBakeEngine {
     const vertexCount = pos.count;
     const triCount = Math.floor(vertexCount / 3);
 
+    // Fast path: for large meshes (e.g. street scenes / complex environments with > 1200 triangles),
+    // use high-performance 6-way box atlas unwrapping to prevent CPU thread freezes.
+    if (triCount > 1200) {
+      return this.autoUnwrapGeometry(geometry, 0.02);
+    }
+
     // 1. Calculate triangle face normals, centroids, areas, and plane signatures
     const triNormals: THREE.Vector3[] = [];
     const triAreas: number[] = [];
@@ -1646,19 +1652,25 @@ export class RoomBakeEngine {
     }
 
     // Determine effective UV unwrapping strategy
+    // If the mesh already has author/generator UVs, prioritize preserving them unless forced otherwise
     let shouldSmartUnwrap = false;
     let shouldBoxUnwrap = false;
 
-    if (uvMode === 'smart') {
-      shouldSmartUnwrap = true;
-    } else if (uvMode === 'box') {
-      shouldBoxUnwrap = true;
-    } else if (uvMode === 'model') {
+    if (uvMode === 'model') {
       if (!hasAnyUv) shouldSmartUnwrap = true;
     } else if (uvMode === 'auto') {
-      if (!hasAnyUv || !existingTexture) shouldSmartUnwrap = true;
+      if (!hasAnyUv) shouldSmartUnwrap = true;
+    } else if (uvMode === 'smart') {
+      // If the mesh already has valid UVs and has high complexity, preserve its UVs
+      if (hasAnyUv && totalVerts > 3600) {
+        shouldSmartUnwrap = false;
+      } else {
+        shouldSmartUnwrap = true;
+      }
+    } else if (uvMode === 'box') {
+      shouldBoxUnwrap = true;
     } else {
-      shouldSmartUnwrap = true;
+      if (!hasAnyUv) shouldSmartUnwrap = true;
     }
 
     if (shouldSmartUnwrap) {

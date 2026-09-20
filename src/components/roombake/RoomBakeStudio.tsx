@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { RoomBakeEngine, ViewPoint } from '../../services/roombakeEngine';
-import { generateTexture } from '../../services/roombakeAiService';
+import { generateTexture, generateTextureCandidates } from '../../services/roombakeAiService';
 import { UVInspectorModal } from './UVInspectorModal';
 import { SceneAsset } from '../../types';
 import * as THREE from 'three';
@@ -34,7 +34,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   const [showGenModal, setShowGenModal] = useState(false);
 
   // 00 Geometry
-  const [uvMode, setUvMode] = useState<'smart' | 'auto' | 'box' | 'model'>('smart');
+  const [uvMode, setUvMode] = useState<'smart' | 'auto' | 'box' | 'model'>('auto');
   const [splitTrims, setSplitTrims] = useState(true);
 
   // 01 View
@@ -76,9 +76,11 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   const [gemStyle, setGemStyle] = useState('A futuristic cyberpunk hideout interior, industrial sci-fi architecture, aged black metal wall panels, wet polished concrete floor, subtle holographic interface glow on the walls, cinematic warm tungsten lighting mixed with cold blue ambient light, realistic materials, believable wear and scratches.');
   const gemTemplate = `Photorealistic architectural photograph of a room interior wall and surface view.\nScene style: {{STYLE}}.\nLighting: flat even diffused interior lighting, architectural photography, ultra sharp textures, no distortion, high detail, ARRI style 8K detail.\nSeamless continuity: If any portion of a wall, floor, or ceiling is already textured in the reference view, seamlessly continue and extend that exact material, color palette, scale, and pattern across the rest of the surface with an invisible boundary.`;
 
-  // Generated Image Thumbnail & Canvas
+  // Generated Image Thumbnail & Canvas (4 Candidates)
   const [genThumb, setGenThumb] = useState<string | null>(null);
   const [currentGenCanvas, setCurrentGenCanvas] = useState<HTMLCanvasElement | null>(null);
+  const [genCandidates, setGenCandidates] = useState<HTMLCanvasElement[]>([]);
+  const [selectedGenCandidateIdx, setSelectedGenCandidateIdx] = useState<number>(0);
 
   // 04 Projection Bake
   const [wpow, setWpow] = useState(2.0);
@@ -580,7 +582,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
       const activePrompt = srcSelect === 'gemini' ? gemTemplate : genericPrompt;
       const activeStyle = srcSelect === 'gemini' ? gemStyle : '';
 
-      const genCv = await generateTexture({
+      const genCanvases = await generateTextureCandidates({
         provider: srcSelect === 'gemini' || srcSelect === 'mock' || srcSelect === 'normals'
           ? srcSelect
           : 'mock',
@@ -599,9 +601,11 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
         },
       });
 
-      setCurrentGenCanvas(genCv);
-      setGenThumb(genCv.toDataURL());
-      addLog('Generated image ready for projection baking!', 'ok');
+      setGenCandidates(genCanvases);
+      setSelectedGenCandidateIdx(0);
+      setCurrentGenCanvas(genCanvases[0]);
+      setGenThumb(genCanvases[0].toDataURL());
+      addLog(`Generated ${genCanvases.length} image candidates ready for projection baking!`, 'ok');
     } catch (err: any) {
       addLog(`Generate failed: ${err.message}`, 'err');
     } finally {
@@ -1591,13 +1595,13 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                   {busy ? 'Generating Image...' : 'Generate image'}
                 </button>
 
-                {/* Generated Image Preview Card (Enlarged) */}
+                {/* Generated Image Preview Card (4 Candidates) */}
                 {genThumb && (
                   <div className="flex flex-col gap-2 p-3 bg-surface-container rounded-lg border border-outline-variant/60 shadow-sm mt-1">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5 text-primary font-mono text-xs font-semibold uppercase tracking-wider">
-                        <span className="material-symbols-outlined text-[15px]">image</span>
-                        Generated Image
+                        <span className="material-symbols-outlined text-[15px]">collections</span>
+                        {genCandidates.length > 1 ? `4 Candidates (#${selectedGenCandidateIdx + 1} Active)` : 'Generated Image'}
                       </div>
                       {currentGenCanvas && (
                         <span className="text-[10px] font-mono text-on-surface-variant bg-surface-container-high px-1.5 py-0.5 rounded border border-outline-variant/30">
@@ -1605,6 +1609,45 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                         </span>
                       )}
                     </div>
+
+                    {/* 4 Candidate Selector Thumbnails */}
+                    {genCandidates.length > 1 && (
+                      <div className="grid grid-cols-4 gap-1.5 p-1 bg-surface-container-lowest/80 rounded-lg border border-outline-variant/30">
+                        {genCandidates.map((cv, idx) => {
+                          const thumbUrl = cv.toDataURL();
+                          const isSelected = selectedGenCandidateIdx === idx;
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => {
+                                setSelectedGenCandidateIdx(idx);
+                                setCurrentGenCanvas(cv);
+                                setGenThumb(thumbUrl);
+                              }}
+                              className={`relative aspect-square rounded-md overflow-hidden border-2 transition-all cursor-pointer group bg-black/50 ${
+                                isSelected
+                                  ? 'border-primary ring-2 ring-primary/40 scale-[1.03] shadow-md'
+                                  : 'border-outline-variant/40 hover:border-outline-variant opacity-70 hover:opacity-100'
+                              }`}
+                              title={`Select Candidate #${idx + 1}`}
+                            >
+                              <img src={thumbUrl} alt={`Candidate ${idx + 1}`} className="w-full h-full object-cover" />
+                              <div className={`absolute top-0.5 left-0.5 px-1 py-[1px] rounded text-[8.5px] font-mono font-bold ${
+                                isSelected ? 'bg-primary text-background' : 'bg-black/75 text-white'
+                              }`}>
+                                #{idx + 1}
+                              </div>
+                              {isSelected && (
+                                <div className="absolute top-0.5 right-0.5 bg-primary text-background rounded-full w-3.5 h-3.5 flex items-center justify-center shadow">
+                                  <span className="material-symbols-outlined text-[10px] font-bold">check</span>
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
 
                     <div
                       onClick={() => setShowGenModal(true)}
@@ -1626,13 +1669,13 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                     <div className="flex items-center justify-between text-[10.5px] font-mono pt-0.5">
                       <span className="text-emerald-400 font-medium flex items-center gap-1">
                         <span className="material-symbols-outlined text-[14px]">check_circle</span>
-                        Ready to bake
+                        Candidate #{selectedGenCandidateIdx + 1} ready to bake
                       </span>
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          downloadCanvas(currentGenCanvas, `roombake-generated-${Date.now()}.png`);
+                          downloadCanvas(currentGenCanvas, `roombake-candidate-${selectedGenCandidateIdx + 1}-${Date.now()}.png`);
                         }}
                         className="px-2 py-0.5 bg-surface-container hover:bg-surface-container-high border border-outline-variant rounded text-on-surface hover:text-primary transition-colors flex items-center gap-1"
                         title="Download image"

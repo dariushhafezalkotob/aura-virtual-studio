@@ -99,17 +99,30 @@ export async function loadImageToCanvas(
 }
 
 export async function generateTexture(params: GenerateParams): Promise<HTMLCanvasElement> {
+  const candidates = await generateTextureCandidates(params);
+  if (!candidates || candidates.length === 0) {
+    throw new Error('No texture candidates were generated.');
+  }
+  return candidates[0];
+}
+
+export async function generateTextureCandidates(params: GenerateParams): Promise<HTMLCanvasElement[]> {
   const { provider, model, prompt, style, apiKey, sendCond = true, images } = params;
 
   if (provider === 'normals') {
-    return placeholderImage('Normal Map Test', images.normal || null, 0, false);
+    const cv = placeholderImage('Normal Map Test', images.normal || null, 0, false);
+    return [cv];
   }
 
   if (provider === 'mock') {
-    return placeholderImage('Mock Texture Test', images.normal || null, 1, true);
+    const cv1 = placeholderImage('Mock Texture Variation 1', images.normal || null, 1, true);
+    const cv2 = placeholderImage('Mock Texture Variation 2', images.normal || null, 2, true);
+    const cv3 = placeholderImage('Mock Texture Variation 3', images.normal || null, 3, true);
+    const cv4 = placeholderImage('Mock Texture Variation 4', images.normal || null, 4, true);
+    return [cv1, cv2, cv3, cv4];
   }
 
-  // 1. Google Gemini Multimodal Vision API
+  // 1. Google Gemini Multimodal Vision API (Fast Single High-Resolution Generation)
   if (provider === 'gemini') {
     const key =
       (apiKey && apiKey.trim()) ||
@@ -138,22 +151,25 @@ export async function generateTexture(params: GenerateParams): Promise<HTMLCanva
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error?.message || `Gemini Imagen Error: ${res.status}`);
-      const b64 = j.predictions?.[0]?.bytesBase64Encoded;
-      if (!b64) throw new Error('No image returned by Imagen.');
-      return await loadImageToCanvas(`data:image/png;base64,${b64}`);
+      const preds = j.predictions || [];
+      if (preds[0]?.bytesBase64Encoded) {
+        const cv = await loadImageToCanvas(`data:image/png;base64,${preds[0].bytesBase64Encoded}`);
+        return [cv];
+      }
+      throw new Error('No images returned by Imagen.');
     }
 
-    const parts: any[] = [];
-    parts.push({
+    const baseParts: any[] = [];
+    baseParts.push({
       text: 'You are an expert 3D architectural rendering and texture synthesis engine. Your goal is to render a photorealistic interior photograph that EXACTLY overlays and matches the 3D geometry, perspective, and vanishing points shown in the reference conditioning maps below.',
     });
 
     if (sendCond) {
       if (images.depth) {
-        parts.push({
+        baseParts.push({
           text: '[REFERENCE MAP 1: CAMERA DEPTH MAP]\nThis grayscale map defines surface distance from the camera (darker = near foreground, lighter = distant background). Every room corner, ceiling junction, floor perimeter, and perspective line MUST align with these edges. Do NOT shift, tilt, or alter the camera perspective:',
         });
-        parts.push({
+        baseParts.push({
           inlineData: {
             mimeType: 'image/png',
             data: images.depth.toDataURL('image/png').split(',')[1],
@@ -161,10 +177,10 @@ export async function generateTexture(params: GenerateParams): Promise<HTMLCanva
         });
       }
       if (images.normal) {
-        parts.push({
+        baseParts.push({
           text: '[REFERENCE MAP 2: SURFACE NORMAL ORIENTATION MAP]\nThis color-coded normal map defines the precise 3D plane orientation:\n- Vertical walls are colored in cyan, magenta, and blue tones.\n- Horizontal floors and ceilings are colored in green/yellow tones.\nRender clean architectural surfaces conforming strictly to these plane boundaries without introducing false architectural elements:',
         });
-        parts.push({
+        baseParts.push({
           inlineData: {
             mimeType: 'image/png',
             data: images.normal.toDataURL('image/png').split(',')[1],
@@ -172,10 +188,10 @@ export async function generateTexture(params: GenerateParams): Promise<HTMLCanva
         });
       }
       if (images.base) {
-        parts.push({
+        baseParts.push({
           text: '[PRIMARY GROUND-TRUTH ANCHOR: PARTIALLY TEXTURED ROOM VIEW]\nThis reference shows the camera view with surfaces ALREADY TEXTURED in earlier bakes.\n\nCRITICAL SEAMLESS TEXTURE EXTENSION DIRECTIVES:\n1. Treat already-textured surfaces as your ABSOLUTE GROUND TRUTH.\n2. Sample the exact texture, material type, wood grain/plaster pattern, panel seams, and color palette directly from the textured portion.\n3. SEAMLESSLY EXTEND AND CONTINUE that exact material across the untextured/blank areas.\n4. INVISIBLE TRANSITION: The seam where existing texture meets new texture MUST be 100% invisible.',
         });
-        parts.push({
+        baseParts.push({
           inlineData: {
             mimeType: 'image/png',
             data: images.base.toDataURL('image/png').split(',')[1],
@@ -189,14 +205,18 @@ export async function generateTexture(params: GenerateParams): Promise<HTMLCanva
       style
     );
 
-    parts.push({
-      text: `[RENDER TASK & SPECIFICATIONS]\nSynthesize the photorealistic architectural interior photograph adhering strictly to the geometry above and following these style specifications:\n\nSCENE STYLE & MATERIALS:\n${fullPrompt}\n\nMANDATORY 3D GEOMETRY & CONTINUITY RULES:\n1. SEAMLESS TEXTURE CONTINUATION: Sample and seamlessly continue materials from the reference anchor into blank areas.\n2. STRICT PERSPECTIVE LOCK: Every corner and wall seam must line up pixel-for-pixel with depth and normal maps.\n3. ARCHITECTURAL TEXTURES: Paint realistic materials (wood parquet, stone, drywall, plaster, concrete, metal) onto each surface plane.\n4. DIFFUSE LIGHTING: Use soft, flat, diffused architectural photography lighting with clean ambient illumination.\n5. Output ONLY the generated photograph.`,
-    });
+    const parts = [
+      ...baseParts,
+      {
+        text: `[RENDER TASK & SPECIFICATIONS]\nSynthesize the photorealistic architectural interior photograph adhering strictly to the geometry above and following these style specifications:\n\nSCENE STYLE & MATERIALS:\n${fullPrompt}\n\nMANDATORY 3D GEOMETRY & CONTINUITY RULES:\n1. SEAMLESS TEXTURE CONTINUATION: Sample and seamlessly continue materials from the reference anchor into blank areas.\n2. STRICT PERSPECTIVE LOCK: Every corner and wall seam must line up pixel-for-pixel with depth and normal maps.\n3. ARCHITECTURAL TEXTURES: Paint realistic materials (wood parquet, stone, drywall, plaster, concrete, metal) onto each surface plane.\n4. DIFFUSE LIGHTING: Use soft, flat, diffused architectural photography lighting with clean ambient illumination.\n5. Output ONLY the generated photograph.`,
+      },
+    ];
 
     const payload = {
       contents: [{ parts }],
       generationConfig: {
         responseModalities: ['IMAGE', 'TEXT'],
+        temperature: 0.7,
       },
     };
 
@@ -209,19 +229,22 @@ export async function generateTexture(params: GenerateParams): Promise<HTMLCanva
       }
     );
 
-    const j = await res.json();
     if (!res.ok) {
-      throw new Error(j.error?.message || `Gemini API Error: ${res.status}`);
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error?.message || `Gemini API Error: ${res.status}`);
     }
 
+    const j = await res.json();
     const cParts = j.candidates?.[0]?.content?.parts || [];
     for (const p of cParts) {
       if (p.inlineData && p.inlineData.data) {
         const mime = p.inlineData.mimeType || 'image/png';
-        return await loadImageToCanvas(`data:${mime};base64,${p.inlineData.data}`);
+        const cv = await loadImageToCanvas(`data:${mime};base64,${p.inlineData.data}`);
+        return [cv];
       }
     }
-    throw new Error('Gemini API did not return an image part. Please try another model or prompt.');
+
+    throw new Error('Gemini API did not return an image part. Please try another prompt.');
   }
 
   // 2. OpenAI API
@@ -257,12 +280,17 @@ export async function generateTexture(params: GenerateParams): Promise<HTMLCanva
       throw new Error(j.error?.message || `OpenAI Error: ${res.status}`);
     }
 
-    if (j.data?.[0]?.b64_json) {
-      return await loadImageToCanvas(`data:image/png;base64,${j.data[0].b64_json}`);
+    const canvases: HTMLCanvasElement[] = [];
+    if (Array.isArray(j.data)) {
+      for (const item of j.data) {
+        if (item.b64_json) {
+          canvases.push(await loadImageToCanvas(`data:image/png;base64,${item.b64_json}`));
+        } else if (item.url) {
+          canvases.push(await loadImageToCanvas(item.url));
+        }
+      }
     }
-    if (j.data?.[0]?.url) {
-      return await loadImageToCanvas(j.data[0].url);
-    }
+    if (canvases.length > 0) return canvases;
     throw new Error('No image returned by OpenAI API.');
   }
 
