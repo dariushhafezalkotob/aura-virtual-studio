@@ -1,5 +1,791 @@
 [
   {
+    "id": "stage_proj_proj_1789827843009",
+    "name": "NewYorkStreet",
+    "createdAt": "2026-09-19T17:00:41.730Z",
+    "scenes": [
+      {
+        "id": "asset_1789827983665",
+        "name": "new york style building 3 floor with an store under it",
+        "glbUrl": "/api/assets/trellis_1789827982692_uz6qc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789827983654_vm4qy.mp4",
+        "position": [
+          -3.0713837788651692,
+          0,
+          0.8856153734177037
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          9.774351553251472,
+          9.774351553251472,
+          9.774351553251472
+        ],
+        "prompt": "new york style building 3 floor with an store under it",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:56 PM"
+      },
+      {
+        "id": "asset_1789828104628_kyb2",
+        "name": "new york style building 3 floor with an store under it (Copy)",
+        "glbUrl": "/api/assets/trellis_1789827982692_uz6qc.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789827983654_vm4qy.mp4",
+        "position": [
+          -3.0457904592918155,
+          0,
+          6.651468191044902
+        ],
+        "rotation": [
+          5.980223930621474e-17,
+          -1.5704798537690314,
+          0
+        ],
+        "scale": [
+          9.774351553251472,
+          9.774351553251472,
+          9.774351553251472
+        ],
+        "prompt": "new york style building 3 floor with an store under it",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:56 PM"
+      },
+      {
+        "id": "asset_1789829121071",
+        "name": "A well-equipped bookstore",
+        "glbUrl": "/api/assets/trellis_1789829120082_s2t7d.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789829121060_xpdzp.mp4",
+        "position": [
+          -2.917860384975402,
+          0,
+          15.757241352265343
+        ],
+        "rotation": [
+          -3.141592653589793,
+          -0.019549360299948023,
+          -3.141592653589793
+        ],
+        "scale": [
+          6.323094143386202,
+          6.323094143386202,
+          6.323094143386202
+        ],
+        "prompt": "A well-equipped bookstore",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:15 PM"
+      },
+      {
+        "id": "asset_1789829394598",
+        "name": "A well-equipped bookstore annex",
+        "glbUrl": "/api/assets/trellis_1789829393592_xxmfr.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789829394585_gjhdm.mp4",
+        "position": [
+          -2.8746049623343723,
+          0,
+          21.15639783209908
+        ],
+        "rotation": [
+          3.141592653589793,
+          -1.5629489942032184,
+          3.141592653589793
+        ],
+        "scale": [
+          7.21734379027591,
+          7.21734379027591,
+          7.21734379027591
+        ],
+        "prompt": "A well-equipped bookstore annex",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:19 PM"
+      },
+      {
+        "id": "asset_1789829757215",
+        "name": "new york style buildings, 5 buildings next to each other",
+        "glbUrl": "/api/assets/trellis_1789829756357_qgtxb.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789829757208_mgofa.mp4",
+        "position": [
+          -12.859669654014752,
+          0,
+          14.285012536631983
+        ],
+        "rotation": [
+          -3.141592653589793,
+          1.5640414823064934,
+          -3.141592653589793
+        ],
+        "scale": [
+          20.659291680614263,
+          20.659291680614263,
+          20.659291680614263
+        ],
+        "prompt": "new york style buildings, 5 buildings next to each other",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:25 PM"
+      },
+      {
+        "id": "asset_1789829960829",
+        "name": "new york style buildings, 5 buildings next to each other",
+        "glbUrl": "/api/assets/trellis_1789829959612_6xdqd.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789829960816_9sizo.mp4",
+        "position": [
+          -23.945814153464053,
+          -0.17771398124838056,
+          -14.283355066987465
+        ],
+        "rotation": [
+          -3.141592653589793,
+          0.00836138404598653,
+          -3.141592653589793
+        ],
+        "scale": [
+          34.8410803847594,
+          34.8410803847594,
+          34.8410803847594
+        ],
+        "prompt": "new york style buildings, 5 buildings next to each other",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:29 PM"
+      },
+      {
+        "id": "asset_1789830339309",
+        "name": "newyork style , park",
+        "glbUrl": "/api/assets/trellis_1789830338382_2x5in.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789830339296_gsb7z.mp4",
+        "position": [
+          -0.17690017066065533,
+          0.29534502165013876,
+          -21.39111765470848
+        ],
+        "rotation": [
+          0,
+          -0.07204213337456852,
+          0
+        ],
+        "scale": [
+          7.26104272812103,
+          7.26104272812103,
+          7.26104272812103
+        ],
+        "prompt": "newyork style , park",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:35 PM"
+      },
+      {
+        "id": "asset_1789830531211",
+        "name": "Urban Green Space in New York , park",
+        "glbUrl": "/api/assets/trellis_1789830530200_eqhr6.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789830531197_zyj8o.mp4",
+        "position": [
+          -7.695495387427426,
+          -0.03684713682280932,
+          -12.054143097042717
+        ],
+        "rotation": [
+          0,
+          0,
+          -0.030795695071316007
+        ],
+        "scale": [
+          14.382138916774418,
+          14.382138916774418,
+          14.382138916774418
+        ],
+        "prompt": "Urban Green Space in New York , park",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:38 PM"
+      },
+      {
+        "id": "asset_1789831033320",
+        "name": "A street lined with shops in a relatively upscale part of New York.",
+        "glbUrl": "/api/assets/trellis_1789831032310_27lcj.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789831033309_dx4z0.mp4",
+        "position": [
+          -3.1811298069762692,
+          -0.3231084150063315,
+          38.423541761893006
+        ],
+        "rotation": [
+          0,
+          1.4962242549321811,
+          0
+        ],
+        "scale": [
+          16.722887968174742,
+          18.549714882207276,
+          16.722887968174742
+        ],
+        "prompt": "A street lined with shops in a relatively upscale part of New York.",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:47 PM"
+      },
+      {
+        "id": "asset_1789831563649",
+        "name": "A full view of a long sidewalk in a New York alley.",
+        "glbUrl": "/api/assets/trellis_1789831562768_t787h.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789831563640_oewo1.mp4",
+        "position": [
+          -5.823906013214698,
+          0.1908724562803672,
+          28.90011653836646
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          13.375456499581102,
+          13.375456499581102,
+          13.375456499581102
+        ],
+        "prompt": "A full view of a long sidewalk in a New York alley.",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:56 PM"
+      },
+      {
+        "id": "asset_1789831747489_nj1m",
+        "name": "A full view of a long sidewalk in a New York alley. (Copy)",
+        "glbUrl": "/api/assets/trellis_1789831562768_t787h.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789831563640_oewo1.mp4",
+        "position": [
+          -15.169783209522127,
+          -0.1312500069177056,
+          32.00572062907158
+        ],
+        "rotation": [
+          -3.1415926535897927,
+          1.50476271689727,
+          3.141592653589793
+        ],
+        "scale": [
+          11.91017399282016,
+          11.91017399282016,
+          11.91017399282016
+        ],
+        "prompt": "A full view of a long sidewalk in a New York alley.",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "06:56 PM"
+      },
+      {
+        "id": "asset_1789832304424",
+        "name": "A full view of a long street sidewalk in New York.",
+        "glbUrl": "/api/assets/trellis_1789832303721_0vbs3.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789832304415_rezeo.mp4",
+        "position": [
+          1.5102639442389112,
+          0.08902429188926764,
+          -11.285558481170572
+        ],
+        "rotation": [
+          -3.0937982763029774,
+          -1.4898522230178248,
+          3.141592653589793
+        ],
+        "scale": [
+          11.207047723604152,
+          11.207047723604152,
+          11.207047723604152
+        ],
+        "prompt": "A full view of a long street sidewalk in New York.",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:08 PM"
+      },
+      {
+        "id": "asset_1789832644929",
+        "name": "A full view of a long, paved sidewalk along a street in New York.",
+        "glbUrl": "/api/assets/trellis_1789832643975_y8tsy.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789832644919_cc7fx.mp4",
+        "position": [
+          0.6949840520450916,
+          -0.17139989134696587,
+          2.8051963901072856
+        ],
+        "rotation": [
+          -3.141592653589793,
+          1.549544457139471,
+          -3.141592653589793
+        ],
+        "scale": [
+          8.697017270833477,
+          8.697017270833477,
+          8.697017270833477
+        ],
+        "prompt": "A full view of a long, paved sidewalk along a street in New York.",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:14 PM"
+      },
+      {
+        "id": "asset_1789832940727",
+        "name": "A full view of a long, paved sidewalk corner along a street in New York. without lights or any props",
+        "glbUrl": "/api/assets/trellis_1789832940107_1s642.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789832940716_7o96c.mp4",
+        "position": [
+          1.3162963313881368,
+          0,
+          8.516680746202955
+        ],
+        "rotation": [
+          -3.141592653589793,
+          1.5659972074128496,
+          -3.141592653589793
+        ],
+        "scale": [
+          3.7324695805638557,
+          3.7324695805638557,
+          3.7324695805638557
+        ],
+        "prompt": "A full view of a long, paved sidewalk corner along a street in New York. without lights or any props",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:19 PM"
+      },
+      {
+        "id": "asset_1789833011767_zbys",
+        "name": "A full view of a long, paved sidewalk corner along a street in New York. without lights or any props (Copy)",
+        "glbUrl": "/api/assets/trellis_1789832940107_1s642.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789832940716_7o96c.mp4",
+        "position": [
+          0.9972871370750829,
+          -0.05475600750063636,
+          -1.2293035660752114
+        ],
+        "rotation": [
+          -3.141592653589793,
+          -0.0034555222897788263,
+          -3.141592653589793
+        ],
+        "scale": [
+          3.7324695805638557,
+          3.7324695805638557,
+          3.7324695805638557
+        ],
+        "prompt": "A full view of a long, paved sidewalk corner along a street in New York. without lights or any props",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:19 PM"
+      },
+      {
+        "id": "asset_1789833091940",
+        "name": "sidewalk New York street light",
+        "glbUrl": "/api/assets/trellis_1789833091397_o2l41.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789833091933_88lo9.mp4",
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "prompt": "sidewalk New York street light",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:21 PM"
+      },
+      {
+        "id": "asset_1789833130207",
+        "name": "sidewalk New York street light",
+        "glbUrl": "/api/assets/trellis_1789833129482_j1mkr.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789833130197_gui11.mp4",
+        "position": [
+          1.9672437327969536,
+          0,
+          -1.76544698189835
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          2.6046437650632908,
+          2.6046437650632908,
+          2.6046437650632908
+        ],
+        "prompt": "sidewalk New York street light",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:22 PM"
+      },
+      {
+        "id": "asset_1789833258922",
+        "name": "New York street",
+        "glbUrl": "/api/assets/trellis_1789833258022_rgj66.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789833258912_s2dr1.mp4",
+        "position": [
+          -14.460171950749636,
+          0.2705252990648046,
+          29.349045351173835
+        ],
+        "rotation": [
+          -3.141592653589793,
+          1.5037395455119567,
+          -3.141592653589793
+        ],
+        "scale": [
+          9.04661695737104,
+          9.04661695737104,
+          9.04661695737104
+        ],
+        "prompt": "New York street",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:24 PM"
+      },
+      {
+        "id": "asset_1789833368192_7y7i",
+        "name": "sidewalk New York street light (Copy)",
+        "glbUrl": "/api/assets/trellis_1789833129482_j1mkr.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789833130197_gui11.mp4",
+        "position": [
+          2.1591024913580537,
+          0,
+          3.9715546594366007
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          2.6046437650632908,
+          2.6046437650632908,
+          2.6046437650632908
+        ],
+        "prompt": "sidewalk New York street light",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:22 PM"
+      },
+      {
+        "id": "asset_1789833381548_9kr1",
+        "name": "sidewalk New York street light (Copy) (Copy)",
+        "glbUrl": "/api/assets/trellis_1789833129482_j1mkr.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789833130197_gui11.mp4",
+        "position": [
+          2.2409790072522044,
+          0,
+          9.462622386008894
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          2.6046437650632908,
+          2.6046437650632908,
+          2.6046437650632908
+        ],
+        "prompt": "sidewalk New York street light",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:22 PM"
+      },
+      {
+        "id": "asset_1789833525127",
+        "name": "A full view of a beautiful, long, cobblestone sidewalk on a New York street.",
+        "glbUrl": "/api/assets/trellis_1789833524456_r68xp.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789833525109_92h1h.mp4",
+        "position": [
+          1.6554303204353467,
+          0,
+          19.306042858077166
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          8.311307060665065,
+          12.415728189730078,
+          9.73725257698954
+        ],
+        "prompt": "A full view of a beautiful, long, cobblestone sidewalk on a New York street.",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "07:28 PM"
+      },
+      {
+        "id": "asset_1789836761487",
+        "name": "new york style 3 floor building, an store at first floor, afternoon, no shadow",
+        "glbUrl": "/api/assets/trellis_1789836760522_hhetb.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789836761468_gycux.mp4",
+        "position": [
+          14.012916826927045,
+          0,
+          -0.9823091649063089
+        ],
+        "rotation": [
+          1.2246467991473527e-16,
+          1.5707963267948966,
+          0
+        ],
+        "scale": [
+          10.38158962767198,
+          10.38158962767198,
+          10.38158962767198
+        ],
+        "prompt": "new york style 3 floor building, an store at first floor, afternoon, no shadow",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:22 PM",
+        "emissiveBoost": 0.2,
+        "specularity": 0
+      },
+      {
+        "id": "asset_1789836939808",
+        "name": "new york style 3 floor building, an bar at first floor, afternoon, no shadow some windows have lights",
+        "glbUrl": "/api/assets/trellis_1789836938604_0lb14.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789836939793_k2q6f.mp4",
+        "position": [
+          14.321532661354727,
+          0,
+          4.792522995217611
+        ],
+        "rotation": [
+          0,
+          -1.5707963267948966,
+          0
+        ],
+        "scale": [
+          11.790925734545425,
+          11.790925734545425,
+          11.790925734545425
+        ],
+        "prompt": "new york style 3 floor building, an bar at first floor, afternoon, no shadow some windows have lights",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "08:25 PM",
+        "emissiveBoost": 0.65,
+        "specularity": 0
+      }
+    ],
+    "panoramaRotation": 0,
+    "environmentPreset": "studio",
+    "lightIntensity": 0.2,
+    "stageSpecularity": 0.15,
+    "pointLights": [
+      {
+        "id": "ptlight_1789829823929_p5th",
+        "name": "Point Light 1",
+        "color": "#ffd294",
+        "intensity": 6.8,
+        "distance": 42.5,
+        "decay": 1.3,
+        "position": [
+          2.336978566168814,
+          2.16998623704049,
+          4.147769881578676
+        ],
+        "enabled": true
+      },
+      {
+        "id": "ptlight_1789829843802_mpsy",
+        "name": "Point Light 2",
+        "color": "#f7dab0",
+        "intensity": 17.4,
+        "distance": 31.5,
+        "decay": 3.2,
+        "position": [
+          0,
+          2.381841455226977,
+          21.10904601290148
+        ],
+        "enabled": true
+      }
+    ],
+    "thumbnail": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80"
+  },
+  {
+    "id": "stage_proj_proj_1789730134170",
+    "name": "test",
+    "createdAt": "2026-09-19T14:21:16.725Z",
+    "scenes": [
+      {
+        "id": "asset_1789818261536",
+        "name": "Vintage Wooden Chair",
+        "glbUrl": "/api/assets/trellis_1789818260755_vidfw.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789818261515_47qhw.mp4",
+        "position": [
+          1.4205282249879765,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "prompt": "Vintage Wooden Chair",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "03:14 PM"
+      },
+      {
+        "id": "asset_1789818822624",
+        "name": "Ancient Stone Idol",
+        "glbUrl": "/api/assets/trellis_1789818821443_e2q76.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789818822590_fukjb.mp4",
+        "position": [
+          2.3788009177637965,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "prompt": "Ancient Stone Idol",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "03:23 PM"
+      },
+      {
+        "id": "asset_1789827156293",
+        "name": "new york style building. 2 floor building",
+        "glbUrl": "/api/assets/trellis_1789827155491_jtub5.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789827156282_j9e2n.mp4",
+        "position": [
+          -2.1033367059184958,
+          0,
+          -6.686962592053093
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          8.12184366939559,
+          8.12184366939559,
+          8.12184366939559
+        ],
+        "prompt": "new york style building. 2 floor building",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:42 PM"
+      },
+      {
+        "id": "asset_1789827465674",
+        "name": "new york style building. 3 floor building with an store",
+        "glbUrl": "/api/assets/trellis_1789827464893_iyjka.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789827465660_cdylh.mp4",
+        "position": [
+          2.632541283945536,
+          0,
+          -6.056704297249719
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          8.800587298595968,
+          8.800587298595968,
+          8.800587298595968
+        ],
+        "prompt": "new york style building. 3 floor building with an store",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:47 PM"
+      },
+      {
+        "id": "asset_1789827608487",
+        "name": "new york style side walk of the street",
+        "glbUrl": "/api/assets/trellis_1789827607582_yv516.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789827608477_f0232.mp4",
+        "position": [
+          -3.6767564201004985,
+          -0.32117888119127325,
+          -2.2329460774562
+        ],
+        "rotation": [
+          -3.141592653589793,
+          -0.05030377069575199,
+          -3.141592653589793
+        ],
+        "scale": [
+          3.5627639623488103,
+          3.5627639623488103,
+          3.5627639623488103
+        ],
+        "prompt": "new york style side walk of the street",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:50 PM"
+      },
+      {
+        "id": "asset_1789827646164_5fig",
+        "name": "new york style side walk of the street (Copy)",
+        "glbUrl": "/api/assets/trellis_1789827607582_yv516.glb",
+        "previewUrl": "/api/assets/trellis_preview_1789827608477_f0232.mp4",
+        "position": [
+          -0.17316148890901095,
+          -0.32117888119127325,
+          -2.4223779753588066
+        ],
+        "rotation": [
+          -3.141592653589793,
+          -0.05030377069575199,
+          -3.141592653589793
+        ],
+        "scale": [
+          3.5627639623488103,
+          3.5627639623488103,
+          3.5627639623488103
+        ],
+        "prompt": "new york style side walk of the street",
+        "engine": "trellis",
+        "category": "prop",
+        "createdAt": "05:50 PM"
+      }
+    ],
+    "panoramaUrl": "/api/assets/pano_360_1789827304068_qw7kt.png",
+    "panoramaRotation": 0,
+    "splatUrl": "/api/assets/hunyuan_world_splat_1789816882965_6icnt.splat",
+    "environmentPreset": "studio",
+    "lightIntensity": 1,
+    "stageSpecularity": 0.15,
+    "pointLights": [],
+    "thumbnail": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80"
+  },
+  {
     "id": "stage_proj_proj_1789042056664",
     "name": "Bar",
     "createdAt": "2026-09-13T05:03:00.869Z",
