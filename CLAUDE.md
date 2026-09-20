@@ -16,6 +16,7 @@ Browser-based virtual film studio: design 3D scenes, set up and animate actors, 
 - The API lives in `server/`, not in `vite.config.ts` (49 lines now). Dev and production mount the same `createApiMiddleware` + `attachCameraRemoteWs`.
 - Secrets in `.env.local` (not committed); see `.env.example`. Dev passes them through `configureEnv(loadEnv(...))`; production uses the process environment.
 - Data on disk: `data/projects.json` (small metadata), `data/blobs/<projectId>/` (keyframes + motion), `data/assets/` (GLB, splat, audio, thumbnails)
+- `data/` is NOT in git (2026-09-20). It is ~430 MB of generated models that change on every generation, and projects.json + blobs must move together or a clone gets refs to files that do not exist. Snapshot it with `npm run backup:data` (tar.gz into `backups/`, newest 10 kept). Versions committed before that date are still recoverable from git history.
 
 ## Layout
 - `src/components/screens/` — main views: Projects, SceneDesign, ActingSetup, CameraRecord, WorkflowSequence, MobileCameraRemote

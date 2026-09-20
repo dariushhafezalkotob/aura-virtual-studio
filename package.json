@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "build:server": "node scripts/build-server.mjs",
     "typecheck": "tsc && tsc -p tsconfig.server.json",
-    "start": "node dist-server/prod.mjs"
+    "start": "node dist-server/prod.mjs",
+    "backup:data": "node scripts/backup-data.mjs"
   },
   "dependencies": {
     "@gradio/client": "^1.13.0",

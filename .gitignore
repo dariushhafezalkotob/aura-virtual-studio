@@ -7,8 +7,10 @@ dist-ssr
 .env.*.local
 .npm-cache
 .DS_Store
-data/*.tmp.*
 dist-server
-data/blobs
-data/projects.before-split.*.json
-data/.projects-split-backup
+
+# Working data: projects, generated assets, takes and motion.
+# Not source - it is 300 MB+ and changes on every generation. Back it up with
+# `npm run backup:data`, not with git. Older versions are still in git history.
+data/
+backups/
