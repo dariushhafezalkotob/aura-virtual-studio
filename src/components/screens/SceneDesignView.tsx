@@ -15,6 +15,14 @@ import {
   LightingEnvironmentPreset,
 } from '../viewport/ThreeStage';
 import { RoomBakeStudio } from '../roombake/RoomBakeStudio';
+import { PRIMITIVE_DEFS, PrimitiveKind, createPrimitiveAssetUrl } from '../../services/primitiveAssets';
+import {
+  TRELLIS_QUALITY_PRESETS,
+  TrellisQuality,
+  getTrellisQualityPreset,
+  loadTrellisQuality,
+  saveTrellisQuality,
+} from '../../services/trellisQuality';
 import {
   loadStageTemplates,
   saveStageTemplate,
@@ -90,6 +98,9 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const [showPanoramaModal, setShowPanoramaModal] = useState(false);
   const [showHunyuanWorldModal, setShowHunyuanWorldModal] = useState(false);
   const [showRoomBakeStudio, setShowRoomBakeStudio] = useState(false);
+  const [trellisQuality, setTrellisQuality] = useState<TrellisQuality>(() => loadTrellisQuality());
+  const [showPrimitiveMenu, setShowPrimitiveMenu] = useState(false);
+  const [addingPrimitive, setAddingPrimitive] = useState<PrimitiveKind | null>(null);
 
   // Stage Saving & Stage Library State
   const [saveToast, setSaveToast] = useState<string | null>(null);
@@ -493,6 +504,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
         status: 'connecting',
       });
 
+      // Mesh detail / texture size only apply to TRELLIS; Hunyuan3D has its own fixed pipeline.
+      const quality = getTrellisQualityPreset(trellisQuality);
       const result = await TrellisService.generate3D(
         {
           engine: engineToUse,
@@ -500,6 +513,14 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           imageFile: imgFile || undefined,
           imageUrl: imgUrl || undefined,
           prompt: promptToUse,
+          ...(engineToUse === 'trellis'
+            ? {
+                ssSteps: quality.ssSteps,
+                slatSteps: quality.slatSteps,
+                simplify: quality.simplify,
+                textureSize: quality.textureSize,
+              }
+            : {}),
         },
         (p: GenerationProgress) => setProgress(p)
       );
@@ -641,6 +662,46 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
         scenes: updatedScenes,
       });
       setSelectedAssetId(newAsset.id);
+    }
+  };
+
+  /**
+   * Primitives are saved as ordinary GLB assets rather than a special asset kind, so the
+   * gizmo, the object inspector and RoomBake all work on them with no extra cases.
+   */
+  const handleAddPrimitive = async (kind: PrimitiveKind) => {
+    setShowPrimitiveMenu(false);
+    if (addingPrimitive) return;
+    try {
+      setAddingPrimitive(kind);
+      const glbUrl = await createPrimitiveAssetUrl(kind);
+      const def = PRIMITIVE_DEFS.find((p) => p.kind === kind);
+      const label = def?.label || kind;
+      const sameKindCount = assets.filter((a) => a.id.startsWith(`primitive_${kind}_`)).length;
+
+      pushUndoSnapshot();
+
+      const newAsset: SceneAsset = {
+        id: `primitive_${kind}_${Date.now()}`,
+        name: sameKindCount > 0 ? `${label} ${sameKindCount + 1}` : label,
+        glbUrl,
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1],
+        category: 'prop',
+        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+
+      onUpdateProject({
+        ...currentProject,
+        scenes: [...assets, newAsset],
+      });
+      setSelectedAssetId(newAsset.id);
+    } catch (err: any) {
+      console.error(err);
+      alert(`Could not add the ${kind}: ${err.message || err}`);
+    } finally {
+      setAddingPrimitive(null);
     }
   };
 
@@ -1096,6 +1157,48 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
 
         {/* Viewport & 360 / 3DGS World Toggles */}
         <div className="flex items-center gap-sm">
+          {/* Primitive Objects (Box / Plane / ...) — plain GLB assets RoomBake can texture */}
+          <div className="relative">
+            <button
+              onClick={() => setShowPrimitiveMenu((v) => !v)}
+              disabled={!!addingPrimitive}
+              className={`flex items-center gap-xs px-sm py-[4px] rounded-lg text-[11px] font-label-caps font-bold transition-all border cursor-pointer ${
+                showPrimitiveMenu
+                  ? 'bg-primary text-background border-primary shadow'
+                  : 'bg-surface-container-high/60 text-primary border-primary/40 hover:bg-primary/20'
+              } ${addingPrimitive ? 'opacity-60 cursor-wait' : ''}`}
+              title="Add a plain box, plane or other primitive you can texture with RoomBake"
+            >
+              <span className="material-symbols-outlined text-[16px]">deployed_code</span>
+              {addingPrimitive ? 'ADDING…' : 'PRIMITIVES'}
+            </button>
+
+            {showPrimitiveMenu && (
+              <>
+                {/* click-away catcher */}
+                <div className="fixed inset-0 z-30" onClick={() => setShowPrimitiveMenu(false)} />
+                <div className="absolute top-full left-0 mt-xs z-40 w-60 bg-surface-container border border-outline-variant/50 rounded-lg shadow-xl p-xs">
+                  {PRIMITIVE_DEFS.map((def) => (
+                    <button
+                      key={def.kind}
+                      onClick={() => handleAddPrimitive(def.kind)}
+                      className="w-full flex items-center gap-sm px-sm py-xs rounded-md hover:bg-surface-container-highest transition-colors text-left cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[18px] text-primary">{def.icon}</span>
+                      <span className="flex flex-col">
+                        <span className="text-[12px] text-on-surface font-medium">{def.label}</span>
+                        <span className="text-[10px] text-on-surface-variant">{def.hint}</span>
+                      </span>
+                    </button>
+                  ))}
+                  <div className="px-sm pt-xs pb-[2px] text-[10px] text-on-surface-variant border-t border-outline-variant/30 mt-xs">
+                    Select one, then open ROOMBAKE to texture it.
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
           {/* RoomBake AI Texture Studio Button */}
           <button
             onClick={() => setShowRoomBakeStudio(true)}
@@ -1823,6 +1926,35 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               HUNYUAN 3D (SHAPE)
             </button>
           </div>
+
+          {/* Mesh quality — TRELLIS only; Hunyuan3D runs its own fixed pipeline */}
+          {selectedEngine === 'trellis' && (
+            <div
+              className="flex items-center bg-surface-container/80 p-[2px] rounded-lg border border-outline-variant/30 shrink-0"
+              title="How much mesh detail and texture resolution TRELLIS keeps. Higher settings take longer on the GPU."
+            >
+              <span className="px-xs text-[9px] font-label-caps text-on-surface-variant/70 tracking-wider">
+                QUALITY
+              </span>
+              {TRELLIS_QUALITY_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  onClick={() => {
+                    setTrellisQuality(preset.id);
+                    saveTrellisQuality(preset.id);
+                  }}
+                  className={`px-sm py-xs rounded text-[10px] font-label-caps transition-all cursor-pointer ${
+                    trellisQuality === preset.id
+                      ? 'bg-primary text-background font-bold shadow'
+                      : 'text-on-surface-variant hover:text-on-surface'
+                  }`}
+                  title={`${preset.description} (${preset.costHint}) — mesh simplify ${preset.simplify}, ${preset.textureSize}px texture, ${preset.ssSteps} sampling steps`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Reference Image Button & Preview */}
           <div className="flex-1 flex items-center justify-center px-xs">

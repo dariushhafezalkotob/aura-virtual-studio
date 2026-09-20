@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { RoomBakeEngine, ViewPoint } from '../../services/roombakeEngine';
+import { RoomBakeEngine, ViewPoint, BakeViewMode } from '../../services/roombakeEngine';
 import { generateTexture, generateTextureCandidates } from '../../services/roombakeAiService';
 import { UVInspectorModal } from './UVInspectorModal';
 import { SceneAsset } from '../../types';
@@ -10,6 +10,19 @@ interface RoomBakeStudioProps {
   onClose: () => void;
   onAddSceneAsset?: (assetData: { name: string; glbUrl?: string; modelBlob?: Blob }) => void;
   targetAsset?: SceneAsset | null;
+}
+
+/**
+ * Rooms and environments are baked from cameras inside them; props and primitives from
+ * cameras orbiting them. Guess from the asset, the user can still flip it in section 00.
+ */
+function inferViewMode(asset?: SceneAsset | null): BakeViewMode {
+  if (!asset) return 'interior';
+  const name = (asset.name || '').toLowerCase();
+  if (asset.id.startsWith('roombake_') || asset.category === 'environment' || name.includes('room')) {
+    return 'interior';
+  }
+  return 'exterior';
 }
 
 export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
@@ -36,6 +49,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   // 00 Geometry
   const [uvMode, setUvMode] = useState<'smart' | 'auto' | 'box' | 'model'>('auto');
   const [splitTrims, setSplitTrims] = useState(true);
+  const [viewMode, setViewMode] = useState<BakeViewMode>('interior');
 
   // 01 View
   const [views, setViews] = useState<ViewPoint[]>([]);
@@ -337,6 +351,10 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
       lastLoadedTargetKeyRef.current = targetKey;
       addLog(`Loading scene model: "${targetAsset.name}" with its textures into RoomBake...`, 'info');
 
+      // A room is baked from cameras inside it; a prop or primitive from cameras around it.
+      const mode = inferViewMode(targetAsset);
+      setViewMode(mode);
+
       // Resolve expired blob URLs or fallbacks to permanent asset storage
       const resolvedUrl =
         targetAsset.glbUrl.startsWith('blob:') &&
@@ -347,7 +365,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
           : targetAsset.glbUrl;
 
       engine
-        .loadCustomModel(resolvedUrl, uvMode, splitTrims)
+        .loadCustomModel(resolvedUrl, uvMode, splitTrims, mode)
         .then(() => {
           if (!engineRef.current) return;
           setViews([...engineRef.current.views]);
@@ -418,6 +436,29 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     }
     updateStats();
     addLog(`Applied ${newMode.toUpperCase()} UV layout!`, 'ok');
+  };
+
+  const handleViewModeChange = (newMode: BakeViewMode) => {
+    setViewMode(newMode);
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.generatePresetViews(newMode);
+    setViews([...engine.views]);
+    const idx = Math.min(1, engine.views.length - 1);
+    setSelectedViewIdx(idx);
+    engine.jumpToView(idx);
+    const v = engine.views[idx];
+    if (v) {
+      engine.renderConditioning(v, autoRange, depthInvert, maskFeather);
+      refreshViewInfo(v);
+    }
+    updateStats();
+    addLog(
+      newMode === 'exterior'
+        ? 'Cameras now orbit the model from outside (props, primitives).'
+        : 'Cameras now sit inside the model looking out (rooms, interiors).',
+      'ok'
+    );
   };
 
   const handleSplitTrimsChange = (newSplit: boolean) => {
@@ -1219,6 +1260,33 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
 
                 <div className="font-mono text-[10.5px] text-on-surface-variant/80">
                   {modelStatus}
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] font-mono text-on-surface-variant">
+                    Camera Placement
+                  </label>
+                  <div className="flex items-center gap-1">
+                    {([
+                      { mode: 'interior' as BakeViewMode, label: 'Inside (Room)' },
+                      { mode: 'exterior' as BakeViewMode, label: 'Around (Object)' },
+                    ]).map((opt) => (
+                      <button
+                        key={opt.mode}
+                        onClick={() => handleViewModeChange(opt.mode)}
+                        className={`flex-1 py-1.5 px-2 text-[11px] font-mono border transition-colors ${
+                          viewMode === opt.mode
+                            ? 'bg-primary text-background border-primary'
+                            : 'bg-surface-container border-outline-variant text-on-surface hover:bg-surface-container-high'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-[10px] font-mono text-on-surface-variant/70">
+                    Boxes, planes and props need “Around”; a room needs “Inside”.
+                  </div>
                 </div>
 
                 <div className="flex flex-col gap-1">

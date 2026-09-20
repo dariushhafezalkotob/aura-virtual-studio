@@ -29,6 +29,12 @@ export const DEFAULT_ROOMBAKE_CONFIG: RoomBakeConfig = {
   panoH: 1024,
 };
 
+/**
+ * 'interior' bakes a room from cameras inside it; 'exterior' bakes a prop or primitive from
+ * cameras orbiting it. Interior cameras see nothing on a solid object, and vice versa.
+ */
+export type BakeViewMode = 'interior' | 'exterior';
+
 export interface ViewPoint {
   name: string;
   type?: 'persp' | 'pano';
@@ -149,6 +155,7 @@ export class RoomBakeEngine {
 
   public meshes: THREE.Mesh[] = [];
   public views: ViewPoint[] = [];
+  public viewMode: BakeViewMode = 'interior';
   public currentViewIndex: number = 0;
   public dilationPasses: number = 8;
 
@@ -1013,7 +1020,7 @@ export class RoomBakeEngine {
 
     this.orbit.target.set(0, H * 0.52, D * 0.28);
     this.applyOrbit();
-    this.generatePresetViews();
+    this.generatePresetViews('interior'); // the default room is only ever baked from inside
     this.clearBake();
   }
 
@@ -1526,7 +1533,8 @@ export class RoomBakeEngine {
   public async loadCustomModel(
     fileOrUrl: File | string,
     uvMode: 'smart' | 'box' | 'model' | 'auto' = 'smart',
-    splitTrims = true
+    splitTrims = true,
+    viewMode: BakeViewMode = this.viewMode
   ): Promise<void> {
     let rootObject: THREE.Object3D;
     const fileName = typeof fileOrUrl === 'string' ? fileOrUrl.split('/').pop() || 'model' : fileOrUrl.name;
@@ -1707,7 +1715,12 @@ export class RoomBakeEngine {
 
     this.orbit.target.set(0, this.config.room.H * 0.5, 0);
     this.applyOrbit();
-    this.generatePresetViews();
+    this.generatePresetViews(viewMode);
+    if (viewMode === 'exterior') {
+      // The preview camera sits AT orbit.target looking along yaw/pitch, so without this it
+      // opens inside the object. Park it on the first ¾ view instead.
+      this.jumpToView(1);
+    }
     this.clearBake();
 
     // If model has an existing texture, blit it into the baking atlas with full alpha so it renders immediately!
@@ -1766,12 +1779,50 @@ export class RoomBakeEngine {
     this.generatePresetViews();
   }
 
-  public generatePresetViews() {
+  /**
+   * Cameras orbiting the model from OUTSIDE, for props and primitives. The interior preset
+   * puts every camera in the middle of the volume looking out, which sees nothing at all on
+   * a solid object like a box.
+   */
+  private exteriorViewPoints(): ViewPoint[] {
+    const { W, H, D } = this.config.room;
+    const maxDim = Math.max(W, H, D);
+    const dist = maxDim * 1.6 + 0.8;
+    const elevation = THREE.MathUtils.degToRad(35);
+    const mid = H * 0.5;
+    const target: [number, number, number] = [0, mid, 0];
+
+    const ring = (deg: number, name: string): ViewPoint => {
+      const a = THREE.MathUtils.degToRad(deg);
+      const ground = dist * Math.cos(elevation);
+      return {
+        name,
+        pos: [Math.sin(a) * ground, mid + dist * Math.sin(elevation), Math.cos(a) * ground],
+        target,
+        fov: 45,
+      };
+    };
+
+    return [
+      ring(0, 'Front (+Z)'),
+      ring(45, 'Front-right ¾'),
+      ring(90, 'Right (+X)'),
+      ring(135, 'Back-right ¾'),
+      ring(180, 'Back (−Z)'),
+      ring(225, 'Back-left ¾'),
+      ring(270, 'Left (−X)'),
+      ring(315, 'Front-left ¾'),
+      // A hair off-axis: looking straight down a vertical axis makes lookAt degenerate.
+      { name: 'Top down', pos: [0.001, mid + dist * 1.15, 0.001], target, fov: 45 },
+    ];
+  }
+
+  private interiorViewPoints(): ViewPoint[] {
     const { W, H, D } = this.config.room;
     const eye = H * 0.55;
     const c: [number, number, number] = [0, eye, 0];
 
-    const rawViews: ViewPoint[] = [
+    return [
       { name: 'Panorama · Center', type: 'pano', pos: [0, eye, 0] },
       { name: 'Wall −Z (Front)',  pos: c, target: [0, eye, -D], fov: 65 },
       { name: 'Wall +Z (Back)',   pos: c, target: [0, eye,  D], fov: 65 },
@@ -1784,6 +1835,11 @@ export class RoomBakeEngine {
       { name: 'Corner −X−Z',      pos: [-W * 0.4, eye, -D * 0.45], target: [W * 0.5, eye * 0.6, D * 0.5], fov: 75 },
       { name: 'Corner +X+Z',      pos: [ W * 0.4, eye,  D * 0.45], target: [-W * 0.5, eye * 0.6, -D * 0.5], fov: 75 },
     ];
+  }
+
+  public generatePresetViews(mode: BakeViewMode = this.viewMode) {
+    this.viewMode = mode;
+    const rawViews = mode === 'exterior' ? this.exteriorViewPoints() : this.interiorViewPoints();
 
     this.views = rawViews.map((v) => {
       const fov = v.fov || 60;
