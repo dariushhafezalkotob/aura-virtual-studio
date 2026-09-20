@@ -1,0 +1,28 @@
+[Unit]
+Description=Aura Virtual Studio
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aura
+Group=aura
+WorkingDirectory=/srv/aura
+# prod.ts resolves dist/ and data/ from the working directory, so this must stay /srv/aura.
+ExecStart=/usr/bin/node dist-server/prod.mjs
+EnvironmentFile=/etc/aura.env
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aura
+
+# The app only ever needs to read its own directory and write data/ inside it.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/aura
+
+[Install]
+WantedBy=multi-user.target

@@ -18,6 +18,13 @@ Browser-based virtual film studio: design 3D scenes, set up and animate actors, 
 - Data on disk: `data/projects.json` (small metadata), `data/blobs/<projectId>/` (keyframes + motion), `data/assets/` (GLB, splat, audio, thumbnails)
 - `data/` is NOT in git (2026-09-20). It is ~430 MB of generated models that change on every generation, and projects.json + blobs must move together or a clone gets refs to files that do not exist. Snapshot it with `npm run backup:data` (tar.gz into `backups/`, newest 10 kept). Versions committed before that date are still recoverable from git history.
 
+## Deploy
+- Domain `pantilt.app` (registered at Cloudflare 2026-09-20). Its DNS record MUST stay **DNS only (grey cloud)**: behind Cloudflare's proxy every request over ~100s returns 524, and generations take minutes. Assets go through R2's own CDN instead (not wired up yet).
+- `deploy/setup-server.sh` — one-time, on a fresh Ubuntu 24.04 box (Node 22, Caddy, ufw, the `aura` user, `/etc/aura.env`). Installs `python3-numpy`/`python3-pillow` because `/api/generate-360-from-image` shells out to `slice_equirect_views.py`.
+- `deploy/deploy.sh root@<IP>` — from the Mac: typecheck, build, rsync `dist/` + `dist-server/` + manifest, `npm ci --omit=dev`, restart. Never touches `data/` on the server.
+- `deploy/aura.service` (systemd, WorkingDirectory `/srv/aura` because prod.ts resolves `dist/` and `data/` from cwd) and `deploy/Caddyfile` (automatic HTTPS, 900s proxy timeouts, WebSocket upgrades).
+- Keys stay EMPTY in `/etc/aura.env` until there is a login: with no server key, a visitor can only generate with a key they enter in the app's own Settings, so nobody can spend the owner's quota.
+
 ## Layout
 - `src/components/screens/` — main views: Projects, SceneDesign, ActingSetup, CameraRecord, WorkflowSequence, MobileCameraRemote
 - `src/components/acting/` — actor rig posing, constraints, multi-actor timeline

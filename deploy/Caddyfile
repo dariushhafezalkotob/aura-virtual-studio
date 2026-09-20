@@ -1,0 +1,28 @@
+# Caddy fetches and renews the HTTPS certificate on its own, which .app requires:
+# the whole TLD is HSTS-preloaded, so browsers refuse plain http.
+#
+# This only works while the DNS record is "DNS only" (grey cloud) in Cloudflare.
+# Behind the orange cloud, Cloudflare gives up on any request over ~100 seconds
+# with a 524 -- and a TRELLIS or Kimodo generation takes minutes.
+
+__DOMAIN__, www.__DOMAIN__ {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:3000 {
+		# WebSocket upgrades (the phone camera remote) are handled automatically.
+		# These timeouts are what let a long generation finish.
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 600s
+			read_timeout 900s
+			write_timeout 900s
+		}
+	}
+
+	log {
+		output file /var/log/caddy/aura.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+	}
+}
