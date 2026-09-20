@@ -35,6 +35,7 @@ interface CharacterActorModelProps {
   allActors?: CharacterActor[];
   isSelected: boolean;
   transformMode: TransformMode;
+  rotationSnap?: number | null;
   currentTimelineTime: number;
   isPlaying?: boolean;
   showTrajectory?: boolean;
@@ -270,6 +271,7 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
   allActors: _allActors = [],
   isSelected,
   transformMode,
+  rotationSnap,
   currentTimelineTime,
   isPlaying = false,
   showTrajectory = true,
@@ -283,6 +285,8 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
   const rootGroupRef = useRef<THREE.Group>(null);
   const bodyGroupRef = useRef<THREE.Group>(null);
   const skinnedMeshRef = useRef<THREE.SkinnedMesh | null>(null);
+  const [isRotating, setIsRotating] = useState(false);
+  const [liveRotDeg, setLiveRotDeg] = useState<[number, number, number]>([0, 0, 0]);
 
   // SOMA 77 Bones array and rest orientations
   const bonesRef = useRef<THREE.Bone[]>([]);
@@ -991,6 +995,7 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
 
   const handleTransformEnd = () => {
     markTransformDragEnd();
+    setIsRotating(false);
     setTimeout(() => {
       onDraggingChange(false);
     }, 200);
@@ -1011,6 +1016,16 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
         rootGroupRef.current.scale.z,
       ];
       onTransformChange(actor.id, pos, rot, scl);
+    }
+  };
+
+  const handleRootObjectChange = () => {
+    if (transformMode === 'rotate' && rootGroupRef.current) {
+      const degX = Math.round(THREE.MathUtils.radToDeg(rootGroupRef.current.rotation.x));
+      const degY = Math.round(THREE.MathUtils.radToDeg(rootGroupRef.current.rotation.y));
+      const degZ = Math.round(THREE.MathUtils.radToDeg(rootGroupRef.current.rotation.z));
+      setIsRotating(true);
+      setLiveRotDeg([degX, degY, degZ]);
     }
   };
 
@@ -1148,13 +1163,11 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
               >
                 <mesh renderOrder={HANDLE_RENDER_ORDER}>
                   <sphereGeometry args={[0.045, 16, 16]} />
-                  <meshStandardMaterial
-                    depthTest={false}
-                    depthWrite={false}
+                  <meshBasicMaterial
+                    color={selectedIkEffector === 'rightHand' ? '#00ffcc' : '#ff9500'}
                     transparent
-                    color={selectedIkEffector === 'rightHand' && activeRigMode === 'ik' ? '#00ffcc' : '#ffffff'}
-                    emissive={selectedIkEffector === 'rightHand' ? '#00ffcc' : '#000000'}
-                    emissiveIntensity={0.6}
+                    opacity={0.8}
+                    depthTest={false}
                   />
                 </mesh>
               </group>
@@ -1170,62 +1183,16 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
               >
                 <mesh renderOrder={HANDLE_RENDER_ORDER}>
                   <sphereGeometry args={[0.045, 16, 16]} />
-                  <meshStandardMaterial
-                    depthTest={false}
-                    depthWrite={false}
+                  <meshBasicMaterial
+                    color={selectedIkEffector === 'leftHand' ? '#00ffcc' : '#ff9500'}
                     transparent
-                    color={selectedIkEffector === 'leftHand' && activeRigMode === 'ik' ? '#00ffcc' : '#ffffff'}
-                    emissive={selectedIkEffector === 'leftHand' ? '#00ffcc' : '#000000'}
-                    emissiveIntensity={0.6}
+                    opacity={0.8}
+                    depthTest={false}
                   />
                 </mesh>
               </group>
 
-              {/* Right Foot IK Effector */}
-              <group
-                ref={ikHandleRefSetters.rightFoot}
-                position={actor.ikTargets?.rightFoot || ikHandleDefaults.rightFoot}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectIkEffector?.('rightFoot');
-                }}
-              >
-                <mesh renderOrder={HANDLE_RENDER_ORDER}>
-                  <boxGeometry args={[0.08, 0.04, 0.16]} />
-                  <meshStandardMaterial
-                    depthTest={false}
-                    depthWrite={false}
-                    transparent
-                    color={selectedIkEffector === 'rightFoot' && activeRigMode === 'ik' ? '#ff9500' : '#ffffff'}
-                    emissive={selectedIkEffector === 'rightFoot' ? '#ff9500' : '#000000'}
-                    emissiveIntensity={0.6}
-                  />
-                </mesh>
-              </group>
-
-              {/* Left Foot IK Effector */}
-              <group
-                ref={ikHandleRefSetters.leftFoot}
-                position={actor.ikTargets?.leftFoot || ikHandleDefaults.leftFoot}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectIkEffector?.('leftFoot');
-                }}
-              >
-                <mesh renderOrder={HANDLE_RENDER_ORDER}>
-                  <boxGeometry args={[0.08, 0.04, 0.16]} />
-                  <meshStandardMaterial
-                    depthTest={false}
-                    depthWrite={false}
-                    transparent
-                    color={selectedIkEffector === 'leftFoot' && activeRigMode === 'ik' ? '#ff9500' : '#ffffff'}
-                    emissive={selectedIkEffector === 'leftFoot' ? '#ff9500' : '#000000'}
-                    emissiveIntensity={0.6}
-                  />
-                </mesh>
-              </group>
-
-              {/* Hip / Root COG Handle -- drag to move the whole body */}
+              {/* Pelvis / Hips Position Effector Handle */}
               <group
                 ref={ikHandleRefSetters.hips}
                 position={actor.ikTargets?.hips || ikHandleDefaults.hips}
@@ -1235,31 +1202,17 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
                 }}
               >
                 <mesh rotation={[-Math.PI / 2, 0, 0]} renderOrder={HANDLE_RENDER_ORDER}>
-                  <torusGeometry args={[0.13, 0.012, 8, 28]} />
-                  <meshStandardMaterial
-                    depthTest={false}
-                    depthWrite={false}
+                  <torusGeometry args={[0.22, 0.015, 16, 32]} />
+                  <meshBasicMaterial
+                    color={selectedIkEffector === 'hips' ? '#00ffcc' : '#af52de'}
                     transparent
-                    color={selectedIkEffector === 'hips' && activeRigMode === 'ik' ? '#ffd60a' : '#ffffff'}
-                    emissive={selectedIkEffector === 'hips' ? '#ffd60a' : '#000000'}
-                    emissiveIntensity={0.6}
-                  />
-                </mesh>
-                {/* Small hub so the ring is still clickable edge-on */}
-                <mesh renderOrder={HANDLE_RENDER_ORDER}>
-                  <sphereGeometry args={[0.03, 12, 12]} />
-                  <meshStandardMaterial
+                    opacity={0.8}
                     depthTest={false}
-                    depthWrite={false}
-                    transparent
-                    color={selectedIkEffector === 'hips' && activeRigMode === 'ik' ? '#ffd60a' : '#ffffff'}
-                    emissive={selectedIkEffector === 'hips' ? '#ffd60a' : '#000000'}
-                    emissiveIntensity={0.6}
                   />
                 </mesh>
               </group>
 
-              {/* Look-At Head IK Target */}
+              {/* Gaze Target Effector Handle */}
               <group
                 ref={ikHandleRefSetters.lookAt}
                 position={actor.ikTargets?.lookAt || ikHandleDefaults.lookAt}
@@ -1269,20 +1222,74 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
                 }}
               >
                 <mesh renderOrder={HANDLE_RENDER_ORDER}>
-                  <octahedronGeometry args={[0.06]} />
-                  <meshStandardMaterial
-                    depthTest={false}
-                    depthWrite={false}
+                  <octahedronGeometry args={[0.06, 0]} />
+                  <meshBasicMaterial
+                    color={selectedIkEffector === 'lookAt' ? '#00ffcc' : '#ffd60a'}
                     transparent
-                    color={selectedIkEffector === 'lookAt' && activeRigMode === 'ik' ? '#af52de' : '#ffffff'}
-                    emissive={selectedIkEffector === 'lookAt' ? '#af52de' : '#000000'}
-                    emissiveIntensity={0.6}
+                    opacity={0.85}
+                    depthTest={false}
+                  />
+                </mesh>
+              </group>
+
+              {/* Right Foot Effector */}
+              <group
+                ref={ikHandleRefSetters.rightFoot}
+                position={actor.ikTargets?.rightFoot || ikHandleDefaults.rightFoot}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectIkEffector?.('rightFoot');
+                }}
+              >
+                <mesh renderOrder={HANDLE_RENDER_ORDER}>
+                  <boxGeometry args={[0.08, 0.05, 0.16]} />
+                  <meshBasicMaterial
+                    color={selectedIkEffector === 'rightFoot' ? '#00ffcc' : '#34c759'}
+                    transparent
+                    opacity={0.8}
+                    depthTest={false}
+                  />
+                </mesh>
+              </group>
+
+              {/* Left Foot Effector */}
+              <group
+                ref={ikHandleRefSetters.leftFoot}
+                position={actor.ikTargets?.leftFoot || ikHandleDefaults.leftFoot}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectIkEffector?.('leftFoot');
+                }}
+              >
+                <mesh renderOrder={HANDLE_RENDER_ORDER}>
+                  <boxGeometry args={[0.08, 0.05, 0.16]} />
+                  <meshBasicMaterial
+                    color={selectedIkEffector === 'leftFoot' ? '#00ffcc' : '#34c759'}
+                    transparent
+                    opacity={0.8}
+                    depthTest={false}
                   />
                 </mesh>
               </group>
             </group>
           )}
         </group>
+
+        {/* Live Angle HUD (Visible during rotation, disappears immediately on release) */}
+        {isRotating && (
+          <Html position={[0, 2.1, 0]} center distanceFactor={12}>
+            <div className="pointer-events-none select-none bg-slate-950/90 text-cyan-300 border border-cyan-400/60 px-3 py-1.5 rounded-lg shadow-2xl backdrop-blur-md flex items-center gap-2 text-xs font-mono font-bold whitespace-nowrap animate-in fade-in zoom-in-90 duration-100">
+              <span className="material-symbols-outlined text-sm text-cyan-400">rotate_right</span>
+              <span>ROTATION:</span>
+              <span className="text-amber-300 text-sm">
+                {liveRotDeg[1]}°
+              </span>
+              <span className="text-[10px] text-cyan-400/70 font-sans">
+                (X: {liveRotDeg[0]}° Y: {liveRotDeg[1]}° Z: {liveRotDeg[2]}°)
+              </span>
+            </div>
+          </Html>
+        )}
 
         {/* Selection Ring & Name Tag */}
         {isSelected && (
@@ -1310,11 +1317,20 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
         <TransformControls
           object={rootGroupRef.current}
           mode={transformMode}
+          rotationSnap={transformMode === 'rotate' ? (rotationSnap ?? null) : null}
           size={0.75}
           onMouseDown={() => {
             markTransformDragStart();
+            if (transformMode === 'rotate' && rootGroupRef.current) {
+              const degX = Math.round(THREE.MathUtils.radToDeg(rootGroupRef.current.rotation.x));
+              const degY = Math.round(THREE.MathUtils.radToDeg(rootGroupRef.current.rotation.y));
+              const degZ = Math.round(THREE.MathUtils.radToDeg(rootGroupRef.current.rotation.z));
+              setIsRotating(true);
+              setLiveRotDeg([degX, degY, degZ]);
+            }
             onDraggingChange(true);
           }}
+          onObjectChange={handleRootObjectChange}
           onMouseUp={handleTransformEnd}
         />
       )}

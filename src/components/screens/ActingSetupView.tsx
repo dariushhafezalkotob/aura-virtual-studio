@@ -66,6 +66,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
 
   const [selectedActorId, setSelectedActorId] = useState<string>(characters[0]?.id || 'actor_soma_alpha');
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
+  const [rotationSnapAngle, setRotationSnapAngle] = useState<'10deg' | 'free'>('10deg');
   const [motionPrompt, setMotionPrompt] = useState<string>('walks forward 4 steps, stops and waves to camera');
   const [durationSec, setDurationSec] = useState<number>(4.0);
   const [speedMultiplier, setSpeedMultiplier] = useState<number>(1.0);
@@ -683,6 +684,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             // could be in FK/IK mode on an actor whose handles weren't drawn at all.
             selectedActorId={isPosing ? selectedActor.id : selectedActorId}
             transformMode={transformMode}
+            rotationSnap={rotationSnapAngle === '10deg' ? (10 * Math.PI) / 180 : null}
             lightIntensity={currentProject.lightIntensity}
             stageSpecularity={currentProject.stageSpecularity}
             environmentPreset={currentProject.environmentPreset}
@@ -967,6 +969,40 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
               >
                 <span className="material-symbols-outlined text-[18px]">aspect_ratio</span>
               </button>
+
+              <div className="h-4 w-[1px] bg-outline-variant/40 mx-xs" />
+
+              {/* Rotation Snap Mode Toggle (10° Snap vs Free Rotation) */}
+              <div className="flex items-center gap-[2px] bg-surface-container-low p-[2px] rounded-lg">
+                <button
+                  onClick={() => {
+                    setRotationSnapAngle('10deg');
+                    if (transformMode !== 'rotate') setTransformMode('rotate');
+                  }}
+                  title="10° Incremental Snap Rotation"
+                  className={`px-xs py-[2px] text-[10px] font-label-caps rounded cursor-pointer ${
+                    rotationSnapAngle === '10deg'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 font-semibold'
+                      : 'text-on-surface-variant hover:text-primary'
+                  }`}
+                >
+                  10° SNAP
+                </button>
+                <button
+                  onClick={() => {
+                    setRotationSnapAngle('free');
+                    if (transformMode !== 'rotate') setTransformMode('rotate');
+                  }}
+                  title="Free Continuous Smooth Rotation"
+                  className={`px-xs py-[2px] text-[10px] font-label-caps rounded cursor-pointer ${
+                    rotationSnapAngle === 'free'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 font-semibold'
+                      : 'text-on-surface-variant hover:text-primary'
+                  }`}
+                >
+                  FREE
+                </button>
+              </div>
 
               <div className="h-4 w-[1px] bg-outline-variant/40 mx-xs" />
 

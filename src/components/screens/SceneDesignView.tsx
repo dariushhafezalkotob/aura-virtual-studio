@@ -141,6 +141,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   // Viewport Settings
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
+  const [rotationSnapAngle, setRotationSnapAngle] = useState<'10deg' | 'free'>('10deg');
   const [lightIntensity, setLightIntensity] = useState<number>(1.0);
   const [stageSpecularity, setStageSpecularity] = useState<number>(
     currentProject.stageSpecularity !== undefined ? currentProject.stageSpecularity : 0.15
@@ -1028,6 +1029,40 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             </button>
           </div>
 
+          {/* Rotation Snap Mode Toggle (10° Snap vs Free Rotation) */}
+          <div className="flex items-center bg-surface-container-high/60 p-[2px] rounded-lg border border-outline-variant/30 text-[11px]">
+            <button
+              onClick={() => {
+                setRotationSnapAngle('10deg');
+                if (transformMode !== 'rotate') setTransformMode('rotate');
+              }}
+              className={`flex items-center gap-1 px-2 py-[4px] rounded font-label-caps font-semibold transition-all cursor-pointer ${
+                rotationSnapAngle === '10deg'
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 shadow-sm'
+                  : 'text-on-surface-variant hover:text-on-surface'
+              }`}
+              title="10° Incremental Snap Rotation"
+            >
+              <span className="material-symbols-outlined text-[13px]">straighten</span>
+              10° SNAP
+            </button>
+            <button
+              onClick={() => {
+                setRotationSnapAngle('free');
+                if (transformMode !== 'rotate') setTransformMode('rotate');
+              }}
+              className={`flex items-center gap-1 px-2 py-[4px] rounded font-label-caps font-semibold transition-all cursor-pointer ${
+                rotationSnapAngle === 'free'
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 shadow-sm'
+                  : 'text-on-surface-variant hover:text-on-surface'
+              }`}
+              title="Free Continuous Smooth Rotation"
+            >
+              <span className="material-symbols-outlined text-[13px]">all_inclusive</span>
+              FREE
+            </button>
+          </div>
+
           {/* Undo / Redo History Controls */}
           <div className="flex items-center gap-[2px] bg-surface-container-high/60 p-[2px] rounded-lg border border-outline-variant/30">
             <button
@@ -1293,6 +1328,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           pointLights={pointLights}
           selectedPointLightId={selectedPointLightId}
           transformMode={transformMode}
+          rotationSnap={rotationSnapAngle === '10deg' ? (10 * Math.PI) / 180 : null}
           lightIntensity={lightIntensity}
           stageSpecularity={stageSpecularity}
           environmentPreset={environmentPreset}
@@ -1660,6 +1696,32 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                 />
                 <span className="text-cyan-300 font-bold w-7 text-right">
                   {Math.round((selectedAsset.specularity !== undefined ? selectedAsset.specularity : stageSpecularity) * 100)}%
+                </span>
+              </div>
+            </div>
+
+            {/* Per-Object Texture Glow / Self-Illumination (Emissive Boost for Night Windows / Neon) */}
+            <div className="flex items-center justify-between text-[10px] font-mono pt-1 border-t border-outline-variant/20" title="Enhance baked texture lighting, windows, and glowing elements">
+              <span className="text-on-surface-variant flex items-center gap-1">
+                <span className="material-symbols-outlined text-[13px] text-amber-400">flare</span>
+                Texture Glow
+              </span>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="range"
+                  min={0.0}
+                  max={1.5}
+                  step={0.05}
+                  value={selectedAsset.emissiveBoost !== undefined ? selectedAsset.emissiveBoost : 0.35}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    const updated = assets.map((a) => (a.id === selectedAsset.id ? { ...a, emissiveBoost: val } : a));
+                    onUpdateProject({ ...currentProject, scenes: updated });
+                  }}
+                  className="w-16 accent-amber-400 cursor-pointer h-1"
+                />
+                <span className="text-amber-300 font-bold w-7 text-right">
+                  {Math.round((selectedAsset.emissiveBoost !== undefined ? selectedAsset.emissiveBoost : 0.35) * 100)}%
                 </span>
               </div>
             </div>

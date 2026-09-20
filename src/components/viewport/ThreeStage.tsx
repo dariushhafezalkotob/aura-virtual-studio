@@ -7,6 +7,7 @@ import {
   Environment,
   ContactShadows,
   Splat,
+  Html,
 } from '@react-three/drei';
 import * as THREE from 'three';
 import {
@@ -69,6 +70,7 @@ interface ThreeStageProps {
   onSelectPointLight?: (id: string | null) => void;
   onUpdatePointLightPosition?: (id: string, position: [number, number, number]) => void;
   transformMode?: TransformMode;
+  rotationSnap?: number | null;
   lightIntensity?: number;
   stageSpecularity?: number;
   environmentPreset?: LightingEnvironmentPreset;
@@ -193,6 +195,7 @@ interface ModelErrorBoundaryProps {
   fallbackName?: string;
   isSelected?: boolean;
   transformMode?: TransformMode;
+  rotationSnap?: number | null;
   onSelect?: () => void;
   onDraggingChange?: (isDragging: boolean) => void;
   onTransformChange?: (
@@ -206,13 +209,13 @@ interface ModelErrorBoundaryProps {
 
 class ModelErrorBoundary extends Component<
   ModelErrorBoundaryProps,
-  { hasError: boolean; errorMsg?: string }
+  { hasError: boolean; errorMsg?: string; isRotating?: boolean; liveRotDeg?: [number, number, number] }
 > {
   private groupRef = React.createRef<THREE.Group>();
 
   constructor(props: ModelErrorBoundaryProps) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, isRotating: false, liveRotDeg: [0, 0, 0] };
   }
 
   static getDerivedStateFromError(error: any) {
@@ -225,6 +228,7 @@ class ModelErrorBoundary extends Component<
 
   handleTransformEnd = () => {
     markTransformDragEnd();
+    this.setState({ isRotating: false });
     setTimeout(() => {
       this.props.onDraggingChange?.(false);
     }, 200);
@@ -248,12 +252,22 @@ class ModelErrorBoundary extends Component<
     }
   };
 
+  handleObjectChange = () => {
+    if (this.props.transformMode === 'rotate' && this.groupRef.current) {
+      const degX = Math.round(THREE.MathUtils.radToDeg(this.groupRef.current.rotation.x));
+      const degY = Math.round(THREE.MathUtils.radToDeg(this.groupRef.current.rotation.y));
+      const degZ = Math.round(THREE.MathUtils.radToDeg(this.groupRef.current.rotation.z));
+      this.setState({ isRotating: true, liveRotDeg: [degX, degY, degZ] });
+    }
+  };
+
   render() {
     if (this.state.hasError) {
       const {
         asset,
         isSelected = false,
         transformMode = 'translate',
+        rotationSnap,
         onSelect,
         onDraggingChange,
         fallbackName,
@@ -282,6 +296,22 @@ class ModelErrorBoundary extends Component<
               onSelect?.();
             }}
           >
+            {/* Live Angle HUD (Visible during rotation, disappears on release) */}
+            {this.state.isRotating && (
+              <Html position={[0, 1.4, 0]} center distanceFactor={12}>
+                <div className="pointer-events-none select-none bg-slate-950/90 text-cyan-300 border border-cyan-400/60 px-3 py-1.5 rounded-lg shadow-2xl backdrop-blur-md flex items-center gap-2 text-xs font-mono font-bold whitespace-nowrap animate-in fade-in zoom-in-90 duration-100">
+                  <span className="material-symbols-outlined text-sm text-cyan-400">rotate_right</span>
+                  <span>ROTATION:</span>
+                  <span className="text-amber-300">
+                    {this.state.liveRotDeg?.[1] ?? 0}°
+                  </span>
+                  <span className="text-[10px] text-cyan-400/60 font-sans">
+                    (X: {this.state.liveRotDeg?.[0]}° Y: {this.state.liveRotDeg?.[1]}° Z: {this.state.liveRotDeg?.[2]}°)
+                  </span>
+                </div>
+              </Html>
+            )}
+
             {isRoomOrEnv ? (
               // Procedural Studio Room Enclosure so the stage is always visible
               <group>
@@ -334,11 +364,19 @@ class ModelErrorBoundary extends Component<
             <TransformControls
               object={this.groupRef.current}
               mode={transformMode}
+              rotationSnap={transformMode === 'rotate' ? (rotationSnap ?? null) : null}
               size={0.75}
               onMouseDown={() => {
                 markTransformDragStart();
+                if (transformMode === 'rotate' && this.groupRef.current) {
+                  const degX = Math.round(THREE.MathUtils.radToDeg(this.groupRef.current.rotation.x));
+                  const degY = Math.round(THREE.MathUtils.radToDeg(this.groupRef.current.rotation.y));
+                  const degZ = Math.round(THREE.MathUtils.radToDeg(this.groupRef.current.rotation.z));
+                  this.setState({ isRotating: true, liveRotDeg: [degX, degY, degZ] });
+                }
                 onDraggingChange?.(true);
               }}
+              onObjectChange={this.handleObjectChange}
               onMouseUp={this.handleTransformEnd}
             />
           )}
@@ -349,8 +387,8 @@ class ModelErrorBoundary extends Component<
   }
 }
 
-// Utility function to apply specularity / roughness / reflectivity / metalness dynamically to materials
-function applySpecularityToMaterial(mat: THREE.Material, spec: number) {
+// Utility function to apply specularity / roughness / reflectivity / metalness and texture illumination dynamically to materials
+function applySpecularityToMaterial(mat: THREE.Material, spec: number, emissiveBoost: number = 0.35) {
   const m = mat as THREE.MeshStandardMaterial;
   // spec in [0, 1]:
   // 0.0 is completely matte (roughness 1.0, metalness 0.0, zero specular/env reflections)
@@ -359,7 +397,7 @@ function applySpecularityToMaterial(mat: THREE.Material, spec: number) {
   const clampedSpec = THREE.MathUtils.clamp(spec, 0.0, 1.0);
   m.roughness = THREE.MathUtils.lerp(1.0, 0.1, clampedSpec);
   m.metalness = THREE.MathUtils.lerp(0.0, 0.35, clampedSpec);
-  m.envMapIntensity = THREE.MathUtils.lerp(0.0, 0.75, clampedSpec);
+  m.envMapIntensity = THREE.MathUtils.lerp(0.1, 0.85, clampedSpec);
   if ('specularIntensity' in m) {
     (m as any).specularIntensity = clampedSpec;
   }
@@ -369,6 +407,20 @@ function applySpecularityToMaterial(mat: THREE.Material, spec: number) {
   if ('clearcoat' in m) {
     (m as any).clearcoat = 0;
   }
+
+  // Self-illumination & baked texture luminance recovery (e.g. glowing night windows, illuminated facades from Trellis/Hunyuan)
+  const clampedEmissive = THREE.MathUtils.clamp(emissiveBoost, 0.0, 2.0);
+  if (m.map) {
+    // If the material has a diffuse texture map, use it as an emissive map so lit features (windows, neon, screens) glow vibrantly
+    if (!m.emissiveMap) {
+      m.emissiveMap = m.map;
+    }
+    m.emissive = new THREE.Color(0xffffff);
+    m.emissiveIntensity = clampedEmissive;
+  } else if (m.emissive) {
+    m.emissiveIntensity = clampedEmissive;
+  }
+
   m.needsUpdate = true;
 }
 
@@ -376,6 +428,7 @@ const GLTFModel: React.FC<{
   asset: SceneAsset;
   isSelected: boolean;
   transformMode: TransformMode;
+  rotationSnap?: number | null;
   stageSpecularity?: number;
   onSelect: () => void;
   onDraggingChange: (isDragging: boolean) => void;
@@ -389,6 +442,7 @@ const GLTFModel: React.FC<{
   asset,
   isSelected,
   transformMode,
+  rotationSnap,
   stageSpecularity = 0.15,
   onSelect,
   onDraggingChange,
@@ -397,6 +451,11 @@ const GLTFModel: React.FC<{
   const groupRef = useRef<THREE.Group>(null);
   const { glbUrl, position, rotation, scale } = asset;
   const effectiveSpecularity = asset.specularity !== undefined ? asset.specularity : stageSpecularity;
+  const effectiveEmissiveBoost = asset.emissiveBoost !== undefined ? asset.emissiveBoost : 0.35;
+
+  // Live Rotation Angle HUD State (displays live degrees during rotation, disappears on release)
+  const [isRotating, setIsRotating] = useState(false);
+  const [liveRotDeg, setLiveRotDeg] = useState<[number, number, number]>([0, 0, 0]);
 
   // Resolve expired blob URLs or baked room models to permanent asset storage
   const resolvedGlbUrl = React.useMemo(() => {
@@ -420,7 +479,7 @@ const GLTFModel: React.FC<{
     }
   }, [position[0], position[1], position[2], rotation[0], rotation[1], rotation[2], scale[0], scale[1], scale[2]]);
 
-  // If not a valid model URL, return procedural box
+  // If not a valid model URL, render standard placeholder mesh
   const isCustomModel =
     resolvedGlbUrl &&
     (resolvedGlbUrl.includes('.glb') ||
@@ -454,16 +513,16 @@ const GLTFModel: React.FC<{
               if (mesh.geometry?.attributes?.color) {
                 mat.vertexColors = true;
               }
-              applySpecularityToMaterial(mat, effectiveSpecularity);
+              applySpecularityToMaterial(mat, effectiveSpecularity, effectiveEmissiveBoost);
               mat.side = THREE.DoubleSide;
             }
           }
         }
       });
       return c;
-    }, [scene, effectiveSpecularity]);
+    }, [scene, effectiveSpecularity, effectiveEmissiveBoost]);
 
-    // Live specularity update without re-instantiation
+    // Live specularity & emissive update without re-instantiation
     useEffect(() => {
       if (groupRef.current) {
         groupRef.current.traverse((child) => {
@@ -472,13 +531,13 @@ const GLTFModel: React.FC<{
             if (mesh.material) {
               const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
               for (const m of mats) {
-                applySpecularityToMaterial(m, effectiveSpecularity);
+                applySpecularityToMaterial(m, effectiveSpecularity, effectiveEmissiveBoost);
               }
             }
           }
         });
       }
-    }, [cloned, effectiveSpecularity]);
+    }, [cloned, effectiveSpecularity, effectiveEmissiveBoost]);
 
     content = asset.category === 'environment' ? (
       <primitive object={cloned} />
@@ -489,9 +548,13 @@ const GLTFModel: React.FC<{
     );
   } else {
     content = (
-      <mesh position={[0, 0.5, 0]}>
-        <boxGeometry args={[0.8, 0.8, 0.8]} />
-        <meshStandardMaterial color="#505050" roughness={THREE.MathUtils.lerp(1.0, 0.1, effectiveSpecularity)} metalness={THREE.MathUtils.lerp(0.0, 0.35, effectiveSpecularity)} />
+      <mesh position={[0, 0.5, 0]} castShadow receiveShadow>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial
+          color="#38bdf8"
+          roughness={THREE.MathUtils.lerp(0.8, 0.2, effectiveSpecularity)}
+          metalness={THREE.MathUtils.lerp(0.05, 0.4, effectiveSpecularity)}
+        />
       </mesh>
     );
   }
@@ -500,6 +563,7 @@ const GLTFModel: React.FC<{
 
   const handleTransformEnd = () => {
     markTransformDragEnd();
+    setIsRotating(false);
     setTimeout(() => {
       onDraggingChange(false);
     }, 200);
@@ -520,6 +584,16 @@ const GLTFModel: React.FC<{
         groupRef.current.scale.z,
       ];
       onTransformChange(asset.id, pos, rot, scl);
+    }
+  };
+
+  const handleObjectChange = () => {
+    if (transformMode === 'rotate' && groupRef.current) {
+      const degX = Math.round(THREE.MathUtils.radToDeg(groupRef.current.rotation.x));
+      const degY = Math.round(THREE.MathUtils.radToDeg(groupRef.current.rotation.y));
+      const degZ = Math.round(THREE.MathUtils.radToDeg(groupRef.current.rotation.z));
+      setIsRotating(true);
+      setLiveRotDeg([degX, degY, degZ]);
     }
   };
 
@@ -545,6 +619,23 @@ const GLTFModel: React.FC<{
         }}
       >
         {content}
+
+        {/* Live Angle HUD (Visible during rotation, disappears immediately on release) */}
+        {isRotating && (
+          <Html position={[0, 1.4, 0]} center distanceFactor={12}>
+            <div className="pointer-events-none select-none bg-slate-950/90 text-cyan-300 border border-cyan-400/60 px-3 py-1.5 rounded-lg shadow-2xl backdrop-blur-md flex items-center gap-2 text-xs font-mono font-bold whitespace-nowrap animate-in fade-in zoom-in-90 duration-100">
+              <span className="material-symbols-outlined text-sm text-cyan-400">rotate_right</span>
+              <span>ROTATION:</span>
+              <span className="text-amber-300 text-sm">
+                {liveRotDeg[1]}°
+              </span>
+              <span className="text-[10px] text-cyan-400/70 font-sans">
+                (X: {liveRotDeg[0]}° Y: {liveRotDeg[1]}° Z: {liveRotDeg[2]}°)
+              </span>
+            </div>
+          </Html>
+        )}
+
         {isSelected && (
           <mesh position={[0, 0, 0]}>
             <ringGeometry args={[1.2, 1.25, 32]} />
@@ -557,11 +648,20 @@ const GLTFModel: React.FC<{
         <TransformControls
           object={groupRef.current}
           mode={transformMode}
+          rotationSnap={transformMode === 'rotate' ? (rotationSnap ?? null) : null}
           size={0.75}
           onMouseDown={() => {
             markTransformDragStart();
+            if (transformMode === 'rotate' && groupRef.current) {
+              const degX = Math.round(THREE.MathUtils.radToDeg(groupRef.current.rotation.x));
+              const degY = Math.round(THREE.MathUtils.radToDeg(groupRef.current.rotation.y));
+              const degZ = Math.round(THREE.MathUtils.radToDeg(groupRef.current.rotation.z));
+              setIsRotating(true);
+              setLiveRotDeg([degX, degY, degZ]);
+            }
             onDraggingChange(true);
           }}
+          onObjectChange={handleObjectChange}
           onMouseUp={handleTransformEnd}
         />
       )}
@@ -1501,6 +1601,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   onSelectPointLight,
   onUpdatePointLightPosition,
   transformMode = 'translate',
+  rotationSnap = null,
   lightIntensity = 1.0,
   stageSpecularity = 0.15,
   environmentPreset = 'studio',
@@ -1657,6 +1758,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
             asset={asset}
             isSelected={asset.id === selectedAssetId}
             transformMode={transformMode}
+            rotationSnap={rotationSnap}
             onSelect={() => {
               onSelectActor?.(null);
               onSelectAsset?.(asset.id);
@@ -1669,6 +1771,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
                 asset={asset}
                 isSelected={asset.id === selectedAssetId}
                 transformMode={transformMode}
+                rotationSnap={rotationSnap}
                 stageSpecularity={stageSpecularity}
                 onSelect={() => {
                   onSelectActor?.(null);
@@ -1690,6 +1793,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
                 allActors={characters}
                 isSelected={actor.id === selectedActorId}
                 transformMode={transformMode}
+                rotationSnap={rotationSnap}
                 currentTimelineTime={currentTimelineTime}
                 isPlaying={isPlaying}
                 showTrajectory={showTrajectories}

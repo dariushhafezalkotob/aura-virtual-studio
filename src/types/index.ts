@@ -129,6 +129,7 @@ export interface SceneAsset {
   engine?: AI3DEngine;
   category?: AssetCategory;
   specularity?: number;
+  emissiveBoost?: number;
   createdAt: string;
 }
 
