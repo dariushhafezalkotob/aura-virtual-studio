@@ -36,6 +36,22 @@ function extractErrorMessage(err: any): string {
   }
 }
 
+// Node's fetch reports every transport-level failure as the bare string "fetch failed";
+// the real reason (ENOTFOUND, ECONNRESET, certificate, ...) only lives on err.cause.
+function describeFetchError(err: any): string {
+  const base = err?.message || String(err);
+  const cause = err?.cause;
+  const detail = cause?.code || cause?.errno || cause?.message;
+  return detail && detail !== base ? `${base} (${detail})` : base;
+}
+
+// True when the request never got an answer from the server (as opposed to an API error).
+function isTransportError(err: any): boolean {
+  if (!err) return false;
+  if (err.name === 'TimeoutError' || err.name === 'AbortError') return false;
+  return err.name === 'TypeError' || !!err.cause;
+}
+
 let trellisClient: any = null;
 let hunyuan3DClient: any = null;
 let hunyuanWorldClient: any = null;
@@ -788,91 +804,94 @@ function apiMiddlewarePlugin(): Plugin {
               const model = params.model || 'gemini-3.1-flash-lite-image';
               console.log(`[API /api/generate-image] Synthesizing reference image with ${model} (Key provided: ${!!geminiKey}): "${prompt}"...`);
 
-              let images: string[] = [];
+              let imageBase64 = '';
+              let lastGeminiError = '';
+              let lastGeminiWasNetwork = false;
+              let lastFallbackError = '';
+              let usedProvider = '';
 
-              // 1. Try Gemini Multimodal / Image Generation if API key is present
+              const isolatedPrompt = `${prompt}, single isolated 3D prop asset centered, floating on pure solid pitch black background (#000000), absolutely no floor, no ground, no shadow underneath, no table, no room, no walls, studio object isolate, crisp sharp edges, 8k resolution, cinematic studio lighting, octane render.`;
+
+              // 1. Try Gemini Multimodal Image Generation with requested model (gemini-3.1-flash-lite-image)
               if (geminiKey) {
-                // Method A: Gemini generateContent with IMAGE output modality (4 concurrent variations)
+                // A dropped connection ("fetch failed") is worth one immediate retry on a fresh
+                // socket; a real API answer (bad key, quota, unknown model) is not.
+                for (let attempt = 1; attempt <= 2 && !imageBase64; attempt++) {
                 try {
-                  console.log(`[API /api/generate-image] Attempting Gemini ${model}:generateContent (4 variations with pure black background isolate)...`);
-                  
-                  const callGeminiSingle = async (seedOffset: number, angleModifier: string) => {
-                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        contents: [
-                          {
-                            parts: [
-                              { text: `Generate a single isolated 3D prop asset: ${prompt}${angleModifier ? `, ${angleModifier}` : ''}. The object must be floating in the center on a pure solid pitch black background (#000000). Absolutely no floor, no ground, no shadow on ground, no table, no room, no walls, no environment. Only the standalone 3D object completely isolated against a black void background, photorealistic, crisp sharp edges, 8k resolution, cinematic studio lighting.` }
-                            ]
-                          }
-                        ],
-                        generationConfig: {
-                          responseModalities: ["IMAGE", "TEXT"],
-                          temperature: 0.7 + (seedOffset * 0.1),
+                  console.log(`[API /api/generate-image] Fast generateContent with ${model}${attempt > 1 ? ` (retry ${attempt - 1})` : ''}...`);
+                  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      contents: [
+                        {
+                          parts: [
+                            { text: `Generate a single isolated 3D prop asset: ${prompt}. The object must be floating in the center on a pure solid pitch black background (#000000). Absolutely no floor, no ground, no shadow on ground, no table, no room, no walls, no environment. Only the standalone 3D object completely isolated against a black void background, front 3/4 perspective hero angle, photorealistic, crisp sharp edges, 8k resolution, cinematic studio lighting.` }
+                          ]
                         }
-                      }),
-                    });
-                    if (res.ok) {
-                      const genData = await res.json();
-                      const candidates = genData.candidates || [];
-                      for (const cand of candidates) {
-                        const parts = cand.content?.parts || [];
-                        for (const part of parts) {
-                          if (part.inlineData?.data) {
-                            const mime = part.inlineData.mimeType || 'image/png';
-                            return `data:${mime};base64,${part.inlineData.data}`;
-                          }
+                      ],
+                      generationConfig: {
+                        responseModalities: ["IMAGE", "TEXT"],
+                        temperature: 0.7,
+                      }
+                    }),
+                    signal: AbortSignal.timeout(60000),
+                  });
+                  if (res.ok) {
+                    const genData = await res.json();
+                    const candidates = genData.candidates || [];
+                    for (const cand of candidates) {
+                      const parts = cand.content?.parts || [];
+                      for (const part of parts) {
+                        if (part.inlineData?.data) {
+                          const mime = part.inlineData.mimeType || 'image/png';
+                          imageBase64 = `data:${mime};base64,${part.inlineData.data}`;
+                          usedProvider = `Gemini (${model})`;
+                          break;
                         }
                       }
+                      if (imageBase64) break;
                     }
-                    return null;
-                  };
-
-                  const variations = [
-                    'front 3/4 perspective hero angle',
-                    'alternate studio lighting and angle',
-                    'front eye-level view',
-                    'dynamic studio product showcase'
-                  ];
-
-                  const results = await Promise.allSettled(variations.map((v, i) => callGeminiSingle(i, v)));
-                  for (const r of results) {
-                    if (r.status === 'fulfilled' && r.value) {
-                      images.push(r.value);
+                    if (imageBase64) {
+                      console.log(`[API /api/generate-image] ✓ Successfully generated image via Gemini ${model}!`);
                     }
+                  } else {
+                    const gErr = await res.json().catch(() => ({}));
+                    lastGeminiError = gErr?.error?.message || `HTTP ${res.status}`;
+                    lastGeminiWasNetwork = false;
+                    console.warn(`[Gemini ${model} call error]:`, lastGeminiError);
+                    break; // the API answered; retrying the same request will not change it
                   }
-                  if (images.length > 0) {
-                    console.log(`[API /api/generate-image] Successfully generated ${images.length} candidate images via Gemini ${model}!`);
-                  }
-                } catch (gErr) {
-                  console.warn(`[Gemini ${model} call error]:`, gErr);
+                } catch (gErr: any) {
+                  lastGeminiError = describeFetchError(gErr);
+                  lastGeminiWasNetwork = isTransportError(gErr) || gErr?.name === 'TimeoutError';
+                  console.warn(`[Gemini ${model} call exception]:`, lastGeminiError);
+                  if (!isTransportError(gErr) || attempt === 2) break;
+                  await new Promise((r) => setTimeout(r, 400));
+                }
                 }
 
-                // Method B: Try Imagen 3.0 predict if generateContent was not available
-                if (images.length === 0) {
+                // Provider 1B: Imagen 3.0 fallback if primary model failed
+                if (!imageBase64) {
                   try {
-                    console.log('[API /api/generate-image] Attempting imagen-3.0-generate-002:predict with sampleCount: 4...');
+                    console.log('[API /api/generate-image] Trying Imagen-3.0 fallback...');
                     const imgPayload = {
-                      instances: [{ prompt: `${prompt}, single 3D prop asset centered, floating isolated on pure solid pitch black background (#000000), no floor, no ground plane, no shadow underneath, no table, no room, no walls, clean sharp silhouette, photorealistic, 8k resolution, octane render.` }],
-                      parameters: { sampleCount: 4, aspectRatio: '1:1', outputMimeType: 'image/png' },
+                      instances: [{ prompt: isolatedPrompt }],
+                      parameters: { sampleCount: 1, aspectRatio: '1:1', outputMimeType: 'image/png' },
                     };
                     const resG = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${geminiKey}`, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(imgPayload),
+                      signal: AbortSignal.timeout(18000),
                     });
                     if (resG.ok) {
                       const j = await resG.json();
                       const preds = j.predictions || [];
-                      for (const p of preds) {
-                        if (p.bytesBase64Encoded) {
-                          images.push(`data:image/png;base64,${p.bytesBase64Encoded}`);
-                        }
-                      }
-                      if (images.length > 0) {
-                        console.log(`[API /api/generate-image] Successfully generated ${images.length} images via Imagen-3.0!`);
+                      if (preds[0]?.bytesBase64Encoded) {
+                        imageBase64 = `data:image/png;base64,${preds[0].bytesBase64Encoded}`;
+                        usedProvider = 'Google Imagen 3.0';
+                        console.log('[API /api/generate-image] ✓ Successfully generated image via Imagen-3.0!');
                       }
                     }
                   } catch (gErr) {
@@ -881,40 +900,81 @@ function apiMiddlewarePlugin(): Plugin {
                 }
               }
 
-              // 2. High-speed, high-quality Pollinations Flux / Turbo engine fallback (4 images)
-              if (images.length === 0) {
-                console.log('[API /api/generate-image] Using Pollinations fast rendering engine fallback (4 candidates)...');
-                const baseSeed = Math.floor(Math.random() * 1000000);
-                const fetchPollinations = async (idx: number) => {
-                  const seed = baseSeed + idx * 739;
-                  const encodedPrompt = encodeURIComponent(`${prompt}, single isolated 3d asset centered, floating on pure solid pitch black background, no floor, no ground, no table, no room, no walls, studio object isolate, sharp edges, octane render 8k`);
-                  const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}`;
-                  const fetchRes = await fetch(pollinationsUrl);
-                  if (!fetchRes.ok) return null;
-                  const arrayBuf = await fetchRes.arrayBuffer();
-                  const b64 = Buffer.from(arrayBuf).toString('base64');
-                  return `data:image/png;base64,${b64}`;
-                };
+              // 2. High-speed Pollinations FLUX / Turbo fallback (ultra fast & no key required)
+              if (!imageBase64) {
+                console.log('[API /api/generate-image] Trying Pollinations FLUX / Turbo fallback...');
+                const seed = Math.floor(Math.random() * 1000000);
+                const encodedPrompt = encodeURIComponent(isolatedPrompt);
+                
+                const endpoints = [
+                  `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}&model=flux`,
+                  `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}&model=turbo`,
+                  `https://gen.pollinations.ai/image/${encodedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}`,
+                ];
 
-                const polResults = await Promise.allSettled([0, 1, 2, 3].map(fetchPollinations));
-                for (const r of polResults) {
-                  if (r.status === 'fulfilled' && r.value) {
-                    images.push(r.value);
+                for (const pUrl of endpoints) {
+                  try {
+                    const fetchRes = await fetch(pUrl, {
+                      headers: {
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                      },
+                      signal: AbortSignal.timeout(15000),
+                    });
+                    if (fetchRes.ok) {
+                      const arrayBuf = await fetchRes.arrayBuffer();
+                      if (arrayBuf.byteLength > 1000) {
+                        const b64 = Buffer.from(arrayBuf).toString('base64');
+                        const mime = fetchRes.headers.get('content-type') || 'image/png';
+                        imageBase64 = `data:${mime};base64,${b64}`;
+                        usedProvider = 'Pollinations FLUX';
+                        console.log(`[API /api/generate-image] ✓ Successfully generated image via Pollinations! (${(arrayBuf.byteLength / 1024).toFixed(1)} KB)`);
+                        break;
+                      }
+                      lastFallbackError = 'Pollinations returned an empty image';
+                    } else {
+                      const pBody = await fetchRes.text().catch(() => '');
+                      let reason = `HTTP ${fetchRes.status}`;
+                      try {
+                        const parsed = JSON.parse(pBody);
+                        // Pollinations nests the real reason (e.g. INSUFFICIENT_BALANCE) inside message.
+                        reason = parsed?.message || parsed?.error?.message || parsed?.error || reason;
+                      } catch (_) { /* not JSON */ }
+                      lastFallbackError = String(reason).slice(0, 200);
+                      console.warn(`[API /api/generate-image] Pollinations endpoint (${pUrl.slice(0, 50)}...) refused:`, lastFallbackError);
+                    }
+                  } catch (pErr: any) {
+                    lastFallbackError = describeFetchError(pErr);
+                    console.warn(`[API /api/generate-image] Pollinations endpoint (${pUrl.slice(0, 50)}...) failed:`, lastFallbackError);
                   }
                 }
               }
 
-              if (images.length === 0) {
-                throw new Error('Failed to generate reference images. Please try again.');
+              if (!imageBase64) {
+                const fallbackNote = lastFallbackError
+                  ? ` The free backup provider is also unavailable: ${lastFallbackError}.`
+                  : '';
+                let failReason: string;
+                if (!geminiKey) {
+                  failReason = `No Gemini API key is set, so only the free backup provider was tried.${fallbackNote || ' It did not respond.'} Add a Gemini key in Settings.`;
+                } else if (lastGeminiWasNetwork) {
+                  // "fetch failed" / timeout: the request never reached Google, so the key is not the suspect.
+                  failReason = `Could not reach the Gemini servers: "${lastGeminiError}". This is a connection problem, not your API key — check your internet, VPN or firewall and try again.${fallbackNote}`;
+                } else if (lastGeminiError) {
+                  failReason = `Gemini refused the request: "${lastGeminiError}".${fallbackNote}`;
+                } else {
+                  failReason = `Gemini returned no image for this prompt.${fallbackNote}`;
+                }
+                throw new Error(failReason);
               }
 
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify({
                 success: true,
-                images,
-                imageBase64: images[0],
+                imageBase64,
+                images: [imageBase64],
                 prompt,
-                model: geminiKey ? (model || 'imagen-3.0-generate-002') : 'pollinations-flux'
+                model: usedProvider || (geminiKey ? 'imagen-3.0-generate-002' : 'pollinations-flux')
               }));
             } catch (err: any) {
               const errMsg = extractErrorMessage(err);
