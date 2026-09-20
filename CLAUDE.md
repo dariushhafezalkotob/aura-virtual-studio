@@ -9,11 +9,13 @@ Browser-based virtual film studio: design 3D scenes, set up and animate actors, 
 - GitHub: dariushhafezalkotob/aura-virtual-studio
 
 ## Run
-- `npm run dev` → https://localhost:3000 (HTTPS via basic-ssl, needed for phone sensors)
-- `npm run build` → `tsc && vite build`
-- Much server/API logic lives in `vite.config.ts` (dev-server middleware, ~54KB)
-- Secrets in `.env.local` (not committed); see `.env.example`
-- Project data is stored in `data/projects.json`
+- `npm run dev` → https://localhost:3000 (HTTPS via basic-ssl, needed for phone sensors). No build step; hot reload as before.
+- `npm run build` → `tsc && vite build && npm run build:server` (frontend into `dist/`, server bundle into `dist-server/`)
+- `npm start` → production server: serves `dist/` plus the same API on `PORT` (default 3000, `PUBLIC_SCHEME` default https)
+- `npm run typecheck` → `tsc` (src) **and** `tsc -p tsconfig.server.json` (server + vite.config). `tsconfig.json` only includes `src`, so server code is checked ONLY by the second one -- run both.
+- The API lives in `server/`, not in `vite.config.ts` (49 lines now). Dev and production mount the same `createApiMiddleware` + `attachCameraRemoteWs`.
+- Secrets in `.env.local` (not committed); see `.env.example`. Dev passes them through `configureEnv(loadEnv(...))`; production uses the process environment.
+- Data on disk: `data/projects.json` (small metadata), `data/blobs/<projectId>/` (keyframes + motion), `data/assets/` (GLB, splat, audio, thumbnails)
 
 ## Layout
 - `src/components/screens/` — main views: Projects, SceneDesign, ActingSetup, CameraRecord, WorkflowSequence, MobileCameraRemote
@@ -22,8 +24,26 @@ Browser-based virtual film studio: design 3D scenes, set up and animate actors, 
 - `src/components/roombake/` — RoomBake studio and UV inspector
 - `src/services/` — cameraRemoteService (phone gyro), ikSolver, kimodoService (AI motion generation), roombake engine/AI, somaSkeleton, storageService, trellisService (AI 3D generation)
 - `src/types/index.ts` — shared types
+- `server/api/index.ts` — every `/api` route as one connect middleware (`createApiMiddleware`)
+- `server/lib/` — `env`, `spaces` (gradio clients), `media` (asset caching), `projectStore` (the file layout), `errors`, `network`
+- `server/prod.ts` — production server; `server/cameraRemoteWs.ts` — phone relay; `scripts/build-server.mjs` — esbuild bundle
 
 ## Recent work
+- Going online (2026-09-20, decided, plan at https://claude.ai/artifact/BDgt6KhfDHd91wowAsqytm): a small VPS running one Node process, NOT Next.js on Vercel. Vercel's 4.5 MB response cap fails on `/api/assets` (biggest file here is a 22 MB GLB), its filesystem is read-only so the whole `data/` layout stops working, and `/api/generate-360-from-image` shells out to `python3 slice_equirect_views.py`, which does not exist in a Node function. ~EUR 4.35/mo (Hetzner CX22: 2 vCPU, 4 GB, 40 GB) -- 80 GB if assets stay on local disk. The GPU stays on the Hugging Face Spaces either way. Remaining phases: auth + MongoDB for per-user projects (metadata only), then assets to Cloudflare R2 -- binaries must NOT go in Mongo: 22 MB is over the 16 MB BSON document limit, and GridFS means paying a database to do a CDN's job.
+- Server split (2026-09-20, commit ab81007): every `/api` route moved verbatim out of `configureServer` in vite.config.ts into `server/api/index.ts`, with `server/lib/*` for the shared helpers and `server/cameraRemoteWs.ts` for the relay. `vite.config.ts` 1330 -> 49 lines. Both the dev plugin and `server/prod.ts` mount the SAME two functions, so there is one copy of the API, not a dev one and a prod one drifting apart.
+  - Server code had never been type-checked (`tsconfig.json` includes only `src`). Adding `tsconfig.server.json` immediately caught an `execSync` import the move had left behind, which would have crashed the panorama slicer at runtime. Run `npm run typecheck`, not bare `tsc`.
+  - Verified: dev serves `/api/network-ip` and `/api/projects` unchanged; the production bundle serves `dist/`, the SPA fallback, `/api/assets`, a full image generation, and relays a camera-remote WebSocket message between two peers.
+- Storage split (2026-09-20, commit bea73de, MIGRATED on this machine: projects.json 75 MB -> 788 KB, 30 blob files, backup at `data/projects.before-split.*.json`):
+  - What is actually heavy is NOT keyframes (~0.1 KB per take). It is a 2.6 MB base64 PNG `thumbnail` on every take (27 MB in the Bar project) and actor `motionData` (2-6 MB each). Measure before optimising here.
+  - Take/project thumbnails are written as real image files into `data/assets` and the project keeps the `/api/assets/...` URL -- a ONE-WAY conversion, nothing rehydrates them. They were only ever an `<img src>`.
+  - `keyframes` and `motionData` go to `data/blobs/<projectId>/{take,motion}_<id>.json` as `{"$blob": "..."}` refs; `rehydrateProjects` puts them back on GET so the app's shape never changes.
+  - The client sends `__aura_unchanged__` instead of any payload it has not touched, tracked by OBJECT IDENTITY (a WeakSet filled at load) -- a payload the app replaced is a different object and gets sent in full. `cleanProjectsForStorage`/`rehydrateProjects` in storageService keep those references intact; a deep clone anywhere in the save path would silently defeat it (correct, just slower).
+  - The server resolves that marker against what it currently holds (`externalizeProjects(..., previous)`). An earlier version dropped the field when no blob existed yet, which DELETED every take and motion clip on the first save after the split. Unit round-trips passed; only running the real client against a copy of the real data caught it. Never test this path with a hand-built payload alone.
+  - Measured: save 52 MB / 824 ms -> 0.39 MB / 13 ms. GET is still ~25 MB because motion rehydrates inline; lazy-loading it is the next win and touches playback code.
+- Scene primitives + RoomBake for objects (2026-09-20, commit 529976c): PRIMITIVES menu (box, floor plane, wall, cylinder, sphere) exports a GLB via `src/services/primitiveAssets.ts` and adds it as an ordinary asset, so gizmo/inspector/RoomBake need no special cases. RoomBake's preset cameras all sat INSIDE the volume looking out, which sees nothing on a solid object: `BakeViewMode` 'exterior' puts nine cameras around the model (eight on a 35 degree arc plus top-down, sized from the bounding box) and is picked automatically for props/primitives. Verified with the mock generator: box and plane both filled the atlas from all nine views.
+  - RoomBake's COVERAGE readout stays 0.0% even when the atlas is 100% full -- pre-existing, `state.chartFraction` is only ever set by `buildDefaultRoom`. A background task was spawned for it.
+- TRELLIS quality (2026-09-20, commit 529976c): the server pinned `mesh_simplify` at 0.98, the MOST aggressive decimation the Space allows, so every model was lowest-detail with a 1K texture. A QUALITY switch (FAST/HIGH/MAX, default HIGH) now sets simplify, texture size and both step counts from `src/services/trellisQuality.ts`. The Space's real slider ranges (checked against its own `/config`): simplify 0.9-0.98 (LOWER keeps more faces), texture 512-2048, steps 1-50, guidance 0-10.
+- Image generation error handling (2026-09-20, commit ef7e043): Node reports every transport failure as a bare "fetch failed", so a dead resolver looked exactly like a bad API key and the message told the user to check their key. `describeFetchError`/`isTransportError` in `server/lib/errors.ts` surface `err.cause` (e.g. ENOTFOUND), a dropped connection is retried once, and the timeout went 15s -> 60s because image generation regularly takes longer than 15s.
 - Acting layout (2026-09-19, uncommitted): the multi-text sequence lives in the bottom bar's left margin instead of a full-width row.
   - It used to be "Row 0" above the prompt, so opening it added ~190px to the bottom panel and took that height off the 3D viewport -- exactly when you want to watch the motion you are describing. As a column it takes width from the timeline, which scrolls horizontally anyway.
   - The column is ABSOLUTELY positioned (`left-md top-md bottom-md`) inside the now-`relative` bottom panel. As an ordinary flex child its own content set the panel's height, so a fifth or sixth segment grew the bar and ate the viewport again. Out of flow, the panel is sized by the timeline alone and the list just scrolls: 2 -> 6 segments kept the canvas at 1600x583, list 253px tall with 426px of content.
@@ -44,7 +64,7 @@ Browser-based virtual film studio: design 3D scenes, set up and animate actors, 
 - Held constraints send EVERY frame (was every 3rd). Measured on a real regeneration: a fullbody hold went from 0.174°/frame drift with 0.140° flicker to exactly 0; foot-only holds still move ~0.16°/frame (Kimodo's own behaviour, not the sampling).
 - Hip height is ABSOLUTE in constraints and in `motionData.root[i][1]`, but body-space in `ikTargets.hips`/the IK handle while a take plays. `absoluteHipsToBodySpace(actor, t, y)` (somaSkeleton) converts when applying a preset, snapping to a constraint, or pasting; the live-pose snapshot adds the body-group offset when recording hips. Getting this wrong drew seated takes floating at standing height and stored standing pelvis heights on constraints.
 - Constraint auto-save waits up to 4s for the viewport to draw a frame with the edit (was 0.5s) before giving up.
-- KNOWN RISK: two app instances (e.g. the user's tab on 3000 plus a test instance on 3100) overwrite each other's saves, and a single save rewrites the whole ~103 MB `data/projects.json` (seconds per save, lost if the page reloads mid-save). Constraints and a merged take were lost this way. Only run one instance, and moving motion takes into per-take asset files is the real fix.
+- KNOWN RISK (largely fixed 2026-09-20 by the storage split above -- a save is now 0.39 MB / 13 ms, so the window is milliseconds instead of seconds): two app instances (e.g. the user's tab on 3000 plus a test instance on 3100) overwrite each other's saves, because a save still writes the whole (now small) projects.json. Constraints and a merged take were lost this way when it was 103 MB. Still only run one instance; real isolation needs per-user rows in a database.
 - Uncommitted as of 2026-09-17 (all below "Recent work" items dated 2026-09-17). Keep `data/projects.json` out of commits.
 - Constraint editing, Kimodo demo workflow (verified end-to-end on 2026-09-18: a seated hold regenerated correctly):
   - Playback uses the take's ABSOLUTE hip height (`motionData.root[i][1]` vs the rig's rest hip Y); X/Z stay relative to the actor's placement. Taking Y relative to frame 0 drew seated takes (~0.5m hips) at standing height with the feet in the air.
