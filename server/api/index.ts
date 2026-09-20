@@ -9,6 +9,7 @@ import { getHfToken } from '../lib/env';
 import { extractErrorMessage, describeFetchError, isTransportError } from '../lib/errors';
 import { normalizeGradioFileData, resolveMediaUrl, persistMediaLocally } from '../lib/media';
 import { getLocalIpAddress } from '../lib/network';
+import { externalizeProjects, rehydrateProjects, backupProjectsOnce } from '../lib/projectStore';
 import {
   KIMODO_SPACE,
   getTrellisClient,
@@ -64,9 +65,13 @@ export function createApiMiddleware(ctx: ApiContext) {
       if (req.method === 'GET') {
         try {
           if (fs.existsSync(projectsFilePath)) {
-            const content = fs.readFileSync(projectsFilePath, 'utf-8');
+            const stored = JSON.parse(fs.readFileSync(projectsFilePath, 'utf-8'));
+            // Takes and motion live in their own files now; put them back before answering.
+            const payload = Array.isArray(stored)
+              ? rehydrateProjects(stored, dataDir)
+              : { ...stored, projects: rehydrateProjects(stored.projects || [], dataDir) };
             res.setHeader('Content-Type', 'application/json');
-            res.end(content);
+            res.end(JSON.stringify(payload));
             return;
           } else {
             res.setHeader('Content-Type', 'application/json');
@@ -110,9 +115,28 @@ export function createApiMiddleware(ctx: ApiContext) {
               }
             }
 
+            // Write camera takes and actor motion to their own files, so projects.json stays small
+            // and an unchanged take is never rewritten.
+            backupProjectsOnce(projectsFilePath, dataDir);
+
+            // What is on disk right now, so an "unchanged" marker can be resolved against it.
+            let stored: any[] = [];
+            try {
+              if (fs.existsSync(projectsFilePath)) {
+                const raw = JSON.parse(fs.readFileSync(projectsFilePath, 'utf-8'));
+                stored = Array.isArray(raw) ? raw : raw.projects || [];
+              }
+            } catch (readErr: any) {
+              console.warn('[API /api/projects] Could not read the current projects file:', readErr?.message || readErr);
+            }
+
+            const toStore = Array.isArray(parsed)
+              ? externalizeProjects(parsed, dataDir, stored)
+              : parsed;
+
             // Atomic file write using temporary file to prevent corruption
             const tempFilePath = path.join(dataDir, `projects.tmp.${Date.now()}.json`);
-            fs.writeFileSync(tempFilePath, JSON.stringify(parsed, null, 2), 'utf-8');
+            fs.writeFileSync(tempFilePath, JSON.stringify(toStore, null, 2), 'utf-8');
             fs.renameSync(tempFilePath, projectsFilePath);
 
             res.setHeader('Content-Type', 'application/json');

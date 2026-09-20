@@ -9,3 +9,6 @@ dist-ssr
 .DS_Store
 data/*.tmp.*
 dist-server
+data/blobs
+data/projects.before-split.*.json
+data/.projects-split-backup

@@ -39,12 +39,62 @@ function cleanProjectsForStorage(projects: Project[]): Project[] {
 }
 
 /**
+ * Camera keyframes and motion clips the server already has on disk.
+ *
+ * They are the bulk of a project - tens of megabytes - and they only change when a take is
+ * recorded or motion regenerated. Anything still identical to what we loaded is sent as a marker
+ * instead of the data, which is what keeps a save from serialising the whole studio every time.
+ * A payload the app replaced is a different object, so it misses the set and is sent in full.
+ */
+const serverHasPayload = new WeakSet<object>();
+
+function rememberServerPayloads(projects: Project[]) {
+  for (const p of projects) {
+    for (const take of p.cameraTakes || []) {
+      if (take?.keyframes) serverHasPayload.add(take.keyframes as unknown as object);
+    }
+    for (const actor of p.characters || []) {
+      if (actor?.motionData) serverHasPayload.add(actor.motionData as unknown as object);
+    }
+  }
+}
+
+/** Matches UNCHANGED in server/lib/projectStore.ts. */
+const UNCHANGED_MARKER = '__aura_unchanged__';
+
+function replaceUnchangedPayloads(projects: Project[]): any[] {
+  // Only rewrite collections that exist - adding an empty array where the project had none
+  // would change the stored shape for no reason.
+  return projects.map((p) => ({
+    ...p,
+    ...(p.cameraTakes
+      ? {
+          cameraTakes: p.cameraTakes.map((take) =>
+            take?.keyframes && serverHasPayload.has(take.keyframes as unknown as object)
+              ? { ...take, keyframes: UNCHANGED_MARKER }
+              : take
+          ),
+        }
+      : {}),
+    ...(p.characters
+      ? {
+          characters: p.characters.map((actor) =>
+            actor?.motionData && serverHasPayload.has(actor.motionData as unknown as object)
+              ? { ...actor, motionData: UNCHANGED_MARKER }
+              : actor
+          ),
+        }
+      : {}),
+  }));
+}
+
+/**
  * Persists all projects directly to the local file system (./data/projects.json)
  * via the Vite local dev server API.
  */
 export async function saveProjectsToDisk(projects: Project[]): Promise<boolean> {
   try {
-    const cleaned = cleanProjectsForStorage(projects);
+    const cleaned = replaceUnchangedPayloads(cleanProjectsForStorage(projects));
     const resp = await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -66,10 +116,14 @@ export async function loadProjectsFromDisk(): Promise<Project[] | null> {
     if (!resp.ok) return null;
     const data = await resp.json();
     if (Array.isArray(data) && data.length > 0) {
-      return rehydrateProjects(data);
+      const loaded = rehydrateProjects(data);
+      rememberServerPayloads(loaded);
+      return loaded;
     }
     if (data.projects && Array.isArray(data.projects) && data.projects.length > 0) {
-      return rehydrateProjects(data.projects);
+      const loaded = rehydrateProjects(data.projects);
+      rememberServerPayloads(loaded);
+      return loaded;
     }
     return null;
   } catch (err) {
