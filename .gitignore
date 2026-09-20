@@ -8,3 +8,4 @@ dist-ssr
 .npm-cache
 .DS_Store
 data/*.tmp.*
+dist-server
