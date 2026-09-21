@@ -4,7 +4,11 @@
 import { build } from 'esbuild';
 
 await build({
-  entryPoints: { prod: 'server/prod.ts', 'user-add': 'server/cli/userAdd.ts' },
+  entryPoints: {
+    prod: 'server/prod.ts',
+    'user-add': 'server/cli/userAdd.ts',
+    'import-projects': 'server/cli/importProjects.ts',
+  },
   outdir: 'dist-server',
   outExtension: { '.js': '.mjs' },
   platform: 'node',

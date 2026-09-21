@@ -9,9 +9,10 @@ import { getHfToken } from '../lib/env';
 import { extractErrorMessage, describeFetchError, isTransportError } from '../lib/errors';
 import { normalizeGradioFileData, resolveMediaUrl, persistMediaLocally } from '../lib/media';
 import { getLocalIpAddress } from '../lib/network';
-import { externalizeProjects, rehydrateProjects, backupProjectsOnce } from '../lib/projectStore';
+import { loadProjectsForUser, saveProjectsForUser } from '../lib/projectRepo';
 import { handleAuthApi, sessionTokenFrom } from './auth';
 import { userForSession } from '../lib/users';
+import { consumeGeneration, dailyLimitFor, isMeteredRoute, refundGeneration, usageToday } from '../lib/quota';
 import {
   KIMODO_SPACE,
   getTrellisClient,
@@ -57,10 +58,45 @@ export function createApiMiddleware(ctx: ApiContext) {
 
       // Routes below read this instead of looking the session up again.
       req.auraUser = user;
+
+      // Generations spend the studio's GPU quota and API credits, so they are counted per day.
+      if (isMeteredRoute(req.url)) {
+        const limit = dailyLimitFor(user);
+        const quota = await consumeGeneration(user._id, limit);
+        if (!quota.allowed) {
+          res.statusCode = 429;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({
+            success: false,
+            error: `You have used all ${quota.limit} generations for today. The limit resets at midnight UTC.`,
+          }));
+          return;
+        }
+
+        // If the generation fails on our side, hand the slot back: a broken Space or a network
+        // blip should not cost someone their day's allowance.
+        const endResponse = res.end.bind(res);
+        res.end = (...args: any[]) => {
+          if (res.statusCode >= 500) refundGeneration(user._id).catch(() => {});
+          return endResponse(...args);
+        };
+      }
     }
 
     if (req.url?.startsWith('/api/dialogue/')) {
       if (await handleDialogueApi(req, res)) return;
+    }
+
+    // Who am I and how much have I used today - for the account menu.
+    if (req.url?.startsWith('/api/usage')) {
+      const limit = dailyLimitFor(req.auraUser);
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({
+        success: true,
+        used: await usageToday(req.auraUser._id),
+        limit: Number.isFinite(limit) ? limit : null,
+      }));
+      return;
     }
 
     // -1. Network Host IP Discovery for Mobile Pairing QR Code
@@ -88,14 +124,11 @@ export function createApiMiddleware(ctx: ApiContext) {
 
       if (req.method === 'GET') {
         try {
-          if (fs.existsSync(projectsFilePath)) {
-            const stored = JSON.parse(fs.readFileSync(projectsFilePath, 'utf-8'));
-            // Takes and motion live in their own files now; put them back before answering.
-            const payload = Array.isArray(stored)
-              ? rehydrateProjects(stored, dataDir)
-              : { ...stored, projects: rehydrateProjects(stored.projects || [], dataDir) };
+          // Projects belong to the signed-in account, not to the machine.
+          const projects = await loadProjectsForUser(req.auraUser._id, dataDir);
+          if (projects.length > 0) {
             res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify(payload));
+            res.end(JSON.stringify(projects));
             return;
           } else {
             res.setHeader('Content-Type', 'application/json');
@@ -139,32 +172,13 @@ export function createApiMiddleware(ctx: ApiContext) {
               }
             }
 
-            // Write camera takes and actor motion to their own files, so projects.json stays small
-            // and an unchanged take is never rewritten.
-            backupProjectsOnce(projectsFilePath, dataDir);
-
-            // What is on disk right now, so an "unchanged" marker can be resolved against it.
-            let stored: any[] = [];
-            try {
-              if (fs.existsSync(projectsFilePath)) {
-                const raw = JSON.parse(fs.readFileSync(projectsFilePath, 'utf-8'));
-                stored = Array.isArray(raw) ? raw : raw.projects || [];
-              }
-            } catch (readErr: any) {
-              console.warn('[API /api/projects] Could not read the current projects file:', readErr?.message || readErr);
-            }
-
-            const toStore = Array.isArray(parsed)
-              ? externalizeProjects(parsed, dataDir, stored)
-              : parsed;
-
-            // Atomic file write using temporary file to prevent corruption
-            const tempFilePath = path.join(dataDir, `projects.tmp.${Date.now()}.json`);
-            fs.writeFileSync(tempFilePath, JSON.stringify(toStore, null, 2), 'utf-8');
-            fs.renameSync(tempFilePath, projectsFilePath);
+            // Camera takes and actor motion still go to their own files; the document keeps a
+            // reference. A Mongo document caps at 16 MB and one actor's motion can be 6 MB.
+            const projects = Array.isArray(parsed) ? parsed : parsed.projects || [];
+            const result = await saveProjectsForUser(req.auraUser._id, projects, dataDir);
 
             res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ success: true, count: Array.isArray(parsed) ? parsed.length : 1 }));
+            res.end(JSON.stringify({ success: true, count: result.saved, removed: result.removed }));
           } catch (err: any) {
             console.error('[API /api/projects] Failed to save projects to disk:', err);
             res.statusCode = 500;

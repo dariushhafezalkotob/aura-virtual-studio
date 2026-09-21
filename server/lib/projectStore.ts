@@ -61,8 +61,13 @@ function safeSegment(id: string): string {
   return String(id || 'unknown').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120);
 }
 
-function blobRelPath(projectId: string, kind: string, itemId: string): string {
-  return path.join('blobs', safeSegment(projectId), `${kind}_${safeSegment(itemId)}.json`);
+function blobRelPath(projectId: string, kind: string, itemId: string, scope?: string): string {
+  // `scope` keeps one account's blobs out of another's directory. Paths written before
+  // accounts existed have no scope and keep working, because the stored ref is a full path.
+  const parts = ['blobs'];
+  if (scope) parts.push(safeSegment(scope));
+  parts.push(safeSegment(projectId), `${kind}_${safeSegment(itemId)}.json`);
+  return path.join(...parts);
 }
 
 /**
@@ -94,7 +99,12 @@ function indexStored(previous: any[]): Map<string, any> {
  * which matters on the first save after the split: the client rightly says it has not touched a
  * take, but the payload is still sitting inline in projects.json rather than in a blob file.
  */
-export function externalizeProjects(projects: any[], dataDir: string, previous: any[] = []): any[] {
+export function externalizeProjects(
+  projects: any[],
+  dataDir: string,
+  previous: any[] = [],
+  blobScope?: string
+): any[] {
   if (!Array.isArray(projects)) return projects;
   const stored = indexStored(previous);
 
@@ -132,7 +142,7 @@ export function externalizeProjects(projects: any[], dataDir: string, previous: 
         // Already a reference (a save that never rehydrated): leave it exactly as it is.
         if (isBlobRef(value)) return item;
 
-        const rel = blobRelPath(projectId, kind, item.id);
+        const rel = blobRelPath(projectId, kind, item.id, blobScope);
         const abs = path.join(dataDir, rel);
 
         let payload = value;

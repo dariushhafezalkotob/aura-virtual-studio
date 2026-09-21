@@ -13,7 +13,8 @@
     "backup:data": "node scripts/backup-data.mjs",
     "db:start": "mkdir -p .mongo/data && .mongo/bin/mongod --dbpath .mongo/data --port 27017 --bind_ip 127.0.0.1 --fork --logpath .mongo/mongod.log && echo \"mongod running on 127.0.0.1:27017\"",
     "db:stop": ".mongo/bin/mongod --dbpath .mongo/data --shutdown || true",
-    "user:add": "node scripts/build-server.mjs >/dev/null && node dist-server/user-add.mjs"
+    "user:add": "node scripts/build-server.mjs >/dev/null && node dist-server/user-add.mjs",
+    "projects:import": "node scripts/build-server.mjs >/dev/null && node dist-server/import-projects.mjs"
   },
   "dependencies": {
     "@gradio/client": "^1.13.0",
