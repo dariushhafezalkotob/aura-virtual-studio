@@ -1,8 +1,12 @@
 import React, { useState } from 'react';
+import { AccountMenu } from '../common/AccountMenu';
 import { Project } from '../../types';
 
 interface ProjectsViewProps {
   projects: Project[];
+  /** Signed-in account; the projects screen has no TopBar, so the menu lives here. */
+  userLabel?: string;
+  onSignOut?: () => void;
   onSelectProject: (project: Project) => void;
   onCreateProject: (name: string) => void;
   onDeleteProject: (projectId: string) => void;
@@ -13,6 +17,8 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
   onSelectProject,
   onCreateProject,
   onDeleteProject,
+  userLabel,
+  onSignOut,
 }) => {
   const [showNewModal, setShowNewModal] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
@@ -28,7 +34,12 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
   };
 
   return (
-    <div className="flex-1 w-full h-full overflow-y-auto overflow-x-hidden">
+    <div className="flex-1 w-full h-full overflow-y-auto overflow-x-hidden relative">
+      {userLabel && onSignOut && (
+        <div className="absolute top-sm right-sm z-30">
+          <AccountMenu label={userLabel} onSignOut={onSignOut} />
+        </div>
+      )}
       <main className="flex flex-col items-center justify-start pt-10 md:pt-16 px-gutter md:px-margin-safe pb-28 max-w-7xl mx-auto w-full">
         {/* Header Section */}
         <header className="text-center mb-xl w-full max-w-4xl mx-auto flex flex-col items-center">

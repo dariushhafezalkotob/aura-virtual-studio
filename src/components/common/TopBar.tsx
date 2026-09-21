@@ -1,4 +1,5 @@
 import React from 'react';
+import { AccountMenu } from './AccountMenu';
 import { WorkflowStage, Project } from '../../types';
 
 interface TopBarProps {
@@ -81,18 +82,11 @@ export const TopBar: React.FC<TopBarProps> = ({
         >
           <span className="material-symbols-outlined text-[20px]">settings</span>
         </button>
-        <button
-          onClick={onSignOut}
-          className="text-on-surface-variant hover:text-primary transition-colors duration-300 cursor-pointer p-sm rounded-full hover:bg-surface-variant flex items-center justify-center gap-xs"
-          title={userEmail ? `Signed in as ${userEmail} - click to sign out` : 'Account'}
-        >
-          <span className="material-symbols-outlined text-[20px]">account_circle</span>
-          {userEmail && (
-            <span className="hidden lg:inline text-[11px] font-label-caps tracking-wider max-w-[160px] truncate">
-              {userEmail}
-            </span>
-          )}
-        </button>
+        {userEmail && onSignOut ? (
+          <AccountMenu label={userEmail} onSignOut={onSignOut} />
+        ) : (
+          <span className="material-symbols-outlined text-[20px] text-on-surface-variant p-sm">account_circle</span>
+        )}
       </div>
     </header>
   );

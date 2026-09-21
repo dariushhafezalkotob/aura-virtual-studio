@@ -9,7 +9,7 @@ import { CameraRecordView } from './components/screens/CameraRecordView';
 import { MobileCameraRemote } from './components/screens/MobileCameraRemote';
 import { LoginView } from './components/screens/LoginView';
 import { CrewPanel } from './components/screens/CrewPanel';
-import { AuthUser, fetchCurrentUser, signOut } from './services/authService';
+import { AuthUser, fetchCurrentUser, nameOf, signOut } from './services/authService';
 import {
   getInitialProjectsFromLocalStorage,
   loadProjectsSafely,
@@ -192,6 +192,14 @@ export function App() {
     }
   };
 
+  const handleSignOut = async () => {
+    await signOut();
+    setAuthUser(null);
+    setCurrentStage('projects');
+    setCurrentProjectId(null);
+    setShowCrew(false);
+  };
+
   const getStageSubtitle = (): string => {
     switch (currentStage) {
       case 'stage1_scene':
@@ -229,13 +237,8 @@ export function App() {
         currentProject={currentProject}
         onNavigate={setCurrentStage}
         subtitle={getStageSubtitle()}
-        userEmail={authUser.email}
-        onSignOut={async () => {
-          await signOut();
-          setAuthUser(null);
-          setCurrentStage('projects');
-          setCurrentProjectId(null);
-        }}
+        userEmail={nameOf(authUser)}
+        onSignOut={handleSignOut}
       />
 
       {/* Stage Views */}
@@ -246,6 +249,8 @@ export function App() {
             onSelectProject={handleSelectProject}
             onCreateProject={handleCreateProject}
             onDeleteProject={handleDeleteProject}
+            userLabel={nameOf(authUser)}
+            onSignOut={handleSignOut}
           />
         )}
 

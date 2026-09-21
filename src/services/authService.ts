@@ -6,7 +6,15 @@
 export interface AuthUser {
   id: string;
   email: string;
+  /** Crew accounts sign in with a username; the owner with an email. */
+  username?: string;
+  displayName?: string;
   role: 'owner' | 'user';
+}
+
+/** What to show on screen: their name if they have one, otherwise how they sign in. */
+export function nameOf(user: AuthUser): string {
+  return user.displayName || user.username || user.email;
 }
 
 export async function fetchCurrentUser(): Promise<AuthUser | null> {
