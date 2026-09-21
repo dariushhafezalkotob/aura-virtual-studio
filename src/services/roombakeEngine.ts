@@ -156,6 +156,8 @@ export class RoomBakeEngine {
   public meshes: THREE.Mesh[] = [];
   public views: ViewPoint[] = [];
   public viewMode: BakeViewMode = 'interior';
+  /** Set when a UV decision needs explaining to whoever pressed the button. */
+  public lastUvNote: string | null = null;
   public currentViewIndex: number = 0;
   public dilationPasses: number = 8;
 
@@ -1536,6 +1538,7 @@ export class RoomBakeEngine {
     splitTrims = true,
     viewMode: BakeViewMode = this.viewMode
   ): Promise<void> {
+    this.lastUvNote = null;
     let rootObject: THREE.Object3D;
     const fileName = typeof fileOrUrl === 'string' ? fileOrUrl.split('/').pop() || 'model' : fileOrUrl.name;
 
@@ -1669,11 +1672,21 @@ export class RoomBakeEngine {
     } else if (uvMode === 'auto') {
       if (!hasAnyUv) shouldSmartUnwrap = true;
     } else if (uvMode === 'smart') {
-      // Asking for Smart means Smart. This used to keep the model's own UVs whenever it had any
-      // and was over 3600 vertices, which quietly did nothing on exactly the models that need it
-      // most - including a GLB RoomBake exported earlier, which always has UVs and is large.
-      // reUnwrapRoom (the dropdown) has always unwrapped unconditionally; this now matches it.
-      shouldSmartUnwrap = true;
+      // A detailed model that already carries UVs usually has a better layout than anything this
+      // unwrapper will produce for it, so those are kept. Re-unwrapping over the top of a good
+      // layout is worse, not better.
+      //
+      // It is reported rather than done silently: picking Smart and seeing nothing happen is
+      // indistinguishable from a broken unwrapper. Changing the UV dropdown afterwards forces a
+      // real re-unwrap (reUnwrapRoom), which is the escape hatch when the model's own UVs are bad.
+      if (hasAnyUv && totalVerts > 3600) {
+        shouldSmartUnwrap = false;
+        this.lastUvNote =
+          `Kept the model's own UV layout (${totalVerts.toLocaleString()} vertices, UVs already present). ` +
+          `To unwrap anyway, re-pick "Smart Coplanar Island Unwrap" in the UV dropdown.`;
+      } else {
+        shouldSmartUnwrap = true;
+      }
     } else if (uvMode === 'box') {
       shouldBoxUnwrap = true;
     } else {

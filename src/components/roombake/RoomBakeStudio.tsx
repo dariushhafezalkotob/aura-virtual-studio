@@ -387,6 +387,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
           setShowGaps(false);
           updateStats();
           addLog(`✓ Loaded "${targetAsset.name}" with its textures into RoomBake!`, 'ok');
+          if (engineRef.current.lastUvNote) addLog(engineRef.current.lastUvNote, 'info');
         })
         .catch((err) => {
           console.warn('Failed to load targetAsset in RoomBake:', err);
@@ -426,6 +427,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
       setShowGaps(false);
       updateStats();
       addLog(`Model "${file.name}" imported with ${uvMode.toUpperCase()} UV layout!`, 'ok');
+      if (engine.lastUvNote) addLog(engine.lastUvNote, 'info');
     } catch (err: any) {
       addLog(`Model import failed: ${err.message}`, 'err');
     }
