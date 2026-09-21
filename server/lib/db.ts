@@ -34,10 +34,14 @@ export async function getDb(): Promise<Db> {
 /** Called once per connection. Creating an index that already exists is a no-op. */
 async function ensureIndexes(database: Db) {
   await database.collection('users').createIndex({ email: 1 }, { unique: true });
+  // Sparse: only crew accounts have a username, and the owner's account has none.
+  await database.collection('users').createIndex({ username: 1 }, { unique: true, sparse: true });
   await database.collection('sessions').createIndex({ token: 1 }, { unique: true });
   // Sessions clean themselves up: Mongo deletes them when expiresAt passes.
   await database.collection('sessions').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
   await database.collection('projects').createIndex({ ownerId: 1, id: 1 }, { unique: true });
+  // "projects I can open" is owner OR crew member.
+  await database.collection('projects').createIndex({ 'members.userId': 1 });
   await database.collection('projects').createIndex({ ownerId: 1, modified: -1 });
 }
 

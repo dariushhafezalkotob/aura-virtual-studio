@@ -21,6 +21,9 @@ const SESSION_DAYS = 30;
 export interface User {
   _id: ObjectId;
   email: string;
+  /** Optional sign-in name for crew accounts the owner creates; unique when present. */
+  username?: string;
+  displayName?: string;
   passwordHash: string;
   role: 'owner' | 'user';
   /** Generations allowed per day. Undefined means the server-wide default applies. */
@@ -32,11 +35,24 @@ export interface User {
 export interface PublicUser {
   id: string;
   email: string;
+  username?: string;
+  displayName?: string;
   role: 'owner' | 'user';
 }
 
 export function toPublicUser(user: User): PublicUser {
-  return { id: user._id.toHexString(), email: user.email, role: user.role };
+  return {
+    id: user._id.toHexString(),
+    email: user.email,
+    username: user.username,
+    displayName: user.displayName,
+    role: user.role,
+  };
+}
+
+/** What to call someone on screen. */
+export function labelFor(user: User | PublicUser): string {
+  return user.displayName || user.username || user.email;
 }
 
 function hashPassword(password: string): string {
@@ -78,7 +94,8 @@ const normalizeEmail = (email: string) => email.trim().toLowerCase();
 export async function createUser(
   email: string,
   password: string,
-  role: 'owner' | 'user' = 'user'
+  role: 'owner' | 'user' = 'user',
+  extra: { username?: string; displayName?: string } = {}
 ): Promise<PublicUser> {
   if (!email.includes('@')) throw new Error('That does not look like an email address.');
   if (password.length < 10) throw new Error('Password must be at least 10 characters.');
@@ -89,13 +106,18 @@ export async function createUser(
     passwordHash: hashPassword(password),
     role,
     createdAt: new Date(),
+    ...(extra.username ? { username: extra.username.trim().toLowerCase() } : {}),
+    ...(extra.displayName ? { displayName: extra.displayName.trim() } : {}),
   };
 
   try {
     const result = await db.collection('users').insertOne(user as any);
     return toPublicUser({ ...user, _id: result.insertedId } as User);
   } catch (err: any) {
-    if (err?.code === 11000) throw new Error(`There is already an account for ${email}.`);
+    if (err?.code === 11000) {
+      const clash = String(err?.keyValue && Object.keys(err.keyValue)[0]) === 'username' ? extra.username : email;
+      throw new Error(`There is already an account for ${clash}.`);
+    }
     throw err;
   }
 }
@@ -116,9 +138,13 @@ export async function listUsers(): Promise<PublicUser[]> {
 }
 
 /** Returns the user when the password is right, null otherwise. Never says which half was wrong. */
-export async function authenticate(email: string, password: string): Promise<User | null> {
+export async function authenticate(identifier: string, password: string): Promise<User | null> {
   const db = await getDb();
-  const user = (await db.collection('users').findOne({ email: normalizeEmail(email) })) as unknown as User | null;
+  // Crew accounts sign in with a username; the owner's account with an email. Accept either.
+  const id = normalizeEmail(identifier);
+  const user = (await db
+    .collection('users')
+    .findOne({ $or: [{ email: id }, { username: id }] })) as unknown as User | null;
   if (!user) {
     // Hash anyway, so a missing account does not answer faster than a wrong password.
     hashPassword(password);

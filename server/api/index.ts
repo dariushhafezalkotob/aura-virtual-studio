@@ -11,6 +11,7 @@ import { normalizeGradioFileData, resolveMediaUrl, persistMediaLocally } from '.
 import { getLocalIpAddress } from '../lib/network';
 import { loadProjectsForUser, saveProjectsForUser } from '../lib/projectRepo';
 import { handleAuthApi, sessionTokenFrom } from './auth';
+import { handleCrewApi } from './crew';
 import { userForSession } from '../lib/users';
 import { consumeGeneration, dailyLimitFor, isMeteredRoute, refundGeneration, usageToday } from '../lib/quota';
 import {
@@ -112,6 +113,9 @@ export function createApiMiddleware(ctx: ApiContext) {
       }));
       return;
     }
+
+    // Crew seats live under a project, so this has to run before the projects route.
+    if (await handleCrewApi(req, res)) return;
 
     // 0. Local Disk File Persistence for Projects & Scenes (Bulletproof Local Dev)
     if (req.url?.startsWith('/api/projects')) {

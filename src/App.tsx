@@ -8,6 +8,7 @@ import { ActingSetupView } from './components/screens/ActingSetupView';
 import { CameraRecordView } from './components/screens/CameraRecordView';
 import { MobileCameraRemote } from './components/screens/MobileCameraRemote';
 import { LoginView } from './components/screens/LoginView';
+import { CrewPanel } from './components/screens/CrewPanel';
 import { AuthUser, fetchCurrentUser, signOut } from './services/authService';
 import {
   getInitialProjectsFromLocalStorage,
@@ -84,6 +85,7 @@ export function App() {
   );
 
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [showCrew, setShowCrew] = useState(false);
   const [currentStage, setCurrentStage] = useState<WorkflowStage>('projects');
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
 
@@ -251,6 +253,7 @@ export function App() {
           <WorkflowSequenceView
             currentProject={currentProject}
             onSelectStage={setCurrentStage}
+            onOpenCrew={() => setShowCrew(true)}
           />
         )}
 
@@ -277,6 +280,15 @@ export function App() {
           />
         )}
       </div>
+
+      {showCrew && currentProject && (
+        <CrewPanel
+          projectId={currentProject.id}
+          projectName={currentProject.name}
+          canManage={!(currentProject as any).sharedWithMe}
+          onClose={() => setShowCrew(false)}
+        />
+      )}
     </div>
   );
 }

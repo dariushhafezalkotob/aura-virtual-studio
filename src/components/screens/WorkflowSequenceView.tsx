@@ -4,11 +4,14 @@ import { WorkflowStage, Project } from '../../types';
 interface WorkflowSequenceViewProps {
   currentProject: Project;
   onSelectStage: (stage: WorkflowStage) => void;
+  /** Opens the crew panel for this project. */
+  onOpenCrew?: () => void;
 }
 
 export const WorkflowSequenceView: React.FC<WorkflowSequenceViewProps> = ({
   currentProject,
   onSelectStage,
+  onOpenCrew,
 }) => {
   return (
     <main className="flex-1 flex flex-col items-center justify-center px-margin-safe py-xl z-10 w-full max-w-7xl mx-auto my-auto">
@@ -24,6 +27,18 @@ export const WorkflowSequenceView: React.FC<WorkflowSequenceViewProps> = ({
           Follow the production stages below to construct, choreograph, and capture your virtual scene in{' '}
           <span className="text-primary font-medium">{currentProject.name}</span>.
         </p>
+
+        <button
+          onClick={onOpenCrew}
+          className="mt-md inline-flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container/60 text-on-surface-variant hover:text-primary hover:border-primary/50 transition-colors cursor-pointer text-[11px] font-label-caps tracking-wider"
+          title="Who can work on this project"
+        >
+          <span className="material-symbols-outlined text-[16px]">group</span>
+          CREW
+          {(currentProject as any).sharedWithMe && (
+            <span className="ml-xs text-[10px] text-amber-300">· shared with you</span>
+          )}
+        </button>
       </div>
 
       {/* Workflow Cards (Bento 3 columns) */}
