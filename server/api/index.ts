@@ -10,6 +10,8 @@ import { extractErrorMessage, describeFetchError, isTransportError } from '../li
 import { normalizeGradioFileData, resolveMediaUrl, persistMediaLocally } from '../lib/media';
 import { getLocalIpAddress } from '../lib/network';
 import { externalizeProjects, rehydrateProjects, backupProjectsOnce } from '../lib/projectStore';
+import { handleAuthApi, sessionTokenFrom } from './auth';
+import { userForSession } from '../lib/users';
 import {
   KIMODO_SPACE,
   getTrellisClient,
@@ -35,6 +37,28 @@ export function createApiMiddleware(ctx: ApiContext) {
   const devPort = ctx.port;
 
   return async (req: any, res: any, next: () => void) => {
+    // Sign-in runs before the gate, for obvious reasons.
+    if (await handleAuthApi(req, res, scheme)) return;
+
+    // Everything else under /api needs a session. Without this, putting the API keys on the
+    // server would mean anyone who finds the URL spends the owner's GPU quota.
+    if (req.url?.startsWith('/api/')) {
+      const user = await userForSession(sessionTokenFrom(req)).catch((err) => {
+        console.error('[auth] session lookup failed:', err?.message || err);
+        return null;
+      });
+
+      if (!user) {
+        res.statusCode = 401;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ success: false, error: 'Please sign in.' }));
+        return;
+      }
+
+      // Routes below read this instead of looking the session up again.
+      req.auraUser = user;
+    }
+
     if (req.url?.startsWith('/api/dialogue/')) {
       if (await handleDialogueApi(req, res)) return;
     }

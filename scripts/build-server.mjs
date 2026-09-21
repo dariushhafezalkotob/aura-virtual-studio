@@ -4,8 +4,9 @@
 import { build } from 'esbuild';
 
 await build({
-  entryPoints: ['server/prod.ts'],
-  outfile: 'dist-server/prod.mjs',
+  entryPoints: { prod: 'server/prod.ts', 'user-add': 'server/cli/userAdd.ts' },
+  outdir: 'dist-server',
+  outExtension: { '.js': '.mjs' },
   platform: 'node',
   target: 'node20',
   format: 'esm',

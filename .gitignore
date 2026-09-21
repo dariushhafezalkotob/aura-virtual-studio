@@ -14,3 +14,6 @@ dist-server
 # `npm run backup:data`, not with git. Older versions are still in git history.
 data/
 backups/
+
+# Local development database (binaries + data, ~400 MB)
+.mongo/

@@ -6,6 +6,9 @@ interface TopBarProps {
   currentProject: Project | null;
   onNavigate: (stage: WorkflowStage) => void;
   subtitle?: string;
+  /** Signed-in account, shown on the avatar button. */
+  userEmail?: string;
+  onSignOut?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -13,6 +16,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   currentProject,
   onNavigate,
   subtitle,
+  userEmail,
+  onSignOut,
 }) => {
   if (currentStage === 'projects') {
     return null;
@@ -77,10 +82,16 @@ export const TopBar: React.FC<TopBarProps> = ({
           <span className="material-symbols-outlined text-[20px]">settings</span>
         </button>
         <button
-          className="text-on-surface-variant hover:text-primary transition-colors duration-300 cursor-pointer p-sm rounded-full hover:bg-surface-variant flex items-center justify-center"
-          title="Account"
+          onClick={onSignOut}
+          className="text-on-surface-variant hover:text-primary transition-colors duration-300 cursor-pointer p-sm rounded-full hover:bg-surface-variant flex items-center justify-center gap-xs"
+          title={userEmail ? `Signed in as ${userEmail} - click to sign out` : 'Account'}
         >
           <span className="material-symbols-outlined text-[20px]">account_circle</span>
+          {userEmail && (
+            <span className="hidden lg:inline text-[11px] font-label-caps tracking-wider max-w-[160px] truncate">
+              {userEmail}
+            </span>
+          )}
         </button>
       </div>
     </header>

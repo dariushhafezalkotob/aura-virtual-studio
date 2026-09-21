@@ -7,6 +7,8 @@ import { SceneDesignView } from './components/screens/SceneDesignView';
 import { ActingSetupView } from './components/screens/ActingSetupView';
 import { CameraRecordView } from './components/screens/CameraRecordView';
 import { MobileCameraRemote } from './components/screens/MobileCameraRemote';
+import { LoginView } from './components/screens/LoginView';
+import { AuthUser, fetchCurrentUser, signOut } from './services/authService';
 import {
   getInitialProjectsFromLocalStorage,
   loadProjectsSafely,
@@ -61,6 +63,22 @@ export function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
+  // Every /api route needs a session, so nothing is loaded until we know who is signed in.
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetchCurrentUser().then((user) => {
+      if (!active) return;
+      setAuthUser(user);
+      setAuthChecked(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const [projects, setProjects] = useState<Project[]>(() =>
     getInitialProjectsFromLocalStorage(INITIAL_PROJECTS)
   );
@@ -69,8 +87,11 @@ export function App() {
   const [currentStage, setCurrentStage] = useState<WorkflowStage>('projects');
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
 
-  // Hydrate full project data (Disk -> IndexedDB -> LocalStorage) on mount
+  // Hydrate full project data (Disk -> IndexedDB -> LocalStorage) once signed in.
+  // Running this before the session exists would just get a 401 from the disk API and
+  // silently settle for whatever stale copy the browser still had.
   useEffect(() => {
+    if (!authUser) return;
     let active = true;
     loadProjectsSafely(INITIAL_PROJECTS).then((loaded) => {
       if (active && loaded && loaded.length > 0) {
@@ -83,7 +104,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [authUser]);
 
   // Persist project changes safely to Disk, IndexedDB, and LocalStorage
   // CRITICAL: Must wait until hydration has finished to prevent overwriting saved data!
@@ -186,6 +207,15 @@ export function App() {
     return <MobileCameraRemote />;
   }
 
+  // Blank rather than a flash of the studio while the session check is in flight.
+  if (!authChecked) {
+    return <div className="h-screen w-screen bg-background" />;
+  }
+
+  if (!authUser) {
+    return <LoginView onSignedIn={setAuthUser} />;
+  }
+
   return (
     <div className="h-screen w-screen bg-background text-on-background flex flex-col font-body-md relative overflow-hidden selection:bg-surface-container-high selection:text-primary">
       {/* Background Radial Glow */}
@@ -197,6 +227,13 @@ export function App() {
         currentProject={currentProject}
         onNavigate={setCurrentStage}
         subtitle={getStageSubtitle()}
+        userEmail={authUser.email}
+        onSignOut={async () => {
+          await signOut();
+          setAuthUser(null);
+          setCurrentStage('projects');
+          setCurrentProjectId(null);
+        }}
       />
 
       {/* Stage Views */}
