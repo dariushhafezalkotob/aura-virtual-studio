@@ -28,7 +28,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     <header className="w-full flex items-center justify-between px-margin-safe py-md z-50 sticky top-0 bg-background/85 backdrop-blur-md border-b border-outline-variant/20">
       {/* Left Back Navigation */}
       <div className="flex-1 flex items-center gap-md">
-        {currentStage === 'workflow' ? (
+        {currentStage === 'scenes' ? (
           <button
             onClick={() => onNavigate('projects')}
             className="flex items-center gap-sm text-on-surface-variant hover:text-primary transition-colors duration-300 group cursor-pointer"
@@ -38,6 +38,18 @@ export const TopBar: React.FC<TopBarProps> = ({
             </span>
             <span className="font-label-caps text-label-caps tracking-widest opacity-90 group-hover:opacity-100">
               BACK TO PROJECTS
+            </span>
+          </button>
+        ) : currentStage === 'workflow' ? (
+          <button
+            onClick={() => onNavigate('scenes')}
+            className="flex items-center gap-sm text-on-surface-variant hover:text-primary transition-colors duration-300 group cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[18px] group-hover:-translate-x-1 transition-transform duration-300">
+              arrow_back
+            </span>
+            <span className="font-label-caps text-label-caps tracking-widest opacity-90 group-hover:opacity-100">
+              BACK TO SCENES
             </span>
           </button>
         ) : (

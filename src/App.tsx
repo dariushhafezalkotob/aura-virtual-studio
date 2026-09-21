@@ -9,6 +9,8 @@ import { CameraRecordView } from './components/screens/CameraRecordView';
 import { MobileCameraRemote } from './components/screens/MobileCameraRemote';
 import { LoginView } from './components/screens/LoginView';
 import { CrewPanel } from './components/screens/CrewPanel';
+import { ScenesView } from './components/screens/ScenesView';
+import { applySceneEdit, sceneAsProject, scenesOf, sluglineFor } from './services/filmScenes';
 import { AuthUser, fetchCurrentUser, nameOf, signOut } from './services/authService';
 import {
   getInitialProjectsFromLocalStorage,
@@ -86,6 +88,7 @@ export function App() {
 
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [showCrew, setShowCrew] = useState(false);
+  const [currentSceneId, setCurrentSceneId] = useState<string | null>(null);
   const [currentStage, setCurrentStage] = useState<WorkflowStage>('projects');
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
 
@@ -164,7 +167,8 @@ export function App() {
 
   const handleSelectProject = (project: Project) => {
     setCurrentProjectId(project.id);
-    setCurrentStage('workflow');
+    setCurrentSceneId(null);
+    setCurrentStage('scenes');
   };
 
   const handleCreateProject = (name: string) => {
@@ -177,7 +181,8 @@ export function App() {
     };
     setProjects([newProj, ...projects]);
     setCurrentProjectId(newProj.id);
-    setCurrentStage('workflow');
+    setCurrentSceneId(null);
+    setCurrentStage('scenes');
   };
 
   const handleUpdateProject = (updated: Project) => {
@@ -200,8 +205,32 @@ export function App() {
     setShowCrew(false);
   };
 
+  // The three studio screens are handed the current scene dressed as a project, so they carry on
+  // working exactly as they did when a project WAS a single scene.
+  const currentScene = currentProject
+    ? scenesOf(currentProject).find((s) => s.id === currentSceneId) || null
+    : null;
+
+  const sceneAsProjectView = currentProject && currentScene ? sceneAsProject(currentProject, currentScene) : null;
+
+  const handleUpdateScene = (edited: Project) => {
+    if (!currentProject || !currentScene) return;
+    handleUpdateProject(applySceneEdit(currentProject, currentScene.id, edited));
+  };
+
+  const handleOpenScene = (sceneId: string) => {
+    setCurrentSceneId(sceneId);
+    setCurrentStage('workflow');
+  };
+
   const getStageSubtitle = (): string => {
+    // Inside a scene, the header names the scene rather than repeating the stage.
+    if (currentScene && currentStage !== 'scenes') {
+      return `${currentScene.number} · ${sluglineFor(currentScene)}`;
+    }
     switch (currentStage) {
+      case 'scenes':
+        return 'Scenes';
       case 'stage1_scene':
         return 'Stage 01: Scene Design';
       case 'stage2_acting':
@@ -254,6 +283,15 @@ export function App() {
           />
         )}
 
+        {currentStage === 'scenes' && currentProject && (
+          <ScenesView
+            currentProject={currentProject}
+            onUpdateProject={handleUpdateProject}
+            onOpenScene={handleOpenScene}
+            onOpenCrew={() => setShowCrew(true)}
+          />
+        )}
+
         {currentStage === 'workflow' && currentProject && (
           <WorkflowSequenceView
             currentProject={currentProject}
@@ -262,26 +300,26 @@ export function App() {
           />
         )}
 
-        {currentStage === 'stage1_scene' && currentProject && (
+        {currentStage === 'stage1_scene' && sceneAsProjectView && (
           <SceneDesignView
-            currentProject={currentProject}
-            onUpdateProject={handleUpdateProject}
+            currentProject={sceneAsProjectView}
+            onUpdateProject={handleUpdateScene}
             onNavigateStage={setCurrentStage}
           />
         )}
 
-        {currentStage === 'stage2_acting' && currentProject && (
+        {currentStage === 'stage2_acting' && sceneAsProjectView && (
           <ActingSetupView
-            currentProject={currentProject}
-            onUpdateProject={handleUpdateProject}
+            currentProject={sceneAsProjectView}
+            onUpdateProject={handleUpdateScene}
             onNavigateStage={setCurrentStage}
           />
         )}
 
-        {currentStage === 'stage3_camera' && currentProject && (
+        {currentStage === 'stage3_camera' && sceneAsProjectView && (
           <CameraRecordView
-            currentProject={currentProject}
-            onUpdateProject={handleUpdateProject}
+            currentProject={sceneAsProjectView}
+            onUpdateProject={handleUpdateScene}
           />
         )}
       </div>

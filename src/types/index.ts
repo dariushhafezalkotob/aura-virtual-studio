@@ -1,4 +1,4 @@
-export type WorkflowStage = 'projects' | 'workflow' | 'stage1_scene' | 'stage2_acting' | 'stage3_camera';
+export type WorkflowStage = 'projects' | 'scenes' | 'workflow' | 'stage1_scene' | 'stage2_acting' | 'stage3_camera';
 
 export type AI3DEngine = 'trellis' | 'hunyuan3d' | 'hunyuan_world';
 
@@ -47,12 +47,50 @@ export interface DepthOfFieldConfig {
 
 export type LightingEnvironmentPreset = 'studio' | 'city' | 'sunset' | 'dawn' | 'park';
 
+export type SceneSetting = 'interior' | 'exterior';
+export type SceneTimeOfDay = 'day' | 'night' | 'dawn' | 'dusk';
+
+/**
+ * One scene of the film: a set, the actors in it, and the takes shot there.
+ *
+ * Everything below `setting` is the content that used to sit directly on a Project, which is why
+ * the shapes match: a scene is what a project used to be, and a project is now a film made of
+ * several of them.
+ */
+export interface FilmScene {
+  id: string;
+  /** Scene number as shown on a slugline: "01", "14A". */
+  number: string;
+  /** What happens here: "bar", "rooftop chase". */
+  title: string;
+  setting: SceneSetting;
+  timeOfDay: SceneTimeOfDay;
+  notes?: string;
+  createdAt?: string;
+
+  scenes?: SceneAsset[];
+  characters?: CharacterActor[];
+  cameraTakes?: CameraTake[];
+  pointLights?: StagePointLight[];
+  panoramaUrl?: string;
+  panoramaRotation?: number;
+  panoramaBlur?: number;
+  showPanorama?: boolean;
+  splatUrl?: string;
+  stageSpecularity?: number;
+  lightIntensity?: number;
+  environmentPreset?: LightingEnvironmentPreset;
+  dialogue?: DialogueScene;
+}
+
 export interface Project {
   id: string;
   name: string;
   thumbnail: string;
   modified: string;
   description?: string;
+  /** The film's scenes, in order. Older projects without this are wrapped into "Scene 01". */
+  filmScenes?: FilmScene[];
   scenes?: SceneAsset[];
   characters?: CharacterActor[];
   cameraTakes?: CameraTake[];
