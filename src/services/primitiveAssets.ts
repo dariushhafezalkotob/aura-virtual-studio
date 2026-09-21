@@ -69,6 +69,12 @@ export async function createPrimitiveGLB(kind: PrimitiveKind): Promise<ArrayBuff
     side: kind === 'plane' || kind === 'wall' ? THREE.DoubleSide : THREE.FrontSide,
   });
 
+  // Drop the built-in UVs. three's primitives map every face onto the same 0-1 square, which is
+  // overlap by construction: RoomBake's "auto" mode preserves whatever UVs a model arrives with,
+  // so shipping these would stack all six faces of a box on one patch of the texture atlas.
+  // With no UVs at all, RoomBake unwraps it properly on load.
+  geometry.deleteAttribute('uv');
+
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = kind;
 

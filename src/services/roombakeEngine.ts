@@ -1669,12 +1669,11 @@ export class RoomBakeEngine {
     } else if (uvMode === 'auto') {
       if (!hasAnyUv) shouldSmartUnwrap = true;
     } else if (uvMode === 'smart') {
-      // If the mesh already has valid UVs and has high complexity, preserve its UVs
-      if (hasAnyUv && totalVerts > 3600) {
-        shouldSmartUnwrap = false;
-      } else {
-        shouldSmartUnwrap = true;
-      }
+      // Asking for Smart means Smart. This used to keep the model's own UVs whenever it had any
+      // and was over 3600 vertices, which quietly did nothing on exactly the models that need it
+      // most - including a GLB RoomBake exported earlier, which always has UVs and is large.
+      // reUnwrapRoom (the dropdown) has always unwrapped unconditionally; this now matches it.
+      shouldSmartUnwrap = true;
     } else if (uvMode === 'box') {
       shouldBoxUnwrap = true;
     } else {

@@ -73,6 +73,8 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   // 03 Generate
   const [srcSelect, setSrcSelect] = useState<'gemini' | 'mock' | 'normals' | 'upload'>('gemini');
   const [genericPrompt, setGenericPrompt] = useState('warm oak parquet floor, lime-plaster walls, matte white ceiling, flat even lighting, no cast shadows, albedo texture, interior photograph');
+  const OBJECT_PROMPT_DEFAULT =
+    'worn painted metal with chipped edges, fine surface scratches, flat even lighting, no cast shadows, albedo texture, product photograph of a single object';
   const [genericSeed, setGenericSeed] = useState(20260903);
 
   // Gemini State
@@ -88,7 +90,13 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
   });
   const [gemSendCond, setGemSendCond] = useState(true);
   const [gemStyle, setGemStyle] = useState('A futuristic cyberpunk hideout interior, industrial sci-fi architecture, aged black metal wall panels, wet polished concrete floor, subtle holographic interface glow on the walls, cinematic warm tungsten lighting mixed with cold blue ambient light, realistic materials, believable wear and scratches.');
-  const gemTemplate = `Photorealistic architectural photograph of a room interior wall and surface view.\nScene style: {{STYLE}}.\nLighting: flat even diffused interior lighting, architectural photography, ultra sharp textures, no distortion, high detail, ARRI style 8K detail.\nSeamless continuity: If any portion of a wall, floor, or ceiling is already textured in the reference view, seamlessly continue and extend that exact material, color palette, scale, and pattern across the rest of the surface with an invisible boundary.`;
+  const gemTemplateInterior = `Photorealistic architectural photograph of a room interior wall and surface view.\nScene style: {{STYLE}}.\nLighting: flat even diffused interior lighting, architectural photography, ultra sharp textures, no distortion, high detail, ARRI style 8K detail.\nSeamless continuity: If any portion of a wall, floor, or ceiling is already textured in the reference view, seamlessly continue and extend that exact material, color palette, scale, and pattern across the rest of the surface with an invisible boundary.`;
+
+  // Baking a prop from outside is a product shot, not a room. Asking for "a room interior wall
+  // and surface view" is what made a box come back looking like the inside of a building.
+  const gemTemplateExterior = `Photorealistic studio photograph of a single standalone object, seen from outside against a plain empty backdrop.\nObject materials: {{STYLE}}.\nLighting: soft even product lighting, no hard cast shadows, ultra sharp surface detail, no distortion, 8K detail.\nNo room, no walls, no floor, no ceiling, no furniture, no scenery, no people - only the object.\nSeamless continuity: If any part of the object is already textured in the reference view, continue and extend that exact material, colour, scale and pattern across the rest of its surface with an invisible boundary.`;
+
+  const gemTemplate = viewMode === 'exterior' ? gemTemplateExterior : gemTemplateInterior;
 
   // Generated Image Thumbnail & Canvas (4 Candidates)
   const [genThumb, setGenThumb] = useState<string | null>(null);
@@ -620,7 +628,12 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
 
       const activeModel = 'gemini-3.1-flash-lite-image';
       const activeKey = gemKey;
-      const activePrompt = srcSelect === 'gemini' ? gemTemplate : genericPrompt;
+      const activePrompt =
+      srcSelect === 'gemini'
+        ? gemTemplate
+        : viewMode === 'exterior' && genericPrompt.includes('interior photograph')
+          ? OBJECT_PROMPT_DEFAULT
+          : genericPrompt;
       const activeStyle = srcSelect === 'gemini' ? gemStyle : '';
 
       const genCanvases = await generateTextureCandidates({
@@ -634,6 +647,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
         sendCond: gemSendCond,
         quality: 'standard',
         size: frameSize,
+        mode: viewMode,
         images: {
           depth: engine.cond.depth,
           normal: engine.cond.normal,
@@ -711,7 +725,12 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
 
     const activeModel = 'gemini-3.1-flash-lite-image';
     const activeKey = gemKey;
-    const activePrompt = srcSelect === 'gemini' ? gemTemplate : genericPrompt;
+    const activePrompt =
+      srcSelect === 'gemini'
+        ? gemTemplate
+        : viewMode === 'exterior' && genericPrompt.includes('interior photograph')
+          ? OBJECT_PROMPT_DEFAULT
+          : genericPrompt;
     const activeStyle = srcSelect === 'gemini' ? gemStyle : '';
 
     const genCv = await generateTexture({
@@ -725,6 +744,7 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
       sendCond: gemSendCond,
       quality: 'standard',
       size: frameSize,
+      mode: viewMode,
       images: {
         depth: engine.cond.depth,
         normal: engine.cond.normal,

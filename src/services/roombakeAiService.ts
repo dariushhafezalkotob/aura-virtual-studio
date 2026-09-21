@@ -13,6 +13,13 @@ export interface GenerateParams {
   };
   size?: string;
   quality?: string;
+  /**
+   * Which way the cameras face. 'interior' renders a room from inside it; 'exterior' renders a
+   * single object seen from outside. The wording matters more than anything else here: asked for
+   * "a photorealistic interior photograph", the model draws a room even when the conditioning maps
+   * clearly show a box on a black background.
+   */
+  mode?: 'interior' | 'exterior';
 }
 
 export function buildGeminiPrompt(template: string, style: string): string {
@@ -159,15 +166,21 @@ export async function generateTextureCandidates(params: GenerateParams): Promise
       throw new Error('No images returned by Imagen.');
     }
 
+    const exterior = params.mode === 'exterior';
+
     const baseParts: any[] = [];
     baseParts.push({
-      text: 'You are an expert 3D architectural rendering and texture synthesis engine. Your goal is to render a photorealistic interior photograph that EXACTLY overlays and matches the 3D geometry, perspective, and vanishing points shown in the reference conditioning maps below.',
+      text: exterior
+        ? 'You are an expert product and prop rendering engine. Your goal is to render a photorealistic photograph of ONE SINGLE OBJECT seen from OUTSIDE, on a plain empty background, exactly matching the silhouette, proportions, perspective and surface orientation shown in the reference conditioning maps below. This is NOT a room and NOT an interior: do not add walls, floors, ceilings, furniture, windows or any surrounding environment. Only the object itself, filling the frame exactly as the maps show it.'
+        : 'You are an expert 3D architectural rendering and texture synthesis engine. Your goal is to render a photorealistic interior photograph that EXACTLY overlays and matches the 3D geometry, perspective, and vanishing points shown in the reference conditioning maps below.',
     });
 
     if (sendCond) {
       if (images.depth) {
         baseParts.push({
-          text: '[REFERENCE MAP 1: CAMERA DEPTH MAP]\nThis grayscale map defines surface distance from the camera (darker = near foreground, lighter = distant background). Every room corner, ceiling junction, floor perimeter, and perspective line MUST align with these edges. Do NOT shift, tilt, or alter the camera perspective:',
+          text: exterior
+            ? '[REFERENCE MAP 1: CAMERA DEPTH MAP]\nThis grayscale map defines surface distance from the camera (darker = nearer). The lit shape is the OBJECT; everything black around it is empty background that must stay empty. Every edge, corner and contour of the object MUST align with this silhouette. Do NOT shift, tilt or alter the camera, and do NOT fill the background with a room:'
+            : '[REFERENCE MAP 1: CAMERA DEPTH MAP]\nThis grayscale map defines surface distance from the camera (darker = near foreground, lighter = distant background). Every room corner, ceiling junction, floor perimeter, and perspective line MUST align with these edges. Do NOT shift, tilt, or alter the camera perspective:',
         });
         baseParts.push({
           inlineData: {
@@ -178,7 +191,9 @@ export async function generateTextureCandidates(params: GenerateParams): Promise
       }
       if (images.normal) {
         baseParts.push({
-          text: '[REFERENCE MAP 2: SURFACE NORMAL ORIENTATION MAP]\nThis color-coded normal map defines the precise 3D plane orientation:\n- Vertical walls are colored in cyan, magenta, and blue tones.\n- Horizontal floors and ceilings are colored in green/yellow tones.\nRender clean architectural surfaces conforming strictly to these plane boundaries without introducing false architectural elements:',
+          text: exterior
+            ? '[REFERENCE MAP 2: SURFACE NORMAL ORIENTATION MAP]\nThis color-coded normal map defines which way each face of the object points: upward-facing faces are green/yellow, side faces are cyan, magenta and blue. Light and shade each face according to its orientation, and keep the faces flat and distinct. Add no geometry the map does not show:'
+            : '[REFERENCE MAP 2: SURFACE NORMAL ORIENTATION MAP]\nThis color-coded normal map defines the precise 3D plane orientation:\n- Vertical walls are colored in cyan, magenta, and blue tones.\n- Horizontal floors and ceilings are colored in green/yellow tones.\nRender clean architectural surfaces conforming strictly to these plane boundaries without introducing false architectural elements:',
         });
         baseParts.push({
           inlineData: {
@@ -189,7 +204,9 @@ export async function generateTextureCandidates(params: GenerateParams): Promise
       }
       if (images.base) {
         baseParts.push({
-          text: '[PRIMARY GROUND-TRUTH ANCHOR: PARTIALLY TEXTURED ROOM VIEW]\nThis reference shows the camera view with surfaces ALREADY TEXTURED in earlier bakes.\n\nCRITICAL SEAMLESS TEXTURE EXTENSION DIRECTIVES:\n1. Treat already-textured surfaces as your ABSOLUTE GROUND TRUTH.\n2. Sample the exact texture, material type, wood grain/plaster pattern, panel seams, and color palette directly from the textured portion.\n3. SEAMLESSLY EXTEND AND CONTINUE that exact material across the untextured/blank areas.\n4. INVISIBLE TRANSITION: The seam where existing texture meets new texture MUST be 100% invisible.',
+          text: (exterior
+            ? '[PRIMARY GROUND-TRUTH ANCHOR: PARTIALLY TEXTURED OBJECT VIEW]\nThis reference shows the object with surfaces ALREADY TEXTURED in earlier bakes.'
+            : '[PRIMARY GROUND-TRUTH ANCHOR: PARTIALLY TEXTURED ROOM VIEW]\nThis reference shows the camera view with surfaces ALREADY TEXTURED in earlier bakes.') + '\n\nCRITICAL SEAMLESS TEXTURE EXTENSION DIRECTIVES:\n1. Treat already-textured surfaces as your ABSOLUTE GROUND TRUTH.\n2. Sample the exact texture, material type, wood grain/plaster pattern, panel seams, and color palette directly from the textured portion.\n3. SEAMLESSLY EXTEND AND CONTINUE that exact material across the untextured/blank areas.\n4. INVISIBLE TRANSITION: The seam where existing texture meets new texture MUST be 100% invisible.',
         });
         baseParts.push({
           inlineData: {
@@ -201,14 +218,19 @@ export async function generateTextureCandidates(params: GenerateParams): Promise
     }
 
     const fullPrompt = buildGeminiPrompt(
-      prompt || 'A photorealistic architectural interior photograph of {{STYLE}}, cinematic studio illumination, realistic textures, highly detailed, 8k resolution',
+      prompt ||
+        (exterior
+          ? 'A photorealistic studio photograph of a single object made of {{STYLE}}, plain empty background, even studio lighting, realistic materials, highly detailed, 8k resolution'
+          : 'A photorealistic architectural interior photograph of {{STYLE}}, cinematic studio illumination, realistic textures, highly detailed, 8k resolution'),
       style
     );
 
     const parts = [
       ...baseParts,
       {
-        text: `[RENDER TASK & SPECIFICATIONS]\nSynthesize the photorealistic architectural interior photograph adhering strictly to the geometry above and following these style specifications:\n\nSCENE STYLE & MATERIALS:\n${fullPrompt}\n\nMANDATORY 3D GEOMETRY & CONTINUITY RULES:\n1. SEAMLESS TEXTURE CONTINUATION: Sample and seamlessly continue materials from the reference anchor into blank areas.\n2. STRICT PERSPECTIVE LOCK: Every corner and wall seam must line up pixel-for-pixel with depth and normal maps.\n3. ARCHITECTURAL TEXTURES: Paint realistic materials (wood parquet, stone, drywall, plaster, concrete, metal) onto each surface plane.\n4. DIFFUSE LIGHTING: Use soft, flat, diffused architectural photography lighting with clean ambient illumination.\n5. Output ONLY the generated photograph.`,
+        text: exterior
+          ? `[RENDER TASK & SPECIFICATIONS]\nSynthesize a photorealistic photograph of the SINGLE OBJECT shown in the maps above, seen from outside, following these material specifications:\n\nOBJECT MATERIALS:\n${fullPrompt}\n\nMANDATORY RULES:\n1. ONE OBJECT ONLY: no room, no walls, no floor, no ceiling, no furniture, no props, no scenery, no people.\n2. EMPTY BACKGROUND: everything outside the object's silhouette stays a plain neutral backdrop.\n3. SILHOUETTE LOCK: the object's outline must match the depth map pixel-for-pixel; do not move, rotate or rescale it.\n4. SURFACE MATERIALS: paint believable materials onto each face - grain, weave, wear, seams, edge damage where it belongs.\n5. EVEN LIGHTING: soft, flat, diffused product lighting with no hard cast shadows and no dramatic spotlights.\n6. SEAMLESS CONTINUATION: where part of the object is already textured, extend that exact material invisibly.\n7. Output ONLY the generated photograph.`
+          : `[RENDER TASK & SPECIFICATIONS]\nSynthesize the photorealistic architectural interior photograph adhering strictly to the geometry above and following these style specifications:\n\nSCENE STYLE & MATERIALS:\n${fullPrompt}\n\nMANDATORY 3D GEOMETRY & CONTINUITY RULES:\n1. SEAMLESS TEXTURE CONTINUATION: Sample and seamlessly continue materials from the reference anchor into blank areas.\n2. STRICT PERSPECTIVE LOCK: Every corner and wall seam must line up pixel-for-pixel with depth and normal maps.\n3. ARCHITECTURAL TEXTURES: Paint realistic materials (wood parquet, stone, drywall, plaster, concrete, metal) onto each surface plane.\n4. DIFFUSE LIGHTING: Use soft, flat, diffused architectural photography lighting with clean ambient illumination.\n5. Output ONLY the generated photograph.`,
       },
     ];
 
