@@ -88,6 +88,19 @@ export function createApiMiddleware(ctx: ApiContext) {
       if (await handleDialogueApi(req, res)) return;
     }
 
+    // What the server can do for the browser. Booleans only - a key must never leave the server.
+    if (req.url?.startsWith('/api/config')) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({
+        success: true,
+        serverKeys: {
+          gemini: !!(env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY),
+          hf: !!getHfToken(),
+        },
+      }));
+      return;
+    }
+
     // Who am I and how much have I used today - for the account menu.
     if (req.url?.startsWith('/api/usage')) {
       const limit = dailyLimitFor(req.auraUser);

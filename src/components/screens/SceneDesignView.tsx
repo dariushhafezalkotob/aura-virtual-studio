@@ -100,6 +100,23 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const [showRoomBakeStudio, setShowRoomBakeStudio] = useState(false);
   const [trellisQuality, setTrellisQuality] = useState<TrellisQuality>(() => loadTrellisQuality());
   const [showPrimitiveMenu, setShowPrimitiveMenu] = useState(false);
+
+  // When the server holds the API keys nobody needs to paste their own, so those buttons go away.
+  // Until it does they have to stay, or there would be no way to generate anything at all.
+  const [serverKeys, setServerKeys] = useState<{ gemini: boolean; hf: boolean }>({ gemini: false, hf: false });
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/config')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (active && data?.serverKeys) setServerKeys(data.serverKeys);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
   const [addingPrimitive, setAddingPrimitive] = useState<PrimitiveKind | null>(null);
 
   // Stage Saving & Stage Library State
@@ -1206,7 +1223,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             title="RoomBake: Projective 3D Texture Baking Harness (Gemini / OpenAI)"
           >
             <span className="material-symbols-outlined text-[16px]">brush</span>
-            ROOMBAKE (AI TEXTURE)
+            ROOMBAKE
           </button>
 
           {/* HunyuanWorld 3DGS Scene Button */}
@@ -1219,7 +1236,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             }`}
           >
             <span className="material-symbols-outlined text-[16px]">domain</span>
-            {splatUrl ? 'HUNYUAN 3DGS (ACTIVE)' : 'HUNYUAN WORLD (3DGS)'}
+            {splatUrl ? 'WORLD 3DGS (ACTIVE)' : 'WORLD (3DGS)'}
           </button>
 
           {/* 360 Panorama Controls */}
@@ -1249,34 +1266,61 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             )}
           </div>
 
-          {/* Hugging Face Token Auth Button */}
+          {/* Point Lights Studio Toggle */}
           <button
-            onClick={() => setShowHfTokenModal(true)}
+            onClick={() => {
+              setShowPointLightsPanel(!showPointLightsPanel);
+              if (!showPointLightsPanel && pointLights.length > 0 && !selectedPointLightId) {
+                setSelectedPointLightId(pointLights[0].id);
+              }
+            }}
             className={`flex items-center gap-xs px-sm py-[4px] rounded-lg text-[11px] font-label-caps font-semibold transition-all border cursor-pointer ${
-              hfTokenInput
-                ? 'bg-amber-400/10 text-amber-400 border-amber-400/40 hover:bg-amber-400/20'
+              showPointLightsPanel || pointLights.length > 0
+                ? 'bg-amber-400/15 text-amber-300 border-amber-400/50 shadow-sm'
                 : 'bg-surface-container-high/60 text-on-surface-variant border-outline-variant/40 hover:text-on-surface'
             }`}
-            title="Hugging Face API Token for ZeroGPU quota"
+            title="Stage Point Lights with Physical Inverse-Square Falloff"
           >
-            <span className="material-symbols-outlined text-[16px]">key</span>
-            {hfTokenInput ? 'HF TOKEN (SAVED)' : 'HF TOKEN'}
+            <span className="material-symbols-outlined text-[16px] text-amber-400">light</span>
+            <span>POINT LIGHTS</span>
+            {pointLights.length > 0 && (
+              <span className="px-1.5 py-[1px] rounded-full bg-amber-400/30 text-amber-200 text-[9px] font-mono font-bold">
+                {pointLights.length}
+              </span>
+            )}
           </button>
+
+          {/* Hugging Face Token Auth Button */}
+          {!serverKeys.hf && (
+            <button
+              onClick={() => setShowHfTokenModal(true)}
+              className={`flex items-center gap-xs px-sm py-[4px] rounded-lg text-[11px] font-label-caps font-semibold transition-all border cursor-pointer ${
+                hfTokenInput
+                  ? 'bg-amber-400/10 text-amber-400 border-amber-400/40 hover:bg-amber-400/20'
+                  : 'bg-surface-container-high/60 text-on-surface-variant border-outline-variant/40 hover:text-on-surface'
+              }`}
+              title="Hugging Face API Token for ZeroGPU quota"
+            >
+              <span className="material-symbols-outlined text-[16px]">key</span>
+              {hfTokenInput ? 'HF TOKEN (SAVED)' : 'HF TOKEN'}
+            </button>
+          )}
 
           {/* Gemini API Key Auth Button */}
-          <button
-            onClick={() => setShowGeminiKeyModal(true)}
-            className={`flex items-center gap-xs px-sm py-[4px] rounded-lg text-[11px] font-label-caps font-semibold transition-all border cursor-pointer ${
-              geminiApiKey
-                ? 'bg-emerald-400/10 text-emerald-400 border-emerald-400/40 hover:bg-emerald-400/20'
-                : 'bg-surface-container-high/60 text-on-surface-variant border-outline-variant/40 hover:text-on-surface'
-            }`}
-            title="Google Gemini API Key for AI Image & Multimodal Generation"
-          >
-            <span className="material-symbols-outlined text-[16px]">psychology</span>
-            {geminiApiKey ? 'GEMINI API (ACTIVE)' : 'GEMINI API'}
-          </button>
-
+          {!serverKeys.gemini && (
+            <button
+              onClick={() => setShowGeminiKeyModal(true)}
+              className={`flex items-center gap-xs px-sm py-[4px] rounded-lg text-[11px] font-label-caps font-semibold transition-all border cursor-pointer ${
+                geminiApiKey
+                  ? 'bg-emerald-400/10 text-emerald-400 border-emerald-400/40 hover:bg-emerald-400/20'
+                  : 'bg-surface-container-high/60 text-on-surface-variant border-outline-variant/40 hover:text-on-surface'
+              }`}
+              title="Google Gemini API Key for AI Image & Multimodal Generation"
+            >
+              <span className="material-symbols-outlined text-[16px]">psychology</span>
+              {geminiApiKey ? 'GEMINI API (ACTIVE)' : 'GEMINI API'}
+            </button>
+          )}
           {/* Lighting Mode Presets */}
           <div className="flex items-center gap-xs bg-surface-container-high/60 p-[2px] rounded-lg border border-outline-variant/30">
             {(['studio', 'city', 'sunset', 'dawn', 'park'] as LightingEnvironmentPreset[]).map(
@@ -1336,29 +1380,6 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             </span>
           </div>
 
-          {/* Point Lights Studio Toggle */}
-          <button
-            onClick={() => {
-              setShowPointLightsPanel(!showPointLightsPanel);
-              if (!showPointLightsPanel && pointLights.length > 0 && !selectedPointLightId) {
-                setSelectedPointLightId(pointLights[0].id);
-              }
-            }}
-            className={`flex items-center gap-xs px-sm py-[4px] rounded-lg text-[11px] font-label-caps font-semibold transition-all border cursor-pointer ${
-              showPointLightsPanel || pointLights.length > 0
-                ? 'bg-amber-400/15 text-amber-300 border-amber-400/50 shadow-sm'
-                : 'bg-surface-container-high/60 text-on-surface-variant border-outline-variant/40 hover:text-on-surface'
-            }`}
-            title="Stage Point Lights with Physical Inverse-Square Falloff"
-          >
-            <span className="material-symbols-outlined text-[16px] text-amber-400">light</span>
-            <span>POINT LIGHTS</span>
-            {pointLights.length > 0 && (
-              <span className="px-1.5 py-[1px] rounded-full bg-amber-400/30 text-amber-200 text-[9px] font-mono font-bold">
-                {pointLights.length}
-              </span>
-            )}
-          </button>
 
           {/* Grid Toggle */}
           <button
