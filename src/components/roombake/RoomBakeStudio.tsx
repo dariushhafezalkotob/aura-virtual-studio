@@ -363,17 +363,11 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
       const mode = inferViewMode(targetAsset);
       setViewMode(mode);
 
-      // Resolve expired blob URLs or fallbacks to permanent asset storage
-      const resolvedUrl =
-        targetAsset.glbUrl.startsWith('blob:') &&
-        (targetAsset.id.startsWith('roombake_') ||
-          targetAsset.category === 'environment' ||
-          targetAsset.name.toLowerCase().includes('room'))
-          ? '/api/assets/baked_room_studio.glb'
-          : targetAsset.glbUrl;
-
+      // Load what the asset actually points at. This used to swap a blob: URL on a room for
+      // /api/assets/baked_room_studio.glb, which 404s, and a baked model is now legitimately a
+      // blob: URL until the stage is saved - so re-opening a fresh bake found nothing.
       engine
-        .loadCustomModel(resolvedUrl, uvMode, splitTrims, mode)
+        .loadCustomModel(targetAsset.glbUrl, uvMode, splitTrims, mode)
         .then(() => {
           if (!engineRef.current) return;
           setViews([...engineRef.current.views]);

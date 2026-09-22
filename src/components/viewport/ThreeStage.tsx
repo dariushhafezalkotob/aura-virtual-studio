@@ -457,17 +457,13 @@ const GLTFModel: React.FC<{
   const [isRotating, setIsRotating] = useState(false);
   const [liveRotDeg, setLiveRotDeg] = useState<[number, number, number]>([0, 0, 0]);
 
-  // Resolve expired blob URLs or baked room models to permanent asset storage
-  const resolvedGlbUrl = React.useMemo(() => {
-    if (
-      glbUrl &&
-      glbUrl.startsWith('blob:') &&
-      (asset.id.startsWith('roombake_') || asset.category === 'environment' || asset.name.toLowerCase().includes('room'))
-    ) {
-      return '/api/assets/baked_room_studio.glb';
-    }
-    return glbUrl;
-  }, [glbUrl, asset.id, asset.category, asset.name]);
+  // A blob: URL on a baked room used to mean "stale": the model was uploaded the moment it was
+  // added, so any blob: left over had to be from a previous session and was swapped for
+  // /api/assets/baked_room_studio.glb. That file does not exist (404), and a baked model now
+  // lives as a blob: URL on purpose until the stage is saved - so the swap turned every freshly
+  // baked room into a missing mesh. Use the URL we were given; a genuinely dead one fails to
+  // load and reports itself, which is what the old swap did anyway, only less clearly.
+  const resolvedGlbUrl = glbUrl;
 
   // Synchronize internal Three.js group coordinates whenever props update (e.g. Undo/Redo)
   useEffect(() => {
