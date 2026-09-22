@@ -16,6 +16,7 @@ import type { User } from './users';
 const METERED_ROUTES = [
   '/api/generate-3d',
   '/api/generate-image',
+  '/api/generate-texture',
   '/api/generate-motion',
   '/api/generate-360-from-image',
   '/api/reconstruct-hunyuan-world',

@@ -96,6 +96,7 @@ export function createApiMiddleware(ctx: ApiContext) {
         serverKeys: {
           gemini: !!(env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY),
           hf: !!getHfToken(),
+          openai: !!env.OPENAI_API_KEY,
         },
       }));
       return;
@@ -787,6 +788,164 @@ export function createApiMiddleware(ctx: ApiContext) {
         } catch (err: any) {
           const errMsg = extractErrorMessage(err);
           console.error('[API /api/generate-image] Error:', errMsg);
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ success: false, error: errMsg }));
+        }
+      });
+      return;
+    }
+
+    /**
+     * Hands a provider's answer back to the browser.
+     *
+     * A refusal is not always JSON: an invalid key makes Google reply with an HTML error page, and
+     * labelling that `application/json` means the client's res.json() throws and the user is told
+     * "failed (502)" instead of what actually went wrong. Anything unparseable is turned into a
+     * real JSON error carrying the readable part of the page.
+     */
+    const respondFromUpstream = async (res: any, upstream: Response, label: string) => {
+      const text = await upstream.text();
+      res.setHeader('Content-Type', 'application/json');
+
+      if (upstream.ok) {
+        res.statusCode = 200;
+        res.end(text);
+        return;
+      }
+
+      res.statusCode = 502;
+      try {
+        JSON.parse(text);
+        res.end(text);
+      } catch {
+        const readable = text
+          .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+          .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 300);
+        console.warn(`[API /api/generate-texture] ${label} answered ${upstream.status} with a non-JSON body: ${readable}`);
+        res.end(JSON.stringify({
+          success: false,
+          error: `${label} refused the request (HTTP ${upstream.status}). ${readable || 'No details were returned.'}`,
+        }));
+      }
+    };
+
+    // 3b. RoomBake texture generation.
+    //
+    // This used to go browser -> Google directly, which put the API key in localStorage where it
+    // could not be rotated or metered, and simply did not work from networks that cannot reach
+    // Google. The browser still builds the prompt and the conditioning maps (that wording is
+    // delicate and lives with the code that renders the maps); the server holds the key, counts
+    // the generation and does the talking.
+    //
+    // The provider's own JSON is handed back verbatim so the client parses one shape, not two.
+    if (req.url?.startsWith('/api/generate-texture') && req.method === 'POST') {
+      const chunks: Buffer[] = [];
+      let bodyBytes = 0;
+      let tooBig = false;
+
+      req.on('data', (chunk: Buffer) => {
+        // Three conditioning maps are ~0.8 MB of base64 each, so a few MB is normal here and a
+        // cap well above that is only there to stop a runaway request eating the server's RAM.
+        bodyBytes += chunk.length;
+        if (bodyBytes > 48 * 1024 * 1024) {
+          tooBig = true;
+          return;
+        }
+        chunks.push(chunk);
+      });
+
+      req.on('end', async () => {
+        try {
+          if (tooBig) throw new Error('That request is too large. Turn off some conditioning maps and try again.');
+
+          const params = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          const provider = params.provider === 'openai' ? 'openai' : 'gemini';
+          const model = String(params.model || '').trim();
+          const payload = params.payload;
+
+          if (!payload || typeof payload !== 'object') {
+            throw new Error('No generation payload was sent.');
+          }
+
+          if (provider === 'gemini') {
+            // `model` is interpolated into the upstream URL, so it is validated rather than
+            // trusted: characters only, and a known family prefix.
+            if (!/^[A-Za-z0-9.\-]+$/.test(model) || !/^(gemini|imagen)-/.test(model)) {
+              throw new Error(`Unsupported image model: "${model}".`);
+            }
+            const method = params.endpoint === 'predict' ? 'predict' : 'generateContent';
+            // The server's key wins. A key typed into a browser months ago must not override it:
+            // that is how one person with a stale or rate-limited key breaks generation for
+            // themselves on a server that was perfectly able to do the job. A browser key is only
+            // a fallback, for a self-hosted server that has none.
+            const key = env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || (params.apiKey || '').trim() || '';
+            if (!key) {
+              throw new Error('No Gemini API key is configured on the server. Add one in settings, or set GEMINI_API_KEY.');
+            }
+
+            console.log(`[API /api/generate-texture] ${model}:${method} for ${req.auraUser?.email || 'unknown'}...`);
+
+            // As elsewhere: a dropped socket earns one retry, a real answer from the API does not.
+            let upstream: Response | null = null;
+            let transportError = '';
+            for (let attempt = 1; attempt <= 2 && !upstream; attempt++) {
+              try {
+                upstream = await fetch(
+                  `https://generativelanguage.googleapis.com/v1beta/models/${model}:${method}?key=${encodeURIComponent(key)}`,
+                  {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    signal: AbortSignal.timeout(180000),
+                  }
+                );
+              } catch (err: any) {
+                transportError = describeFetchError(err);
+                if (!isTransportError(err) || attempt === 2) break;
+                await new Promise((r) => setTimeout(r, 400));
+              }
+            }
+
+            if (!upstream) {
+              throw new Error(
+                `Could not reach the Gemini servers: "${transportError}". This is a connection problem on the server, not your key.`
+              );
+            }
+
+            await respondFromUpstream(res, upstream, 'Gemini');
+            return;
+          }
+
+          // OpenAI. There is no server key for this one yet, so a key typed into the browser is
+          // forwarded; the call still leaves from the server, which is what makes it work on a
+          // network that cannot reach api.openai.com.
+          const allowedOpenAi = ['dall-e-2', 'dall-e-3', 'gpt-image-1'];
+          if (!allowedOpenAi.includes(model)) {
+            throw new Error(`Unsupported image model: "${model}".`);
+          }
+          const openAiKey = env.OPENAI_API_KEY || (params.apiKey || '').trim() || '';
+          if (!openAiKey) throw new Error('No OpenAI API key is configured. Add one in settings, or set OPENAI_API_KEY.');
+
+          console.log(`[API /api/generate-texture] openai ${model} for ${req.auraUser?.email || 'unknown'}...`);
+          const upstream = await fetch('https://api.openai.com/v1/images/generations', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${openAiKey}`,
+            },
+            body: JSON.stringify({ ...payload, model }),
+            signal: AbortSignal.timeout(180000),
+          });
+
+          await respondFromUpstream(res, upstream, 'OpenAI');
+        } catch (err: any) {
+          const errMsg = extractErrorMessage(err);
+          console.error('[API /api/generate-texture] Error:', errMsg);
           res.statusCode = 500;
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({ success: false, error: errMsg }));

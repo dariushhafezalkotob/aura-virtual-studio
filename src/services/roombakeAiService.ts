@@ -105,6 +105,36 @@ export async function loadImageToCanvas(
   });
 }
 
+/**
+ * Every provider call goes through our own server, which holds the API key, counts the generation
+ * against the day's quota and does the talking to Google or OpenAI. The browser used to call them
+ * directly: that put the key in localStorage where it could not be rotated or metered, and it
+ * simply did not work from a network that cannot reach those hosts.
+ *
+ * The prompt and the conditioning maps are still built here, next to the code that renders them.
+ * What comes back is the provider's own JSON, untouched, so the parsing below is unchanged.
+ */
+async function callProvider(body: {
+  provider: 'gemini' | 'openai';
+  model: string;
+  endpoint?: 'generateContent' | 'predict';
+  payload: unknown;
+  apiKey?: string;
+}): Promise<any> {
+  const res = await fetch('/api/generate-texture', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    // Either our own error, or the provider's passed straight through.
+    throw new Error(json?.error?.message || json?.error || `Texture generation failed (${res.status}).`);
+  }
+  return json;
+}
+
 export async function generateTexture(params: GenerateParams): Promise<HTMLCanvasElement> {
   const candidates = await generateTextureCandidates(params);
   if (!candidates || candidates.length === 0) {
@@ -138,10 +168,9 @@ export async function generateTextureCandidates(params: GenerateParams): Promise
       (typeof import.meta !== 'undefined' && ((import.meta as any).env?.VITE_GEMINI_API_KEY || (import.meta as any).env?.GEMINI_API_KEY)) ||
       '';
 
-    if (!key.trim()) {
-      throw new Error('Please provide your Google Gemini API key (from aistudio.google.com).');
-    }
-    if (typeof localStorage !== 'undefined') {
+    // An empty key is fine and is the normal case now: the server has its own and will use that.
+    // A key typed here is only for a server that has none, and is remembered for next time.
+    if (key.trim() && typeof localStorage !== 'undefined') {
       localStorage.setItem('roombake_gemini_key', key.trim());
       localStorage.setItem('gemini_api_key', key.trim());
     }
@@ -151,13 +180,13 @@ export async function generateTextureCandidates(params: GenerateParams): Promise
         instances: [{ prompt: `${prompt} ${style}` }],
         parameters: { sampleCount: 1, aspectRatio: '1:1', outputMimeType: 'image/png' },
       };
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:predict?key=${key.trim()}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(imgPayload),
+      const j = await callProvider({
+        provider: 'gemini',
+        model,
+        endpoint: 'predict',
+        payload: imgPayload,
+        apiKey: key.trim() || undefined,
       });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error?.message || `Gemini Imagen Error: ${res.status}`);
       const preds = j.predictions || [];
       if (preds[0]?.bytesBase64Encoded) {
         const cv = await loadImageToCanvas(`data:image/png;base64,${preds[0].bytesBase64Encoded}`);
@@ -242,21 +271,14 @@ export async function generateTextureCandidates(params: GenerateParams): Promise
       },
     };
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key.trim()}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }
-    );
+    const j = await callProvider({
+      provider: 'gemini',
+      model,
+      endpoint: 'generateContent',
+      payload,
+      apiKey: key.trim() || undefined,
+    });
 
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error?.message || `Gemini API Error: ${res.status}`);
-    }
-
-    const j = await res.json();
     const cParts = j.candidates?.[0]?.content?.parts || [];
     for (const p of cParts) {
       if (p.inlineData && p.inlineData.data) {
@@ -271,11 +293,9 @@ export async function generateTextureCandidates(params: GenerateParams): Promise
 
   // 2. OpenAI API
   if (provider === 'openai') {
+    // As with Gemini: empty is fine, the server may hold the key. A typed one is remembered.
     const key = apiKey || localStorage.getItem('roombake_openai_key') || '';
-    if (!key.trim()) {
-      throw new Error('Please provide your OpenAI API key.');
-    }
-    localStorage.setItem('roombake_openai_key', key.trim());
+    if (key.trim()) localStorage.setItem('roombake_openai_key', key.trim());
 
     const genModel = model || 'dall-e-3';
     const payload: any = {
@@ -288,19 +308,12 @@ export async function generateTextureCandidates(params: GenerateParams): Promise
       payload.quality = params.quality || 'standard';
     }
 
-    const res = await fetch('https://api.openai.com/v1/images/generations', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${key.trim()}`,
-      },
-      body: JSON.stringify(payload),
+    const j = await callProvider({
+      provider: 'openai',
+      model: genModel,
+      payload,
+      apiKey: key.trim() || undefined,
     });
-
-    const j = await res.json();
-    if (!res.ok) {
-      throw new Error(j.error?.message || `OpenAI Error: ${res.status}`);
-    }
 
     const canvases: HTMLCanvasElement[] = [];
     if (Array.isArray(j.data)) {

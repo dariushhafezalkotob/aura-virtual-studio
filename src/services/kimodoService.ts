@@ -275,39 +275,18 @@ export class KimodoService {
         constraints: params.constraints || undefined,
       });
 
-      let response: Response;
-      try {
-        response = await fetch('/api/generate-motion', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: reqBody,
-        });
-
-        // If local proxy failed with 500/502/504, try direct Hugging Face Space endpoint
-        if (!response.ok && response.status >= 500) {
-          console.warn(`[KimodoService] Local proxy returned ${response.status}. Falling back directly to Hugging Face Space...`);
-          if (onStatus) onStatus('Connecting directly to NVIDIA Kimodo Virtual Stage on Hugging Face...');
-          response = await fetch('https://dariushh-kimodo-virtual-stage.hf.space/api/generate-motion', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: reqBody,
-          });
-        }
-      } catch (proxyErr) {
-        console.warn('[KimodoService] Local proxy network error. Falling back directly to Hugging Face Space...', proxyErr);
-        if (onStatus) onStatus('Connecting directly to NVIDIA Kimodo Virtual Stage on Hugging Face...');
-        response = await fetch('https://dariushh-kimodo-virtual-stage.hf.space/api/generate-motion', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: reqBody,
-        });
-      }
+      // Always through our own server. There used to be a fallback here that called the Hugging
+      // Face Space straight from the browser whenever this returned 5xx or threw, which meant a
+      // generation could quietly leave the server: no quota counted, nothing in the server log,
+      // and nothing at all on a network that cannot reach huggingface.co. A failure here is now
+      // reported as a failure.
+      const response = await fetch('/api/generate-motion', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: reqBody,
+      });
 
       if (response.ok) {
         const result = await response.json();
