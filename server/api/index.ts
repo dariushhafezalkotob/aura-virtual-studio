@@ -10,7 +10,8 @@ import { extractErrorMessage, describeFetchError, isTransportError } from '../li
 import { normalizeGradioFileData, resolveMediaUrl, persistMediaLocally } from '../lib/media';
 import { getLocalIpAddress } from '../lib/network';
 import { loadProjectsForUser, saveProjectsForUser } from '../lib/projectRepo';
-import { handleAuthApi, sessionTokenFrom } from './auth';
+import { handleAuthApi, isSecureRequest, sessionTokenFrom } from './auth';
+import { claimPairingCode, createPairingCode, remotePassCookie } from '../lib/cameraPairing';
 import { handleCrewApi } from './crew';
 import { userForSession } from '../lib/users';
 import { consumeGeneration, dailyLimitFor, isMeteredRoute, refundGeneration, usageToday } from '../lib/quota';
@@ -41,6 +42,37 @@ export function createApiMiddleware(ctx: ApiContext) {
   return async (req: any, res: any, next: () => void) => {
     // Sign-in runs before the gate, for obvious reasons.
     if (await handleAuthApi(req, res, scheme)) return;
+
+    // Claiming a pairing code is the one generation-free route a device without an account must
+    // reach: it is how a camera operator's phone gets in at all. It runs before the gate, like
+    // sign-in does, and the code itself is the credential - single use and good for 3 minutes.
+    if (req.url?.startsWith('/api/camera-remote/claim') && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk: any) => { body += chunk; });
+      req.on('end', async () => {
+        try {
+          const { code } = JSON.parse(body || '{}');
+          const pass = await claimPairingCode(code);
+          if (!pass) {
+            res.statusCode = 403;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({
+              success: false,
+              error: 'That pairing code is not valid any more. Show a new QR code on the laptop.',
+            }));
+            return;
+          }
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Set-Cookie', remotePassCookie(pass.token, pass.expiresAt, isSecureRequest(req, scheme)));
+          res.end(JSON.stringify({ success: true, room: pass.room, projectId: pass.projectId }));
+        } catch (err: any) {
+          res.statusCode = 400;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ success: false, error: extractErrorMessage(err) }));
+        }
+      });
+      return;
+    }
 
     // Everything else under /api needs a session. Without this, putting the API keys on the
     // server would mean anyone who finds the URL spends the owner's GPU quota.
@@ -125,6 +157,32 @@ export function createApiMiddleware(ctx: ApiContext) {
         port: devPort,
         url: `${scheme}://${lanIp}:${devPort}`
       }));
+      return;
+    }
+
+    // The laptop asks for a pairing code and shows it as a QR. Signed in, so we know who is
+    // inviting the phone and into which room.
+    if (req.url?.startsWith('/api/camera-remote/pair') && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk: any) => { body += chunk; });
+      req.on('end', async () => {
+        try {
+          const { room, projectId } = JSON.parse(body || '{}');
+          if (!room || typeof room !== 'string') throw new Error('No room was given to pair with.');
+          const pairing = await createPairingCode(req.auraUser._id, room, projectId);
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({
+            success: true,
+            code: pairing.code,
+            room: pairing.room,
+            expiresAt: pairing.expiresAt.toISOString(),
+          }));
+        } catch (err: any) {
+          res.statusCode = 400;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ success: false, error: extractErrorMessage(err) }));
+        }
+      });
       return;
     }
 

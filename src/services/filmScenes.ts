@@ -127,8 +127,10 @@ export function sceneAsProject(project: Project, scene: FilmScene): Project {
   for (const key of SCENE_CONTENT_KEYS) {
     view[key] = (scene as any)[key];
   }
-  // Keep the scene's identity available for anything that wants to label the screen.
+  // Keep the scene's identity available for anything that wants to label the screen - or, in the
+  // camera remote's case, to give each scene its own pairing room rather than one per film.
   view.name = `${project.name} · ${scene.number}`;
+  view.sceneId = scene.id;
   return view as Project;
 }
 

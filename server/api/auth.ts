@@ -46,7 +46,7 @@ export function sessionTokenFrom(req: any): string | undefined {
 }
 
 /** True when the connection is TLS, so the session cookie can be marked Secure. */
-function isSecureRequest(req: any, scheme: string): boolean {
+export function isSecureRequest(req: any, scheme: string): boolean {
   if (req.headers?.['x-forwarded-proto'] === 'https') return true;
   if (req.socket?.encrypted) return true;
   return scheme === 'https' && req.headers?.host?.startsWith('localhost') !== true;

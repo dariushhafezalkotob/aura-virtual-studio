@@ -426,5 +426,15 @@ export type CameraRemoteMessage =
   | { type: 'calibrate' }
   | { type: 'rewind' }
   | { type: 'toggle_play' }
-  | { type: 'host_state'; state: CameraRemoteState };
+  | { type: 'host_state'; state: CameraRemoteState }
+  // Round-trip measurement. 'ping' existed with nothing ever answering it, so nobody could say
+  // what the lag actually was; 'pong' echoes the sender's clock back untouched.
+  | { type: 'ping'; timestamp: number }
+  | { type: 'pong'; timestamp: number }
+  // Setting up the direct phone-to-laptop link. These never reach the app: the transport
+  // intercepts them, and they are the only thing the server relay has to carry once the direct
+  // link is up. `sdp` and `candidate` are WebRTC's own payloads, passed through as they come.
+  | { type: 'rtc_offer'; sdp: any }
+  | { type: 'rtc_answer'; sdp: any }
+  | { type: 'rtc_ice'; candidate: any };
 

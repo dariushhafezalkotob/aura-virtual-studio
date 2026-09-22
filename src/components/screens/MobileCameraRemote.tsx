@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
-import { CameraRemoteSocket } from '../../services/cameraRemoteService';
+import { CameraRemoteSocket, LinkStats } from '../../services/cameraRemoteService';
 import { CameraRemoteState, Project, CharacterActor, CameraPoseData, DeviceOrientationData, RemoteMoveData } from '../../types';
 import { ThreeStage } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
@@ -164,6 +164,7 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
   const socketRef = useRef<CameraRemoteSocket | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [peerCount, setPeerCount] = useState<number>(0);
+  const [linkStats, setLinkStats] = useState<LinkStats>({ transport: 'offline', rttMs: null, dropped: 0 });
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Host state mirrored
@@ -204,9 +205,58 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
   const [activeLook, setActiveLook] = useState<{ deltaPitch: number; deltaYaw: number } | null>(null);
   const activeLookRef = useRef<{ deltaPitch: number; deltaYaw: number } | null>(null);
 
+  // The code from the QR buys this device a pass for one room. Until it is claimed the relay
+  // will refuse the socket, so the connection waits for it. A code is single use, so it is
+  // cleared from the address bar afterwards - a reload would otherwise fail on a spent code
+  // even though the pass it bought is still perfectly good.
+  const [pairingState, setPairingState] = useState<'idle' | 'claiming' | 'paired' | 'failed'>('idle');
+  const [pairingMessage, setPairingMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(
+      window.location.search ||
+        (window.location.hash.includes('?') ? window.location.hash.split('?')[1] : '')
+    );
+    const code = params.get('code');
+    if (!code) {
+      // No code: either already paired from a previous scan, or somebody typed the URL in.
+      setPairingState('paired');
+      return;
+    }
+
+    setPairingState('claiming');
+    (async () => {
+      try {
+        const res = await fetch('/api/camera-remote/claim', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          if (data.room) {
+            setRoomId(data.room);
+            try { localStorage.setItem('aura_remote_room_id', data.room); } catch (_) {}
+          }
+          setPairingState('paired');
+          setPairingMessage(null);
+          // Drop the spent code from the URL without reloading the page.
+          const clean = window.location.hash.split('?')[0] || '#/remote';
+          window.history.replaceState(null, '', `${window.location.pathname}${clean}`);
+        } else {
+          setPairingState('failed');
+          setPairingMessage(data.error || 'That pairing code did not work.');
+        }
+      } catch (err: any) {
+        setPairingState('failed');
+        setPairingMessage(err?.message || 'Could not reach the studio server.');
+      }
+    })();
+  }, []);
+
   // Initialize WebSocket
   useEffect(() => {
-    if (!roomId) return;
+    if (!roomId || pairingState !== 'paired') return;
     const socket = new CameraRemoteSocket('remote', roomId);
     socketRef.current = socket;
 
@@ -217,6 +267,8 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
         socket.send({ type: 'request_scene' } as any);
       }
     });
+
+    const unsubStats = socket.onStats(setLinkStats);
 
     const unsubMsg = socket.onMessage((msg) => {
       if (msg.type === 'peer_left' && msg.role === 'host') {
@@ -236,11 +288,12 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
 
     return () => {
       unsubStatus();
+      unsubStats();
       unsubMsg();
       socket.destroy();
       socketRef.current = null;
     };
-  }, [roomId]);
+  }, [roomId, pairingState]);
 
   // 5. Gyroscope Permission & Multi-Sensor Listener
 
@@ -674,6 +727,36 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
 
   const currentFov = LENS_FOV_MAP[hostState.focalLength] || 54;
 
+  // 8b. Pairing gate. Without a valid pass the relay refuses the socket, so say why rather than
+  // showing a viewfinder that silently never connects.
+  if (pairingState === 'claiming' || pairingState === 'failed') {
+    return (
+      <div className="fixed inset-0 z-50 bg-[#0c0d0e] text-[#d6e3ff] flex flex-col items-center justify-center p-8 select-none text-center">
+        <span
+          className={`material-symbols-outlined text-5xl mb-4 ${
+            pairingState === 'failed' ? 'text-red-400' : 'text-primary animate-spin'
+          }`}
+        >
+          {pairingState === 'failed' ? 'link_off' : 'progress_activity'}
+        </span>
+        <h2 className="text-lg font-bold text-white mb-2 font-display">
+          {pairingState === 'failed' ? 'Could not pair' : 'Pairing with the studio…'}
+        </h2>
+        {pairingState === 'failed' && (
+          <>
+            <p className="text-xs text-on-surface-variant max-w-xs leading-relaxed mb-4">
+              {pairingMessage}
+            </p>
+            <p className="text-[11px] text-outline max-w-xs leading-relaxed">
+              A pairing code works once and lasts three minutes. Open the pairing panel on the
+              laptop again and scan the new code.
+            </p>
+          </>
+        )}
+      </div>
+    );
+  }
+
   // 9. Portrait Warning Overlay
   if (!isLandscape) {
     return (
@@ -789,6 +872,17 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
                 {isConnected ? 'LIVE SYNCED' : 'CONNECTING...'}
               </span>
             </div>
+            <span
+              className={`text-[10px] px-2 py-0.5 rounded border ${
+                linkStats.transport === 'direct'
+                  ? 'text-[#4ade80] bg-[#4ade80]/10 border-[#4ade80]/40'
+                  : 'text-amber-300 bg-amber-400/10 border-amber-400/40'
+              }`}
+              title={linkStats.transport === 'direct' ? 'Talking straight to the laptop' : 'Going via the studio server'}
+            >
+              {linkStats.transport === 'direct' ? 'DIRECT' : 'VIA SERVER'}
+              {linkStats.rttMs !== null ? ` ${linkStats.rttMs}ms` : ''}
+            </span>
             <span className="text-[10px] text-white/60 bg-white/10 px-2 py-0.5 rounded border border-white/10">
               ROOM: {roomId.slice(0, 8)} {peerCount > 1 ? '• 2/2' : ''}
             </span>

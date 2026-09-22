@@ -11,7 +11,7 @@ import {
 } from '../../types';
 import { ThreeStage } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
-import { CameraRemoteSocket } from '../../services/cameraRemoteService';
+import { CameraRemoteSocket, LinkStats } from '../../services/cameraRemoteService';
 import { stabilizeKeyframes } from '../../services/cameraStabilizer';
 import { useDialogueAudioSync } from '../../services/dialogueService';
 import qrcode from 'qrcode-generator';
@@ -230,7 +230,9 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   };
 
   // --- Mobile Remote Controller Integration ---
-  const [remoteRoomId] = useState<string>(() => {
+  // One room per scene, so two operators shooting two scenes of the same film do not end up
+  // driving each other's camera, and a phone that drops out reconnects to the right one.
+  const remoteRoomId = useMemo(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash;
       const search = window.location.search;
@@ -238,8 +240,15 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       const r = urlParams.get('room');
       if (r) return r;
     }
-    return 'aura_main';
-  });
+    const sceneId = (currentProject as any).sceneId;
+    return sceneId ? `${currentProject.id}:${sceneId}` : currentProject.id;
+  }, [currentProject.id, (currentProject as any).sceneId]);
+
+  // A short-lived code the phone trades for permission to join this room. Minted when the pairing
+  // panel opens, because it expires in three minutes and a stale QR is worse than no QR.
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [pairingError, setPairingError] = useState<string | null>(null);
+  const [linkStats, setLinkStats] = useState<LinkStats>({ transport: 'offline', rttMs: null, dropped: 0 });
   const [lanIp, setLanIp] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const host = window.location.hostname;
@@ -260,8 +269,20 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const incomingCameraPoseRef = useRef<CameraPoseData | null>(null);
   const remoteSocketRef = useRef<CameraRemoteSocket | null>(null);
 
-  // Auto-fetch LAN IP address from server endpoint
+  // Where should the phone go?
+  //
+  // Whatever address this page is already on, except in local development. Asking the server for
+  // its own network address made sense when the server WAS this laptop; on a hosted box it answers
+  // with the datacentre's IP and an internal port that no firewall lets through, which is exactly
+  // how the QR ended up pointing at a host the phone could never reach.
+  //
+  // On localhost there is still nothing useful in the address bar - a phone cannot open
+  // "localhost" and mean this machine - so the LAN lookup stays for that case alone.
   useEffect(() => {
+    const host = typeof window !== 'undefined' ? window.location.hostname : '';
+    const isLocal = host === 'localhost' || host === '127.0.0.1';
+    if (!isLocal) return;
+
     fetch('/api/network-ip')
       .then((r) => r.json())
       .then((data) => {
@@ -271,6 +292,40 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       })
       .catch(() => {});
   }, []);
+
+  // Ask for a fresh pairing code whenever the QR panel is opened, and again every two and a half
+  // minutes while it stays open, so what is on screen is always claimable.
+  useEffect(() => {
+    if (!showQRPairing) return;
+    let cancelled = false;
+
+    const mint = async () => {
+      try {
+        const res = await fetch('/api/camera-remote/pair', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room: remoteRoomId, projectId: currentProject.id }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (data.success && data.code) {
+          setPairingCode(data.code);
+          setPairingError(null);
+        } else {
+          setPairingError(data.error || 'Could not create a pairing code.');
+        }
+      } catch (err: any) {
+        if (!cancelled) setPairingError(err?.message || 'Could not reach the server for a pairing code.');
+      }
+    };
+
+    mint();
+    const id = setInterval(mint, 150000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [showQRPairing, remoteRoomId, currentProject.id]);
 
   const handleToggleRecordRef = useRef(handleToggleRecord);
   handleToggleRecordRef.current = handleToggleRecord;
@@ -292,6 +347,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       setIsPhoneConnected(count > 1);
       setPhonePeerCount(count);
     });
+
+    const unsubStats = socket.onStats(setLinkStats);
 
     const unsubMsg = socket.onMessage((msg) => {
       if (msg.type === 'peer_joined' && msg.role === 'remote') {
@@ -340,6 +397,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
     return () => {
       unsubStatus();
+      unsubStats();
       unsubMsg();
       socket.destroy();
       remoteSocketRef.current = null;
@@ -397,11 +455,23 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   }, [isPhoneConnected, isPlaying, sendHostStateNow]);
 
   const cleanIp = (!lanIp || lanIp === 'localhost' || lanIp === '127.0.0.1') ? '192.168.100.38' : lanIp;
-  // The phone's gyro only reports in a secure context, so pair over whatever scheme the dev server
-  // is actually serving (https) rather than a hardcoded http:// that silently kills the sensors.
+  // The phone's gyro only reports in a secure context, so pair over whatever scheme the page is
+  // actually served on rather than a hardcoded http:// that silently kills the sensors.
   const remoteScheme = typeof window !== 'undefined' ? window.location.protocol.replace(':', '') : 'https';
   const remotePort = (typeof window !== 'undefined' && window.location.port) || '3000';
-  const remoteUrl = `${remoteScheme}://${cleanIp}:${remotePort}/#/remote?room=${remoteRoomId}&project=${currentProject.id}`;
+  const pageHost = typeof window !== 'undefined' ? window.location.hostname : '';
+  const isLocalHost = pageHost === 'localhost' || pageHost === '127.0.0.1' || pageHost === '';
+
+  // Hosted: the origin as served, port and all (443 is implied, so no port is appended).
+  // Local dev: the LAN address, because a phone cannot resolve "localhost" to this laptop.
+  const remoteOrigin = isLocalHost
+    ? `${remoteScheme}://${cleanIp}:${remotePort}`
+    : window.location.origin;
+
+  // The code is what lets the phone in; without one it would only reach the sign-in screen.
+  const remoteUrl =
+    `${remoteOrigin}/#/remote?room=${encodeURIComponent(remoteRoomId)}&project=${currentProject.id}` +
+    (pairingCode ? `&code=${pairingCode}` : '');
   const qrSvgHtml = useMemo(() => {
     try {
       const qr = qrcode(0, 'M');
@@ -1534,6 +1604,24 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
               )}
             </div>
 
+            {/* The code, spelled out, for when a camera cannot read the screen - and the reason
+                when there is no code at all, since a QR without one only reaches the sign-in page. */}
+            {pairingError ? (
+              <div className="mb-3 px-2.5 py-2 bg-red-500/15 border border-red-500/40 rounded-lg text-[11px] text-red-300 text-center">
+                {pairingError}
+              </div>
+            ) : pairingCode ? (
+              <div className="mb-3 text-center">
+                <div className="text-[10px] font-mono text-on-surface-variant mb-0.5">PAIRING CODE</div>
+                <div className="font-mono font-bold text-lg tracking-[0.3em] text-white">{pairingCode}</div>
+                <div className="text-[10px] text-on-surface-variant">valid for 3 minutes · one device</div>
+              </div>
+            ) : (
+              <div className="mb-3 text-center text-[11px] text-on-surface-variant">
+                Getting a pairing code…
+              </div>
+            )}
+
             {/* Live Pairing Status Indicator */}
             <div className="mb-3 flex items-center justify-center gap-2">
               <span
@@ -1549,6 +1637,28 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                   : 'WAITING FOR SCAN...'}
               </span>
             </div>
+
+            {/* What the link is actually doing. DIRECT means the phone and this laptop are talking
+                across the room; RELAY means every sample is going via the server and back. */}
+            {isPhoneConnected && (
+              <div className="mb-3 flex items-center justify-center gap-2 text-[10px] font-mono">
+                <span
+                  className={`px-1.5 py-0.5 rounded border ${
+                    linkStats.transport === 'direct'
+                      ? 'border-[#4ade80]/50 text-[#4ade80] bg-[#4ade80]/10'
+                      : 'border-amber-400/50 text-amber-300 bg-amber-400/10'
+                  }`}
+                >
+                  {linkStats.transport === 'direct' ? 'DIRECT LINK' : 'VIA SERVER'}
+                </span>
+                <span className="text-on-surface-variant">
+                  {linkStats.rttMs === null ? 'measuring…' : `${linkStats.rttMs} ms round trip`}
+                </span>
+                {linkStats.dropped > 0 && (
+                  <span className="text-on-surface-variant">· {linkStats.dropped} stale dropped</span>
+                )}
+              </div>
+            )}
 
             <div className="mb-3 bg-white/5 border border-white/10 rounded-lg p-2.5 text-left text-xs space-y-1">
               <div className="font-bold text-white flex items-center gap-1.5 text-[11px]">
