@@ -31,6 +31,7 @@ import {
   importStageFromFile,
   uploadAssetToDisk,
 } from '../../services/storageService';
+import { savePendingBake, listPendingBakes, deletePendingBake } from '../../services/pendingBakes';
 
 interface SceneDesignViewProps {
   currentProject: Project;
@@ -123,9 +124,62 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const [saveToast, setSaveToast] = useState<string | null>(null);
   const [showStageLibraryModal, setShowStageLibraryModal] = useState<boolean>(false);
   const [stageLibrary, setStageLibrary] = useState<SavedStageTemplate[]>([]);
-  const [newStageTemplateName, setNewStageTemplateName] = useState<string>('');
   const [isSavingStage, setIsSavingStage] = useState<boolean>(false);
   const stageImportInputRef = useRef<HTMLInputElement>(null);
+
+  // Naming belongs to saving, so SAVE STAGE opens this and the Load dialog no longer carries it.
+  const [showSaveStageModal, setShowSaveStageModal] = useState<boolean>(false);
+  const [stageSaveName, setStageSaveName] = useState<string>('');
+  const [saveProgress, setSaveProgress] = useState<string | null>(null);
+
+  // Baked models that are in the scene but not on the server yet. The id is the scene asset's id.
+  const [pendingBakeIds, setPendingBakeIds] = useState<string[]>([]);
+  const viewportCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Read inside effects and async saves so they always act on the current project rather than
+  // whatever it was when the callback was created.
+  const projectRef = useRef(currentProject);
+  useEffect(() => {
+    projectRef.current = currentProject;
+  }, [currentProject]);
+
+  // A bake parked in IndexedDB survives a reload, but its blob: URL does not - that is an address
+  // into a page that no longer exists. Mint fresh URLs for the parked bytes on the way back in.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const parked = await listPendingBakes();
+      if (cancelled || parked.length === 0) return;
+
+      setPendingBakeIds(parked.map((b) => b.id));
+
+      const project = projectRef.current;
+      let touched = false;
+      const scenes = (project.scenes || []).map((asset) => {
+        const bake = parked.find((b) => b.id === asset.id);
+        if (!bake || !asset.glbUrl?.startsWith('blob:')) return asset;
+        touched = true;
+        return { ...asset, glbUrl: URL.createObjectURL(bake.blob) };
+      });
+      if (touched) onUpdateProject({ ...project, scenes });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Once, on the way in. Later adds register themselves in handleAddRoomBakeAsset.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Closing the tab with a bake that only exists in this browser is worth a word of warning.
+  useEffect(() => {
+    if (pendingBakeIds.length === 0) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [pendingBakeIds.length]);
 
   // Load stage templates from disk / local storage on mount and when modal opens
   const refreshStageLibrary = useCallback(async () => {
@@ -146,11 +200,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   useEffect(() => {
     if (showStageLibraryModal) {
       refreshStageLibrary();
-      if (!newStageTemplateName && currentProject.name) {
-        setNewStageTemplateName(currentProject.name);
-      }
     }
-  }, [showStageLibraryModal, refreshStageLibrary, currentProject.name, newStageTemplateName]);
+  }, [showStageLibraryModal, refreshStageLibrary]);
 
   // 360 AI Generator State
   const [isGenerating360, setIsGenerating360] = useState(false);
@@ -648,6 +699,15 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
 
   const handleAddRoomBakeAsset = (assetData: { name: string; glbUrl?: string; modelBlob?: Blob }) => {
     if (assetData.glbUrl) {
+      // RoomBake no longer uploads, so the model arrives as bytes held in this browser. Park a
+      // copy locally straight away - that write is instant and survives a reload - and remember
+      // that it owes the server an upload at save time.
+      const registerPending = (assetId: string) => {
+        if (!assetData.modelBlob || !assetData.glbUrl?.startsWith('blob:')) return;
+        savePendingBake(assetId, assetData.name, assetData.modelBlob);
+        setPendingBakeIds((prev) => (prev.includes(assetId) ? prev : [...prev, assetId]));
+      };
+
       const existingIdx = (currentProject.scenes || []).findIndex(
         (a) =>
           (selectedAssetId && a.id === selectedAssetId) ||
@@ -674,6 +734,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
         updatedScenes = [...(currentProject.scenes || []), newAsset];
       }
 
+      registerPending(newAsset.id);
       onUpdateProject({
         ...currentProject,
         scenes: updatedScenes,
@@ -915,27 +976,112 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   // Stage Persistence & Reusable Stage Library Handlers
   // ----------------------------------------------------
 
-  const handleSaveStage = async () => {
+  /**
+   * A picture of the stage as it looks right now, for the Stage Library card. The viewport canvas
+   * keeps its drawing buffer (ThreeStage sets preserveDrawingBuffer), so it can be read directly.
+   * JPEG at 480x270: a thumbnail has no business being a megabyte on this connection.
+   */
+  const captureStageThumbnail = (): string | undefined => {
+    const canvas = viewportCanvasRef.current;
+    if (!canvas || !canvas.width || !canvas.height) return undefined;
+    try {
+      const out = document.createElement('canvas');
+      out.width = 480;
+      out.height = 270;
+      const ctx = out.getContext('2d', { alpha: false });
+      if (!ctx) return undefined;
+
+      // Centre-crop to 16:9 so the thumbnail is not squashed by the viewport's own shape.
+      const srcAspect = canvas.width / canvas.height;
+      const target = 16 / 9;
+      let sx = 0, sy = 0, sw = canvas.width, sh = canvas.height;
+      if (srcAspect > target) {
+        sw = canvas.height * target;
+        sx = (canvas.width - sw) / 2;
+      } else {
+        sh = canvas.width / target;
+        sy = (canvas.height - sh) / 2;
+      }
+
+      ctx.fillStyle = '#0a0c10';
+      ctx.fillRect(0, 0, out.width, out.height);
+      ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, out.width, out.height);
+      return out.toDataURL('image/jpeg', 0.82);
+    } catch (err) {
+      console.warn('Could not capture a stage thumbnail:', err);
+      return undefined;
+    }
+  };
+
+  /**
+   * Sends up any baked model that is still only in this browser, and returns the scene with its
+   * blob: URLs replaced by permanent ones. This is where the wait now happens - deliberately, at
+   * a moment the user chose - instead of when the model was added.
+   */
+  const uploadPendingBakes = async (scenes: SceneAsset[]): Promise<SceneAsset[]> => {
+    const parked = await listPendingBakes();
+    if (parked.length === 0) return scenes;
+
+    const uploaded = new Map<string, string>();
+    let done = 0;
+    for (const bake of parked) {
+      // Skip anything that is no longer in the scene: the object was deleted before saving.
+      if (!scenes.some((a) => a.id === bake.id)) {
+        await deletePendingBake(bake.id);
+        continue;
+      }
+      done += 1;
+      const mb = (bake.blob.size / (1024 * 1024)).toFixed(1);
+      setSaveProgress(`Uploading baked model ${done} of ${parked.length} (${mb} MB)…`);
+
+      const url = await uploadAssetToDisk(bake.blob, `${bake.id}.glb`);
+      if (url) {
+        uploaded.set(bake.id, url);
+        await deletePendingBake(bake.id);
+      } else {
+        console.warn(`[stage save] upload failed for ${bake.id}; it stays parked locally.`);
+      }
+    }
+
+    setSaveProgress(null);
+    setPendingBakeIds((prev) => prev.filter((id) => !uploaded.has(id)));
+    if (uploaded.size === 0) return scenes;
+    return scenes.map((a) => (uploaded.has(a.id) ? { ...a, glbUrl: uploaded.get(a.id)! } : a));
+  };
+
+  const handleSaveStage = async (nameOverride?: string) => {
     setIsSavingStage(true);
+    // The thumbnail is taken before anything else, so it shows the stage the user is looking at.
+    const thumbnail = captureStageThumbnail() || currentProject.thumbnail;
+
+    // Baked models go up now, and the scene keeps the permanent URLs they come back with.
+    const savedScenes = await uploadPendingBakes(assets);
+
     const updatedProject: Project = {
       ...currentProject,
-      scenes: assets,
+      scenes: savedScenes,
       panoramaUrl: panoramaUrl || undefined,
       panoramaRotation: panoramaRotation || 0,
       splatUrl: splatUrl || undefined,
       stageSpecularity,
       pointLights: JSON.parse(JSON.stringify(pointLights)),
+      thumbnail,
       modified: 'Just now',
     };
     onUpdateProject(updatedProject);
 
-    // Also automatically sync this stage into the Stage Library so it appears in "LOAD STAGES"
-    const stageName = (currentProject.name || 'Current Stage').trim();
+    // Also sync this stage into the Stage Library so it appears in "LOAD STAGES".
+    //
+    // The id carries the name, so saving under a new name creates a new preset and saving under
+    // an existing one overwrites it. Keying on the project alone would mean a project could only
+    // ever have one stage, which is what the old "Save Current" button existed to get around.
+    const stageName = (nameOverride || currentProject.name || 'Current Stage').trim();
+    const nameKey = stageName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
     const stageTemplate: SavedStageTemplate = {
-      id: `stage_proj_${currentProject.id}`,
+      id: `stage_proj_${currentProject.id}_${nameKey}`,
       name: stageName,
       createdAt: new Date().toISOString(),
-      scenes: JSON.parse(JSON.stringify(assets)),
+      scenes: JSON.parse(JSON.stringify(savedScenes)),
       panoramaUrl: panoramaUrl || undefined,
       panoramaRotation: panoramaRotation || 0,
       splatUrl: splatUrl || undefined,
@@ -943,7 +1089,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       lightIntensity,
       stageSpecularity,
       pointLights: JSON.parse(JSON.stringify(pointLights)),
-      thumbnail: currentProject.thumbnail,
+      thumbnail,
     };
 
     try {
@@ -959,32 +1105,6 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       setSaveToast(null);
       setIsSavingStage(false);
     }, 3500);
-  };
-
-  const handleSaveToLibrary = async (customName?: string) => {
-    const stageName = (customName || newStageTemplateName || `${currentProject.name} Stage`).trim();
-    if (!stageName) return;
-
-    const newTemplate: SavedStageTemplate = {
-      id: `stage_${Date.now()}`,
-      name: stageName,
-      createdAt: new Date().toISOString(),
-      scenes: JSON.parse(JSON.stringify(assets)),
-      panoramaUrl: panoramaUrl || undefined,
-      panoramaRotation: panoramaRotation || 0,
-      splatUrl: splatUrl || undefined,
-      environmentPreset,
-      lightIntensity,
-      stageSpecularity,
-      pointLights: JSON.parse(JSON.stringify(pointLights)),
-      thumbnail: currentProject.thumbnail,
-    };
-
-    const updated = await saveStageTemplate(newTemplate);
-    setStageLibrary(updated);
-    setNewStageTemplateName('');
-    setSaveToast(`✓ Saved to Stage Library: "${stageName}"`);
-    setTimeout(() => setSaveToast(null), 3500);
   };
 
   const handleLoadStageTemplate = (template: SavedStageTemplate) => {
@@ -1396,10 +1516,13 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
 
           {/* Save Stage Button */}
           <button
-            onClick={handleSaveStage}
+            onClick={() => {
+              setStageSaveName(currentProject.name || 'Current Stage');
+              setShowSaveStageModal(true);
+            }}
             disabled={isSavingStage}
             className="flex items-center gap-1 px-sm py-[4px] bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/40 rounded-lg text-[11px] font-label-caps transition-all cursor-pointer shadow-sm active:scale-95 disabled:opacity-50"
-            title="Save current stage layout and assets immediately to disk"
+            title="Name and save this stage, uploading any baked models"
           >
             <span className="material-symbols-outlined text-[15px]">
               {isSavingStage ? 'sync' : 'save'}
@@ -1446,7 +1569,18 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           </div>
         )}
 
+        {/* An upload on a slow link takes minutes, so say what is happening rather than freeze. */}
+        {saveProgress && (
+          <div className="absolute top-sm left-1/2 -translate-x-1/2 bg-surface-container-high/95 text-on-surface px-md py-xs rounded-full shadow-2xl backdrop-blur-md flex items-center gap-xs text-xs z-30 border border-outline-variant animate-in fade-in slide-in-from-top-2 duration-200">
+            <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+            <span>{saveProgress}</span>
+          </div>
+        )}
+
         <ThreeStage
+          onCanvasReady={(canvas) => {
+            viewportCanvasRef.current = canvas;
+          }}
           assets={assets}
           selectedAssetId={selectedAssetId}
           pointLights={pointLights}
@@ -2707,6 +2841,73 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       />
 
       {/* Stage Library & Presets Modal */}
+      {/* Save Stage: naming lives here, with the save it belongs to. */}
+      {showSaveStageModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-md">
+          <div className="w-full max-w-md bg-surface-container-low border border-outline-variant rounded-xl shadow-2xl overflow-hidden">
+            <div className="flex items-center gap-sm p-md border-b border-outline-variant/40">
+              <span className="material-symbols-outlined text-emerald-400 text-2xl">save</span>
+              <div>
+                <h3 className="font-heading font-bold text-base text-on-surface">Save Stage</h3>
+                <p className="text-[11px] text-on-surface-variant">
+                  Give it a name. A picture of the viewport is saved with it.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-md flex flex-col gap-sm">
+              <label className="text-[11px] font-label-caps text-on-surface-variant">Stage name</label>
+              <input
+                type="text"
+                autoFocus
+                value={stageSaveName}
+                onChange={(e) => setStageSaveName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && stageSaveName.trim()) {
+                    setShowSaveStageModal(false);
+                    handleSaveStage(stageSaveName.trim());
+                  }
+                  if (e.key === 'Escape') setShowSaveStageModal(false);
+                }}
+                placeholder="e.g. Bar - night dressing"
+                className="w-full bg-surface-container-low border border-outline-variant px-sm py-2 rounded-lg text-sm text-on-surface outline-none focus:border-primary"
+              />
+
+              {pendingBakeIds.length > 0 && (
+                <div className="flex items-start gap-xs p-sm bg-amber-500/10 border border-amber-500/30 rounded-lg">
+                  <span className="material-symbols-outlined text-amber-400 text-[16px] mt-[1px]">cloud_upload</span>
+                  <p className="text-[11px] text-on-surface-variant leading-snug">
+                    {pendingBakeIds.length} baked model{pendingBakeIds.length === 1 ? '' : 's'} will be
+                    uploaded now. On a slow connection this can take a while — the stage is saved
+                    when it finishes.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-xs p-md border-t border-outline-variant/40">
+              <button
+                onClick={() => setShowSaveStageModal(false)}
+                className="px-md py-1.5 text-xs text-on-surface-variant hover:text-on-surface font-label-caps cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={!stageSaveName.trim()}
+                onClick={() => {
+                  setShowSaveStageModal(false);
+                  handleSaveStage(stageSaveName.trim());
+                }}
+                className="flex items-center gap-1 px-md py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/40 rounded-lg text-xs font-label-caps transition-all cursor-pointer disabled:opacity-40"
+              >
+                <span className="material-symbols-outlined text-[15px]">save</span>
+                <span>Save Stage</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showStageLibraryModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-md animate-in fade-in duration-150">
           <div className="bg-surface-container border border-outline-variant/60 rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
@@ -2729,29 +2930,15 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               </button>
             </div>
 
-            {/* Save Current Stage Section */}
+            {/* Naming and saving moved to the SAVE STAGE button, where they belong. What is left
+                here is importing a stage from a file, which is a load-side action. */}
             <div className="p-md bg-surface-container-lowest/50 border-b border-outline-variant/20 flex flex-col sm:flex-row items-center gap-sm">
-              <div className="flex-1 w-full flex items-center gap-xs bg-surface-container-low border border-outline-variant px-sm py-1.5 rounded-lg focus-within:border-primary">
-                <span className="material-symbols-outlined text-on-surface-variant text-[16px]">label</span>
-                <input
-                  type="text"
-                  value={newStageTemplateName}
-                  onChange={(e) => setNewStageTemplateName(e.target.value)}
-                  placeholder={`Preset name (e.g. "${currentProject.name} Stage")...`}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSaveToLibrary();
-                  }}
-                  className="w-full bg-transparent text-xs text-on-surface placeholder:text-on-surface-variant/50 outline-none"
-                />
-              </div>
+              <p className="flex-1 w-full text-[11px] text-on-surface-variant">
+                To save the stage you are working on, close this and use{' '}
+                <span className="text-emerald-400 font-label-caps">SAVE STAGE</span> — it asks for a
+                name and takes a thumbnail.
+              </p>
               <div className="flex items-center gap-xs w-full sm:w-auto shrink-0">
-                <button
-                  onClick={() => handleSaveToLibrary()}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-1 px-md py-1.5 bg-primary text-surface-container-lowest font-bold text-xs rounded-lg hover:bg-primary/90 transition-all font-label-caps cursor-pointer shadow-sm active:scale-95"
-                >
-                  <span className="material-symbols-outlined text-[15px]">add_circle</span>
-                  <span>Save Current</span>
-                </button>
                 <button
                   onClick={() => stageImportInputRef.current?.click()}
                   className="flex-1 sm:flex-none flex items-center justify-center gap-1 px-sm py-1.5 bg-surface-container-high hover:bg-surface-container-highest text-on-surface border border-outline-variant/40 text-xs rounded-lg transition-all font-label-caps cursor-pointer"

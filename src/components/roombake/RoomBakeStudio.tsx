@@ -930,25 +930,11 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
       addLog('Exporting baked room into active Virtual Stage...', 'info');
       const glbBuffer = await engine.exportBakedGLB();
       const blob = new Blob([glbBuffer], { type: 'model/gltf-binary' });
-      let glbUrl = URL.createObjectURL(blob);
+      const glbUrl = URL.createObjectURL(blob);
 
-      // Persist to local disk so the model remains permanent across browser reloads
-      try {
-        const uploadRes = await fetch(`/api/upload-asset?filename=roombake_${Date.now()}.glb`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'model/gltf-binary' },
-          body: glbBuffer,
-        });
-        if (uploadRes.ok) {
-          const uploadData = await uploadRes.json();
-          if (uploadData.url) {
-            glbUrl = uploadData.url;
-          }
-        }
-      } catch (uploadErr) {
-        console.warn('Could not persist baked room to disk, using blob fallback', uploadErr);
-      }
-
+      // Nothing is uploaded here any more. A baked GLB is megabytes, and on a slow uplink that is
+      // minutes of waiting before the model can be used at all. The scene takes it straight from
+      // memory; SceneDesignView parks a copy locally and uploads it when the stage is saved.
       if (onAddSceneAsset) {
         onAddSceneAsset({
           name: targetAsset?.name || 'AI Baked Room Environment',
@@ -956,7 +942,10 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
           modelBlob: blob,
         });
       }
-      addLog('Successfully added baked room to your Virtual Production Scene!', 'ok');
+      addLog(
+        `Added to your scene (${(blob.size / (1024 * 1024)).toFixed(1)} MB). It uploads when you save the stage.`,
+        'ok'
+      );
       onClose();
     } catch (err: any) {
       addLog(`Add to scene error: ${err.message}`, 'err');
