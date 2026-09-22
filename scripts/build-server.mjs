@@ -8,6 +8,7 @@ await build({
     prod: 'server/prod.ts',
     'user-add': 'server/cli/userAdd.ts',
     'import-projects': 'server/cli/importProjects.ts',
+    'set-key': 'server/cli/setKey.ts',
   },
   outdir: 'dist-server',
   outExtension: { '.js': '.mjs' },
