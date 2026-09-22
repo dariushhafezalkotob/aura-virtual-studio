@@ -19,6 +19,12 @@ export interface RoomBakeConfig {
   panoH: number;
 }
 
+/**
+ * Above this triangle count Smart falls back to box projection rather than risk stalling the
+ * main thread. 172k triangles measured at 349ms, so this is a real ceiling, not a tight one.
+ */
+export const SMART_UNWRAP_TRI_LIMIT = 150000;
+
 export const DEFAULT_ROOMBAKE_CONFIG: RoomBakeConfig = {
   room: { W: 6, H: 3, D: 8 },
   atlas: 2048,
@@ -1040,9 +1046,17 @@ export class RoomBakeEngine {
     const vertexCount = pos.count;
     const triCount = Math.floor(vertexCount / 3);
 
-    // Fast path: for large meshes (e.g. street scenes / complex environments with > 1200 triangles),
-    // use high-performance 6-way box atlas unwrapping to prevent CPU thread freezes.
-    if (triCount > 1200) {
+    // Safety valve: fall back to 6-way box projection on a mesh big enough to stall the main
+    // thread. The limit used to be 1200 triangles, which is nothing -- an ordinary imported prop
+    // is well past it, so Smart quietly gave box projection (~53% of the atlas used, ~3% of it
+    // overlapping, and the split-long-sections checkbox doing nothing) on exactly the models
+    // people pick Smart for. Measured on this machine, the island unwrap is linear and cheap:
+    // 6k tris 31ms, 25k 95ms, 86k 220ms, 172k 349ms, worst case being a curved surface where
+    // every triangle is its own plane. Nothing here justified 1200.
+    if (triCount > SMART_UNWRAP_TRI_LIMIT) {
+      this.lastUvNote =
+        `${triCount.toLocaleString()} triangles is past the ${SMART_UNWRAP_TRI_LIMIT.toLocaleString()} ` +
+        `limit for island unwrapping, so this used 6-way box projection instead.`;
       return this.autoUnwrapGeometry(geometry, 0.02);
     }
 
@@ -1672,20 +1686,31 @@ export class RoomBakeEngine {
     } else if (uvMode === 'auto') {
       if (!hasAnyUv) shouldSmartUnwrap = true;
     } else if (uvMode === 'smart') {
-      // A detailed model that already carries UVs usually has a better layout than anything this
-      // unwrapper will produce for it, so those are kept. Re-unwrapping over the top of a good
-      // layout is worse, not better.
+      // A detailed ROOM that already carries UVs usually has a better layout than anything this
+      // unwrapper will produce for it, so those are kept: re-unwrapping over the top of a good
+      // interior layout gives worse packing and overlap. That guard is for rooms only.
       //
-      // It is reported rather than done silently: picking Smart and seeing nothing happen is
-      // indistinguishable from a broken unwrapper. Changing the UV dropdown afterwards forces a
-      // real re-unwrap (reUnwrapRoom), which is the escape hatch when the model's own UVs are bad.
-      if (hasAnyUv && totalVerts > 3600) {
+      // An OBJECT is the opposite case. Props, primitives and generated meshes arrive with UVs
+      // that were never packed for baking (all six box faces on one 0-1 patch, tall strips
+      // hogging the atlas), and the whole point of picking Smart on one is to get coplanar
+      // islands split and packed. Guarding those made Smart a no-op on exactly the models that
+      // need it, so exterior bakes always unwrap.
+      //
+      // Either way it is reported rather than silent, and UNWRAP NOW forces a real unwrap:
+      // re-picking the same option in the dropdown fires no change event, so that was never
+      // the escape hatch it was documented to be.
+      if (viewMode === 'interior' && hasAnyUv && totalVerts > 3600) {
         shouldSmartUnwrap = false;
         this.lastUvNote =
-          `Kept the model's own UV layout (${totalVerts.toLocaleString()} vertices, UVs already present). ` +
-          `To unwrap anyway, re-pick "Smart Coplanar Island Unwrap" in the UV dropdown.`;
+          `Kept the model's own UV layout (${totalVerts.toLocaleString()} vertices, UVs already present, ` +
+          `baking from inside). To unwrap anyway, press UNWRAP NOW.`;
       } else {
         shouldSmartUnwrap = true;
+        if (hasAnyUv && totalVerts > 3600) {
+          this.lastUvNote =
+            `Unwrapped into coplanar islands (${totalVerts.toLocaleString()} vertices). The model's own ` +
+            `UVs are kept as a fallback - switch to "Force File UVs" to go back to them.`;
+        }
       }
     } else if (uvMode === 'box') {
       shouldBoxUnwrap = true;
@@ -1770,6 +1795,7 @@ export class RoomBakeEngine {
 
   public reUnwrapRoom(uvMode: 'smart' | 'box' | 'model' | 'auto' = 'smart', splitTrims = true) {
     if (this.meshes.length === 0) return;
+    this.lastUvNote = null;
     for (const mesh of this.meshes) {
       const geom = mesh.geometry;
       if (uvMode === 'smart') {

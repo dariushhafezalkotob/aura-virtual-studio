@@ -446,6 +446,33 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
     }
     updateStats();
     addLog(`Applied ${newMode.toUpperCase()} UV layout!`, 'ok');
+    if (engine.lastUvNote) addLog(engine.lastUvNote, 'info');
+  };
+
+  // The dropdown fires nothing when the already-selected option is picked again, so when a load
+  // keeps the model's own UVs there is otherwise no way to ask for the unwrap without switching
+  // modes and back. reUnwrapRoom has always been unconditional; this exposes it directly.
+  const handleForceUnwrap = () => {
+    const engine = engineRef.current;
+    if (!engine || engine.meshes.length === 0) {
+      addLog('Load a model first - there is nothing to unwrap.', 'err');
+      return;
+    }
+    engine.reUnwrapRoom(uvMode, splitTrims);
+    setViews([...engine.views]);
+    const v = engine.views[selectedViewIdx] || engine.views[0];
+    if (v) {
+      engine.renderConditioning(v, autoRange, depthInvert, maskFeather);
+      refreshViewInfo(v);
+    }
+    updateStats();
+    addLog(
+      uvMode === 'model'
+        ? 'Restored the file\'s own UVs.'
+        : `Re-unwrapped with ${uvMode.toUpperCase()}${splitTrims ? ' (long sections split)' : ''}.`,
+      'ok'
+    );
+    if (engine.lastUvNote) addLog(engine.lastUvNote, 'info');
   };
 
   const handleViewModeChange = (newMode: BakeViewMode) => {
@@ -1335,6 +1362,13 @@ export const RoomBakeStudio: React.FC<RoomBakeStudioProps> = ({
                     />
                     <span>Split Long Cornices & Loops (High Texel Density)</span>
                   </label>
+
+                  <button
+                    onClick={handleForceUnwrap}
+                    className="w-full mt-1 py-1.5 px-3 bg-surface-container border border-outline-variant text-xs text-on-surface hover:bg-surface-container-high transition-colors font-mono"
+                  >
+                    Unwrap Now
+                  </button>
                 </div>
 
                 <div className="flex items-center gap-2">
