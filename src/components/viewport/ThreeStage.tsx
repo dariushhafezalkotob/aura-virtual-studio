@@ -23,6 +23,7 @@ import {
 } from '../../types';
 import { CharacterActorModel, ActorErrorBoundary } from './CharacterActorModel';
 import { computeDeviceQuaternion } from '../../services/cameraRemoteService';
+import { SampledCamera, createSampledCamera, sampleCameraTake, samplePath } from '../../services/cameraAnimation';
 
 const _CAM_RIGHT_LOCAL = new THREE.Vector3(1, 0, 0);
 const _mirrorQuat = new THREE.Quaternion();
@@ -104,6 +105,9 @@ interface ThreeStageProps {
   onRecordCameraFrame?: (frame: CameraKeyframe) => void;
   isPlaybackTake?: boolean;
   playbackTake?: CameraTake | null;
+  /** Bump to capture the camera as a keyframe on the next frame. */
+  keyCaptureTrigger?: number;
+  onKeyCaptured?: (frame: CameraKeyframe) => void;
   showCameraTrajectory?: boolean;
   onCanvasReady?: (canvas: HTMLCanvasElement) => void;
   remoteOrientation?: DeviceOrientationData | null;
@@ -1114,10 +1118,17 @@ const _q0 = new THREE.Quaternion();
 const _q1 = new THREE.Quaternion();
 
 // 60 FPS Camera Trajectory Playback Driver
+/** Scratch for the keyed-take sampler; these run every frame and must not allocate. */
+const _sampled = createSampledCamera();
+const _rollQ = new THREE.Quaternion();
+const _viewAxis = new THREE.Vector3(0, 0, -1);
+
 const CameraPlaybackDriver: React.FC<{
   take: CameraTake;
   currentTime: number;
-}> = ({ take, currentTime }) => {
+  /** Fires with the sampled channels so the screen can drive focus and aperture from them. */
+  onSampled?: (s: SampledCamera) => void;
+}> = ({ take, currentTime, onSampled }) => {
   const { camera } = useThree();
 
   useFrame(() => {
@@ -1125,6 +1136,25 @@ const CameraPlaybackDriver: React.FC<{
     if (!kfs || kfs.length === 0) return;
 
     const pCam = camera as THREE.PerspectiveCamera;
+
+    // A hand-keyed take is sampled through its spline and easing instead of walked between keys.
+    // Recorded takes fall straight through to the code below, unchanged.
+    if (sampleCameraTake(take, currentTime, _sampled)) {
+      camera.position.copy(_sampled.position);
+      camera.quaternion.copy(_sampled.quaternion);
+      if (_sampled.roll !== null) {
+        // Dutch angle rides on top of the keyed orientation, around the camera's own view axis.
+        _rollQ.setFromAxisAngle(_viewAxis, _sampled.roll * THREE.MathUtils.DEG2RAD);
+        camera.quaternion.multiply(_rollQ);
+      }
+      if (_sampled.fov !== null && pCam.isPerspectiveCamera && Math.abs(pCam.fov - _sampled.fov) > 0.01) {
+        pCam.fov = _sampled.fov;
+        pCam.updateProjectionMatrix();
+      }
+      camera.updateMatrixWorld(true);
+      onSampled?.(_sampled);
+      return;
+    }
 
     if (currentTime <= kfs[0].time) {
       const k0 = kfs[0];
@@ -1192,6 +1222,43 @@ const CameraPlaybackDriver: React.FC<{
   return null;
 };
 
+/**
+ * Grabs the camera exactly once, when asked.
+ *
+ * Deliberately separate from CameraRecorder: that one streams at 60fps while recording and is the
+ * path every existing take was made with, and setting a key by hand is the opposite - one frame,
+ * on demand, while nothing is rolling. `trigger` is a counter so that asking twice for a key at
+ * the same playhead still fires twice.
+ */
+const CameraKeyCapturer: React.FC<{
+  trigger: number;
+  currentTime: number;
+  onCapture?: (frame: CameraKeyframe) => void;
+}> = ({ trigger, currentTime, onCapture }) => {
+  const { camera } = useThree();
+  const servedRef = useRef<number>(trigger);
+  const pendingRef = useRef<boolean>(false);
+
+  if (trigger !== servedRef.current) {
+    servedRef.current = trigger;
+    pendingRef.current = true;
+  }
+
+  useFrame(() => {
+    if (!pendingRef.current || !onCapture) return;
+    pendingRef.current = false;
+    const pCam = camera as THREE.PerspectiveCamera;
+    onCapture({
+      time: Math.max(0, currentTime),
+      position: [camera.position.x, camera.position.y, camera.position.z],
+      quaternion: [camera.quaternion.x, camera.quaternion.y, camera.quaternion.z, camera.quaternion.w],
+      fov: pCam.isPerspectiveCamera ? pCam.fov : 50,
+    });
+  });
+
+  return null;
+};
+
 // Continuous Camera Keyframe Recorder (Samples at ~60 FPS)
 const CameraRecorder: React.FC<{
   isRecording: boolean;
@@ -1235,7 +1302,14 @@ const CameraTrajectoryVisualizer: React.FC<{
 }> = ({ take }) => {
   const lineObj = React.useMemo(() => {
     if (!take || !take.keyframes || take.keyframes.length < 2) return null;
-    const points = take.keyframes.map((k) => new THREE.Vector3(k.position[0], k.position[1], k.position[2]));
+    // A keyed take's path is a curve, so draw the curve the camera will actually fly rather than
+    // the straight lines between its keys - otherwise the ribbon says one thing and the move does
+    // another, and there is no way to see what a tangent handle just did.
+    const points =
+      take.mode === 'keyed'
+        ? samplePath(take)
+        : take.keyframes.map((k) => new THREE.Vector3(k.position[0], k.position[1], k.position[2]));
+    if (points.length < 2) return null;
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const material = new THREE.LineBasicMaterial({
       color: 0x00ffcc,
@@ -1621,6 +1695,8 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   onRecordCameraFrame,
   isPlaybackTake = false,
   playbackTake = null,
+  keyCaptureTrigger = 0,
+  onKeyCaptured,
   showCameraTrajectory = true,
   onCanvasReady,
   remoteOrientation = null,
@@ -1894,6 +1970,12 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         {isPlaybackTake && playbackTake && (
           <CameraPlaybackDriver take={playbackTake} currentTime={currentTimelineTime} />
         )}
+
+        <CameraKeyCapturer
+          trigger={keyCaptureTrigger}
+          currentTime={currentTimelineTime}
+          onCapture={onKeyCaptured}
+        />
 
         {/* Holographic 3D Camera Trajectory Ribbon */}
         {showCameraTrajectory && playbackTake && (

@@ -13,6 +13,7 @@ import { ThreeStage } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
 import { CameraRemoteSocket, LinkStats } from '../../services/cameraRemoteService';
 import { stabilizeKeyframes } from '../../services/cameraStabilizer';
+import { DEFAULT_TENSION, insertKeyframe } from '../../services/cameraAnimation';
 import { useDialogueAudioSync } from '../../services/dialogueService';
 import qrcode from 'qrcode-generator';
 
@@ -99,10 +100,15 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const effectiveDuration = (viewMode === 'playback' && activeTake) ? activeTake.duration : maxDuration;
 
   // What playback and export actually fly: the recorded path with the take's stabilizer applied.
+  //
+  // A keyed move is never stabilized - there is no handheld shake in it to smooth, and running a
+  // hand-placed key through a smoothing filter would drag it off the position it was placed at.
   const stabilizedTake = useMemo<CameraTake | null>(() => {
-    if (!activeTake || !activeTake.stabilizer) return activeTake;
+    if (!activeTake || activeTake.mode === 'keyed' || !activeTake.stabilizer) return activeTake;
     return { ...activeTake, keyframes: stabilizeKeyframes(activeTake.keyframes, activeTake.stabilizer) };
   }, [activeTake]);
+
+  const isKeyedTake = activeTake?.mode === 'keyed';
 
   // Master Timeline Animation State
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
@@ -110,6 +116,98 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const [playbackSpeed] = useState<number>(1.0);
   // Hear the scene's dialogue while recording or reviewing camera takes.
   useDialogueAudioSync(currentProject.dialogue?.audioUrl, isPlaying, timelineSec, playbackSpeed);
+
+  // ---- Hand-keyed camera moves ------------------------------------------------------------
+  const [showKeyPanel, setShowKeyPanel] = useState<boolean>(false);
+  const [keyCaptureTrigger, setKeyCaptureTrigger] = useState<number>(0);
+  const [selectedKeyTime, setSelectedKeyTime] = useState<number | null>(null);
+
+  const updateActiveTake = useCallback(
+    (change: (t: CameraTake) => CameraTake) => {
+      if (!activeTake) return;
+      setTakes((prev) => prev.map((t) => (t.id === activeTake.id ? change(t) : t)));
+    },
+    [activeTake]
+  );
+
+  /** Starts an empty hand-keyed move and makes it the take being edited. */
+  const handleNewKeyedTake = () => {
+    const keyed: CameraTake = {
+      id: `keyed_${Date.now()}`,
+      name: `Move ${takes.filter((t) => t.mode === 'keyed').length + 1}`,
+      createdAt: new Date().toISOString(),
+      duration: 4,
+      keyframes: [],
+      mode: 'keyed',
+      tension: DEFAULT_TENSION,
+      fps: 60,
+    };
+    setTakes((prev) => [...prev, keyed]);
+    setActiveTakeId(keyed.id);
+    setViewMode('playback');
+    setIsPlaying(false);
+    setTimelineSec(0);
+    setShowKeyPanel(true);
+    setToastMessage('New keyed move. Fly the camera, then SET KEY.');
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  /**
+   * The camera as it sits right now becomes a key at the playhead. Re-keying a time replaces the
+   * key there, which is how you correct a position rather than stacking two keys on one frame.
+   */
+  const handleKeyCaptured = useCallback(
+    (frame: CameraKeyframe) => {
+      if (!activeTake || activeTake.mode !== 'keyed') return;
+      const existing = activeTake.keyframes.find((k) => Math.abs(k.time - frame.time) <= 1e-3);
+      const key: CameraKeyframe = {
+        ...frame,
+        // Keep whatever shaping the old key at this time had; only the pose is being re-taken.
+        ease: existing?.ease ?? 'ease-in-out',
+        easeHandles: existing?.easeHandles,
+        roll: existing?.roll,
+        focusDistance: existing?.focusDistance,
+        aperture: existing?.aperture,
+      };
+      const keyframes = insertKeyframe(activeTake.keyframes, key);
+      updateActiveTake((t) => ({
+        ...t,
+        keyframes,
+        duration: Math.max(t.duration, keyframes[keyframes.length - 1].time),
+      }));
+      setSelectedKeyTime(key.time);
+      setToastMessage(existing ? `Key at ${key.time.toFixed(2)}s updated` : `Key set at ${key.time.toFixed(2)}s`);
+      setTimeout(() => setToastMessage(null), 2000);
+    },
+    [activeTake, updateActiveTake]
+  );
+
+  const handleDeleteKey = (time: number) => {
+    updateActiveTake((t) => ({ ...t, keyframes: t.keyframes.filter((k) => k.time !== time) }));
+    setSelectedKeyTime(null);
+  };
+
+  const handleKeyChange = (time: number, change: Partial<CameraKeyframe>) => {
+    updateActiveTake((t) => ({
+      ...t,
+      keyframes: t.keyframes.map((k) => (k.time === time ? { ...k, ...change } : k)),
+    }));
+  };
+
+  /** Moving a key in time re-sorts, so the list and playback never disagree about the order. */
+  const handleMoveKey = (time: number, newTime: number) => {
+    const clamped = Math.max(0, Number(newTime.toFixed(3)));
+    updateActiveTake((t) => {
+      const key = t.keyframes.find((k) => k.time === time);
+      if (!key) return t;
+      const keyframes = insertKeyframe(
+        t.keyframes.filter((k) => k.time !== time),
+        { ...key, time: clamped }
+      );
+      return { ...t, keyframes, duration: Math.max(t.duration, keyframes[keyframes.length - 1].time) };
+    });
+    setSelectedKeyTime(clamped);
+  };
 
   // Keyframes buffer collected while recording
   const recordedFramesRef = useRef<CameraKeyframe[]>([]);
@@ -786,8 +884,12 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         cameraFov={currentFov}
         isRecordingCamera={isRecording}
         onRecordCameraFrame={handleRecordFrame}
-        isPlaybackTake={viewMode === 'playback'}
+        // While keying, the camera must stay under your control even in playback mode - otherwise
+        // the take drives it and there is no way to fly somewhere and set the next key.
+        isPlaybackTake={viewMode === 'playback' && !(isKeyedTake && !isPlaying)}
         playbackTake={stabilizedTake}
+        keyCaptureTrigger={keyCaptureTrigger}
+        onKeyCaptured={handleKeyCaptured}
         showCameraTrajectory={!isExportingVideo}
         remoteOrientation={remoteOrientation}
         remoteOrientationRef={remoteOrientationRef}
@@ -1246,6 +1348,20 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             {isPhoneConnected ? '📱 PHONE SYNCED' : 'PAIR PHONE'}
           </button>
 
+          {/* Hand-keyed camera moves, as opposed to recording one by flying it. */}
+          <button
+            onClick={() => setShowKeyPanel((v) => !v)}
+            className={`border px-3 py-2 rounded-xl backdrop-blur-md text-xs font-label-caps tracking-wider flex items-center gap-1.5 cursor-pointer shadow-lg whitespace-nowrap transition-colors ${
+              showKeyPanel || isKeyedTake
+                ? 'bg-primary/15 border-primary text-primary'
+                : 'bg-surface-container/90 border-outline-variant/40 hover:border-primary text-on-surface-variant'
+            }`}
+            title="Build a camera move from keyframes instead of recording it"
+          >
+            <span className="material-symbols-outlined text-[15px]">linear_scale</span>
+            KEYFRAME
+          </button>
+
           {/* Center: Unified Play & Record Bar */}
           <div className="flex-1 max-w-3xl bg-surface-container/95 border border-outline-variant/40 rounded-xl px-3 py-2 backdrop-blur-xl shadow-2xl flex items-center gap-3">
             {/* Record / Stop Button right next to play controls */}
@@ -1567,6 +1683,163 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
           </div>
         </div>
       </div>
+
+      {/* Keyframe panel: build a move by placing keys rather than flying it live. */}
+      {showKeyPanel && (
+        <div className="fixed right-4 top-32 bottom-28 z-40 w-[320px] bg-surface-container/95 border border-outline-variant/50 rounded-xl backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden pointer-events-auto">
+          <div className="flex items-center justify-between px-md py-2.5 border-b border-outline-variant/40 shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-primary text-[18px]">linear_scale</span>
+              <span className="text-xs font-label-caps tracking-wider text-on-surface">Keyframed Move</span>
+            </div>
+            <button
+              onClick={() => setShowKeyPanel(false)}
+              className="p-1 rounded hover:bg-surface-container-highest text-on-surface-variant cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[18px]">close</span>
+            </button>
+          </div>
+
+          {!isKeyedTake ? (
+            <div className="p-md flex flex-col gap-sm">
+              <p className="text-[11px] text-on-surface-variant leading-relaxed">
+                A keyed move is built from a few positions you place yourself: fly the camera, set a
+                key, move the playhead, set another. The path between them is a curve you can shape,
+                and the timing is yours to ease.
+              </p>
+              <button
+                onClick={handleNewKeyedTake}
+                className="w-full py-2 bg-primary/15 border border-primary/50 text-primary rounded-lg text-xs font-label-caps tracking-wider hover:bg-primary/25 transition-colors cursor-pointer"
+              >
+                New Keyed Move
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="p-md flex flex-col gap-sm border-b border-outline-variant/30 shrink-0">
+                <button
+                  onClick={() => setKeyCaptureTrigger((n) => n + 1)}
+                  className="w-full py-2.5 bg-primary text-surface-container-lowest rounded-lg text-xs font-label-caps tracking-wider font-bold hover:bg-primary/90 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-[16px]">vpn_key</span>
+                  Set Key at {timelineSec.toFixed(2)}s
+                </button>
+                <p className="text-[10px] text-on-surface-variant leading-snug">
+                  Pause, fly the camera where you want it, then set a key. Setting one at a time that
+                  already has a key replaces it.
+                </p>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <span className="text-[10px] font-label-caps text-on-surface-variant w-16 shrink-0">Curve</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={activeTake?.tension ?? DEFAULT_TENSION}
+                    onChange={(e) => updateActiveTake((t) => ({ ...t, tension: Number(e.target.value) }))}
+                    className="flex-1 accent-primary cursor-pointer"
+                  />
+                  <span className="text-[10px] font-mono text-on-surface w-8 text-right">
+                    {(activeTake?.tension ?? DEFAULT_TENSION).toFixed(2)}
+                  </span>
+                </div>
+                <p className="text-[10px] text-on-surface-variant leading-snug -mt-1">
+                  0 walks in straight lines between keys; higher rounds the corners.
+                </p>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-md flex flex-col gap-1.5">
+                {(activeTake?.keyframes.length ?? 0) === 0 ? (
+                  <p className="text-[11px] text-on-surface-variant text-center py-4">
+                    No keys yet. Position the camera and press Set Key.
+                  </p>
+                ) : (
+                  activeTake!.keyframes.map((k, i) => (
+                    <div
+                      key={`${k.time}_${i}`}
+                      className={`rounded-lg border p-2 flex flex-col gap-1.5 cursor-pointer transition-colors ${
+                        selectedKeyTime === k.time
+                          ? 'border-primary bg-primary/10'
+                          : 'border-outline-variant/40 bg-surface-container-low hover:border-outline-variant'
+                      }`}
+                      onClick={() => {
+                        setSelectedKeyTime(k.time);
+                        setTimelineSec(k.time);
+                        setIsPlaying(false);
+                      }}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-mono text-on-surface">KEY {i + 1}</span>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            step={0.1}
+                            min={0}
+                            value={k.time}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => handleMoveKey(k.time, Number(e.target.value))}
+                            className="w-16 bg-surface-container-lowest border border-outline-variant/50 rounded px-1 py-0.5 text-[11px] font-mono text-on-surface text-right outline-none focus:border-primary"
+                          />
+                          <span className="text-[10px] text-on-surface-variant">s</span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDeleteKey(k.time); }}
+                            className="p-0.5 rounded hover:bg-red-500/20 text-on-surface-variant hover:text-red-400 cursor-pointer"
+                            title="Delete this key"
+                          >
+                            <span className="material-symbols-outlined text-[15px]">delete</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-on-surface-variant w-10 shrink-0">Ease</span>
+                        <select
+                          value={k.ease || 'linear'}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => handleKeyChange(k.time, { ease: e.target.value as any })}
+                          className="flex-1 bg-surface-container-lowest border border-outline-variant/50 rounded px-1 py-0.5 text-[10px] text-on-surface outline-none focus:border-primary cursor-pointer"
+                        >
+                          <option value="linear">Linear — constant speed</option>
+                          <option value="ease-in">Ease in — starts slow</option>
+                          <option value="ease-out">Ease out — arrives slow</option>
+                          <option value="ease-in-out">Ease in & out — both</option>
+                          <option value="bezier">Bezier — custom</option>
+                          <option value="hold">Hold — wait, then cut</option>
+                        </select>
+                      </div>
+
+                      {k.fov !== undefined && (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-on-surface-variant w-10 shrink-0">Lens</span>
+                          <input
+                            type="range"
+                            min={10}
+                            max={100}
+                            step={1}
+                            value={k.fov}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => handleKeyChange(k.time, { fov: Number(e.target.value) })}
+                            className="flex-1 accent-primary cursor-pointer"
+                          />
+                          <span className="text-[10px] font-mono text-on-surface w-10 text-right">
+                            {Math.round(k.fov)}°
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="px-md py-2 border-t border-outline-variant/30 text-[10px] text-on-surface-variant shrink-0">
+                {activeTake!.keyframes.length} key{activeTake!.keyframes.length === 1 ? '' : 's'} ·{' '}
+                {activeTake!.duration.toFixed(2)}s · press play to watch it
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* QR Pairing Modal for Module 3 */}
       {showQRPairing && (

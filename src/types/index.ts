@@ -4,11 +4,45 @@ export type AI3DEngine = 'trellis' | 'hunyuan3d' | 'hunyuan_world';
 
 export type AssetCategory = 'environment' | 'prop';
 
+/**
+ * How the move leaves one key and arrives at the next.
+ *
+ * This is the TIMING, kept deliberately separate from the shape of the path: a camera can travel
+ * a wide arc at a constant crawl, or a straight line that eases out of a stop. Conflating the two
+ * is what makes hand-keyed camera work feel mechanical.
+ */
+export type CameraEase = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'hold' | 'bezier';
+
 export interface CameraKeyframe {
   time: number; // in seconds relative to timeline start
   position: [number, number, number];
   quaternion: [number, number, number, number];
   fov?: number;
+
+  // ---- Channels below are only set on hand-authored keys. A recorded take has none of them,
+  // ---- and plays back exactly as it always did.
+
+  /** Dutch angle in degrees, applied on top of the keyed orientation. */
+  roll?: number;
+  /** Focus plane in metres, for a rack focus across the move. */
+  focusDistance?: number;
+  /** f-number. Lower is shallower, so this opens and closes the depth of field over time. */
+  aperture?: number;
+
+  /** Timing out of this key and into the next. Defaults to 'linear'. */
+  ease?: CameraEase;
+  /**
+   * Timing handles when `ease` is 'bezier', as [outX, outY, inX, inY] in 0..1 - the same shape a
+   * graph editor draws. outX/outY leave this key; inX/inY arrive at the next one.
+   */
+  easeHandles?: [number, number, number, number];
+
+  /**
+   * Path shape at this key, in world units. Set by dragging the handles on the path in the
+   * viewport. Absent means the curve picks its own tangent from the neighbouring keys.
+   */
+  tangentIn?: [number, number, number];
+  tangentOut?: [number, number, number];
 }
 
 export interface CameraTake {
@@ -22,6 +56,25 @@ export interface CameraTake {
   thumbnail?: string; // Captured first frame / poster frame data URL
   /** Handheld shake smoothing, 0-100, applied on playback/export. `keyframes` stay as recorded. */
   stabilizer?: number;
+
+  /**
+   * How this take was made, which decides how it is played back.
+   *
+   * 'recorded' is the original kind: hundreds of keys streamed from the phone or the flight
+   * controls, played back by walking straight between them. Absent means 'recorded', so every
+   * take that already exists keeps its exact behaviour.
+   *
+   * 'keyed' is hand-authored: a handful of keys the user placed, played back through a spline
+   * with easing. Straight lines between two keys four seconds apart would be a dolly that starts
+   * and stops instantly, which is why these are not sampled the same way.
+   */
+  mode?: 'recorded' | 'keyed';
+
+  /**
+   * How round the path is on a keyed take, 0 to 1. 0 walks straight between keys; 0.5 is an
+   * ordinary smooth curve. Per-key tangent handles override this where they are set.
+   */
+  tension?: number;
 }
 
 export interface StagePointLight {
