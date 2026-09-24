@@ -44,7 +44,7 @@ export const ProjectsView: React.FC<ProjectsViewProps> = ({
         {/* Header Section */}
         <header className="text-center mb-xl w-full max-w-4xl mx-auto flex flex-col items-center">
           <h1 className="font-display-lg text-display-lg text-primary tracking-tight mb-md select-none font-extralight">
-            AURA Virtual Stage
+            PanTilt Virtual Stage
           </h1>
           <p className="font-body-md text-on-surface-variant max-w-md mx-auto mb-lg leading-relaxed text-sm opacity-80">
             AI 3D Scene Generation, Character Motion Choreography & Virtual Camera Production.
