@@ -105,6 +105,11 @@ interface ThreeStageProps {
   onRecordCameraFrame?: (frame: CameraKeyframe) => void;
   isPlaybackTake?: boolean;
   playbackTake?: CameraTake | null;
+  /**
+   * Show the take's pose when the playhead moves, without taking the camera away from the user.
+   * For editing a keyed move: scrub and the camera follows, then fly it wherever you like.
+   */
+  followTake?: boolean;
   /** Bump to capture the camera as a keyframe on the next frame. */
   keyCaptureTrigger?: number;
   onKeyCaptured?: (frame: CameraKeyframe) => void;
@@ -696,6 +701,8 @@ const UnrealCameraNavigation: React.FC<{
   onCameraPose,
 }) => {
   const { camera, gl } = useThree();
+  /** The pose this controller wrote last frame, to detect an external one. */
+  const lastWrittenRef = useRef({ position: new THREE.Vector3(), quaternion: new THREE.Quaternion() });
   const keysDown = useRef<Set<string>>(new Set());
   const orbitRef = useRef({
     yaw: Math.PI,
@@ -930,6 +937,32 @@ const UnrealCameraNavigation: React.FC<{
     if (!enabled) return;
     const orbit = orbitRef.current;
 
+    // Did something else move the camera since our last frame?
+    //
+    // This controller rewrites position and orientation from `orbit` EVERY frame, whether or not
+    // anyone is touching the controls. So anything else that poses the camera - scrubbing a keyed
+    // move to see where it is - was being undone on the very next frame, which looked like
+    // scrubbing simply not affecting the camera at all.
+    //
+    // Adopting the pose instead means the controller carries on from wherever the camera was put,
+    // so you can scrub to a moment, see it, and fly from there to fix the key. The gyro path is
+    // left alone: while a phone is driving, the phone owns the orientation.
+    const lastWritten = lastWrittenRef.current;
+    if (lastWritten && !targetCamQuatRef.current) {
+      const movedElsewhere =
+        camera.position.distanceToSquared(lastWritten.position) > 1e-10 ||
+        Math.abs(camera.quaternion.dot(lastWritten.quaternion)) < 0.9999995;
+      if (movedElsewhere) {
+        const fwd = new THREE.Vector3();
+        camera.getWorldDirection(fwd);
+        orbit.pitch = Math.asin(Math.max(-0.99, Math.min(0.99, fwd.y)));
+        orbit.yaw = Math.atan2(fwd.x, fwd.z);
+        // `orbit.target` is the point the rig orbits; the camera sits `dist` along the view
+        // direction from it, so work backwards or the adopt would shift the camera slightly.
+        orbit.target.copy(camera.position).addScaledVector(fwd, -orbit.dist);
+      }
+    }
+
     // Mirror the phone's camera.
     //
     // The phone runs this same controller locally -- gyro, its own heading
@@ -1095,6 +1128,10 @@ const UnrealCameraNavigation: React.FC<{
       camera.updateMatrixWorld(true);
     }
 
+    // Remember our own output, so next frame can tell our writes from somebody else's.
+    lastWrittenRef.current.position.copy(camera.position);
+    lastWrittenRef.current.quaternion.copy(camera.quaternion);
+
     // Broadcast Camera Pose if onCameraPose callback is provided
     if (onCameraPose) {
       const p = camera.position;
@@ -1118,6 +1155,12 @@ const _q0 = new THREE.Quaternion();
 const _q1 = new THREE.Quaternion();
 
 // 60 FPS Camera Trajectory Playback Driver
+/** What a keyed move is asking of the lens this frame, or null where it sets nothing. */
+export interface KeyedLensChannels {
+  focusDistance: number | null;
+  aperture: number | null;
+}
+
 /** Scratch for the keyed-take sampler; these run every frame and must not allocate. */
 const _sampled = createSampledCamera();
 const _rollQ = new THREE.Quaternion();
@@ -1128,10 +1171,26 @@ const CameraPlaybackDriver: React.FC<{
   currentTime: number;
   /** Fires with the sampled channels so the screen can drive focus and aperture from them. */
   onSampled?: (s: SampledCamera) => void;
-}> = ({ take, currentTime, onSampled }) => {
+  /**
+   * true while the take owns the camera - playback, and every frame of it.
+   *
+   * false is the authoring case: the camera is yours to fly, but scrubbing should still show you
+   * the move. So the pose is applied only on the frames where the time actually changed, and left
+   * alone otherwise. Applying every frame there would fight the flight controls; applying never
+   * is why scrubbing moved the actors and not the camera.
+   */
+  continuous?: boolean;
+  /** Written every frame so the depth of field pass can follow a keyed rack focus. */
+  lensRef?: React.MutableRefObject<KeyedLensChannels>;
+}> = ({ take, currentTime, onSampled, continuous = true, lensRef }) => {
   const { camera } = useThree();
+  const appliedTimeRef = useRef<number | null>(null);
 
   useFrame(() => {
+    if (!continuous) {
+      if (appliedTimeRef.current === currentTime) return;
+      appliedTimeRef.current = currentTime;
+    }
     const kfs = take.keyframes;
     if (!kfs || kfs.length === 0) return;
 
@@ -1139,7 +1198,14 @@ const CameraPlaybackDriver: React.FC<{
 
     // A hand-keyed take is sampled through its spline and easing instead of walked between keys.
     // Recorded takes fall straight through to the code below, unchanged.
-    if (sampleCameraTake(take, currentTime, _sampled)) {
+    const keyed = sampleCameraTake(take, currentTime, _sampled);
+    if (!keyed && lensRef) {
+      // Not a keyed move: drop any lens values left over from one, or the last rack focus would
+      // stay clamped on for every take after it.
+      lensRef.current.focusDistance = null;
+      lensRef.current.aperture = null;
+    }
+    if (keyed) {
       camera.position.copy(_sampled.position);
       camera.quaternion.copy(_sampled.quaternion);
       if (_sampled.roll !== null) {
@@ -1150,6 +1216,10 @@ const CameraPlaybackDriver: React.FC<{
       if (_sampled.fov !== null && pCam.isPerspectiveCamera && Math.abs(pCam.fov - _sampled.fov) > 0.01) {
         pCam.fov = _sampled.fov;
         pCam.updateProjectionMatrix();
+      }
+      if (lensRef) {
+        lensRef.current.focusDistance = _sampled.focusDistance;
+        lensRef.current.aperture = _sampled.aperture;
       }
       camera.updateMatrixWorld(true);
       onSampled?.(_sampled);
@@ -1352,7 +1422,9 @@ const CanvasPublisher: React.FC<{ onCanvasReady?: (canvas: HTMLCanvasElement) =>
 const CinematicDepthOfField: React.FC<{
   config?: DepthOfFieldConfig;
   onAutoFocusDistance?: (distance: number) => void;
-}> = ({ config, onAutoFocusDistance }) => {
+  /** A keyed move's lens channels. When it sets one, it wins over the manual control. */
+  lensRef?: React.MutableRefObject<KeyedLensChannels>;
+}> = ({ config, onAutoFocusDistance, lensRef }) => {
   const { gl, scene, camera, size } = useThree();
   const smoothedFocusRef = useRef<number>(config?.focusDistance ?? 3.5);
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
@@ -1514,8 +1586,14 @@ const CinematicDepthOfField: React.FC<{
 
     const pCam = camera as THREE.PerspectiveCamera;
 
-    // Real-time Autofocus raycasting from camera center
-    if (config?.autoFocus) {
+    // A keyed rack focus outranks both autofocus and the manual dial: the move was authored to
+    // land focus somewhere at a particular moment, and nothing should be second-guessing it.
+    const keyedFocus = lensRef?.current.focusDistance ?? null;
+    const keyedAperture = lensRef?.current.aperture ?? null;
+
+    if (keyedFocus !== null && keyedFocus > 0) {
+      smoothedFocusRef.current = keyedFocus;
+    } else if (config?.autoFocus) {
       raycasterRef.current.setFromCamera(centerVec2.current, camera);
       const intersects = raycasterRef.current.intersectObjects(scene.children, true);
       const hit = intersects.find(
@@ -1544,7 +1622,8 @@ const CinematicDepthOfField: React.FC<{
     dofMaterial.uniforms.uFar.value = pCam.far;
     dofMaterial.uniforms.uFocusDistance.value = smoothedFocusRef.current;
     dofMaterial.uniforms.uFocalLengthMm.value = config?.focalLengthMm || 35.0;
-    dofMaterial.uniforms.uAperture.value = config?.aperture || 2.8;
+    dofMaterial.uniforms.uAperture.value =
+      keyedAperture !== null && keyedAperture > 0 ? keyedAperture : config?.aperture || 2.8;
     dofMaterial.uniforms.uBokehScale.value = config?.bokehScale || 1.0;
     dofMaterial.uniforms.uFocusPeaking.value = !!config?.focusPeaking;
 
@@ -1695,6 +1774,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   onRecordCameraFrame,
   isPlaybackTake = false,
   playbackTake = null,
+  followTake = false,
   keyCaptureTrigger = 0,
   onKeyCaptured,
   showCameraTrajectory = true,
@@ -1713,6 +1793,12 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   onAutoFocusDistance,
 }) => {
   const [isTransformDragging, setIsTransformDragging] = useState(false);
+  /**
+   * The lens values a keyed move is asking for this frame. A ref rather than state: focus moves
+   * every frame during a rack, and re-rendering the whole stage 60 times a second to carry one
+   * number would be absurd.
+   */
+  const keyedLensRef = useRef<KeyedLensChannels>({ focusDistance: null, aperture: null });
 
   return (
     <div className="w-full h-full relative overflow-hidden select-none">
@@ -1741,7 +1827,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         <CanvasPublisher onCanvasReady={onCanvasReady} />
         <CameraFovUpdater fov={cameraFov} />
         {dofConfig && dofConfig.enabled && dofConfig.aperture < 100 && (
-          <CinematicDepthOfField config={dofConfig} onAutoFocusDistance={onAutoFocusDistance} />
+          <CinematicDepthOfField config={dofConfig} onAutoFocusDistance={onAutoFocusDistance} lensRef={keyedLensRef} />
         )}
         <color attach="background" args={['#1c1c1e']} />
 
@@ -1967,8 +2053,14 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         />
 
         {/* Camera Playback Driver (Smoothly animates camera during take review) */}
-        {isPlaybackTake && playbackTake && (
-          <CameraPlaybackDriver take={playbackTake} currentTime={currentTimelineTime} />
+        {/* `followTake` is the authoring case: scrubbing moves the camera, flying still works. */}
+        {(isPlaybackTake || followTake) && playbackTake && (
+          <CameraPlaybackDriver
+            take={playbackTake}
+            currentTime={currentTimelineTime}
+            continuous={isPlaybackTake}
+            lensRef={keyedLensRef}
+          />
         )}
 
         <CameraKeyCapturer

@@ -14,6 +14,8 @@ import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
 import { CameraRemoteSocket, LinkStats } from '../../services/cameraRemoteService';
 import { stabilizeKeyframes } from '../../services/cameraStabilizer';
 import { DEFAULT_TENSION, insertKeyframe } from '../../services/cameraAnimation';
+import { KeyframeTimeline } from '../camera/KeyframeTimeline';
+import { KeyInspector } from '../camera/KeyInspector';
 import { useDialogueAudioSync } from '../../services/dialogueService';
 import qrcode from 'qrcode-generator';
 
@@ -58,15 +60,6 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const [focusPeaking, setFocusPeaking] = useState<boolean>(false);
   const [showFocusPullerMenu, setShowFocusPullerMenu] = useState<boolean>(false);
 
-  const dofConfig = useMemo<DepthOfFieldConfig>(() => ({
-    enabled: aperture !== 'OFF',
-    aperture: aperture === 'OFF' ? 999.0 : parseFloat(aperture.replace('f/', '')) || 2.8,
-    focusDistance: focusDistance,
-    focalLengthMm: parseInt(focalLength.replace('mm', '')) || 35,
-    autoFocus: focusMode === 'auto',
-    focusPeaking: focusPeaking,
-    bokehScale: 1.0,
-  }), [aperture, focusDistance, focalLength, focusMode, focusPeaking]);
 
   // Video Export State
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -110,6 +103,31 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
   const isKeyedTake = activeTake?.mode === 'keyed';
 
+  /** Does the move being edited actually key the lens? If so the shader has to be running. */
+  const keyedLens = useMemo(() => {
+    const keys = activeTake?.mode === 'keyed' ? activeTake.keyframes : [];
+    return {
+      focus: keys.some((k) => (k.focusDistance ?? 0) > 0),
+      iris: keys.some((k) => (k.aperture ?? 0) > 0),
+    };
+  }, [activeTake]);
+
+  const dofConfig = useMemo<DepthOfFieldConfig>(() => ({
+    // A keyed rack focus turns depth of field on by itself. Keying focus and seeing nothing
+    // happen because the IRIS control was left OFF is not a useful lesson.
+    enabled: aperture !== 'OFF' || keyedLens.focus || keyedLens.iris,
+    aperture:
+      aperture === 'OFF'
+        ? (keyedLens.iris || keyedLens.focus ? 2.8 : 999.0)
+        : parseFloat(aperture.replace('f/', '')) || 2.8,
+    focusDistance: focusDistance,
+    focalLengthMm: parseInt(focalLength.replace('mm', '')) || 35,
+    autoFocus: focusMode === 'auto',
+    focusPeaking: focusPeaking,
+    bokehScale: 1.0,
+  }), [aperture, focusDistance, focalLength, focusMode, focusPeaking, keyedLens]);
+
+
   // Master Timeline Animation State
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [timelineSec, setTimelineSec] = useState<number>(0);
@@ -120,14 +138,30 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   // ---- Hand-keyed camera moves ------------------------------------------------------------
   const [showKeyPanel, setShowKeyPanel] = useState<boolean>(false);
   const [keyCaptureTrigger, setKeyCaptureTrigger] = useState<number>(0);
+  /**
+   * When set, the next capture is filed at THIS time rather than the playhead's.
+   *
+   * That is what "re-take this key" means: correct where an existing key looks from without
+   * having to land the playhead exactly on it first.
+   */
+  const captureAtRef = useRef<number | null>(null);
   const [selectedKeyTime, setSelectedKeyTime] = useState<number | null>(null);
 
+  /**
+   * Edits the take being worked on AND writes it into the project.
+   *
+   * Takes only reach disk when something hands the new array to onUpdateProject - there is no
+   * effect watching this state. Every key edit goes through here, so this is the one place that
+   * has to remember, which is what it was not doing: keys survived until the screen was left.
+   */
   const updateActiveTake = useCallback(
     (change: (t: CameraTake) => CameraTake) => {
       if (!activeTake) return;
-      setTakes((prev) => prev.map((t) => (t.id === activeTake.id ? change(t) : t)));
+      const next = takes.map((t) => (t.id === activeTake.id ? change(t) : t));
+      setTakes(next);
+      onUpdateProject?.({ ...currentProject, cameraTakes: next });
     },
-    [activeTake]
+    [activeTake, takes, currentProject, onUpdateProject]
   );
 
   /** Starts an empty hand-keyed move and makes it the take being edited. */
@@ -142,7 +176,9 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       tension: DEFAULT_TENSION,
       fps: 60,
     };
-    setTakes((prev) => [...prev, keyed]);
+    const next = [...takes, keyed];
+    setTakes(next);
+    onUpdateProject?.({ ...currentProject, cameraTakes: next });
     setActiveTakeId(keyed.id);
     setViewMode('playback');
     setIsPlaying(false);
@@ -159,9 +195,12 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const handleKeyCaptured = useCallback(
     (frame: CameraKeyframe) => {
       if (!activeTake || activeTake.mode !== 'keyed') return;
-      const existing = activeTake.keyframes.find((k) => Math.abs(k.time - frame.time) <= 1e-3);
+      const time = captureAtRef.current ?? frame.time;
+      captureAtRef.current = null;
+      const existing = activeTake.keyframes.find((k) => Math.abs(k.time - time) <= 1e-3);
       const key: CameraKeyframe = {
         ...frame,
+        time,
         // Keep whatever shaping the old key at this time had; only the pose is being re-taken.
         ease: existing?.ease ?? 'ease-in-out',
         easeHandles: existing?.easeHandles,
@@ -176,11 +215,40 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         duration: Math.max(t.duration, keyframes[keyframes.length - 1].time),
       }));
       setSelectedKeyTime(key.time);
-      setToastMessage(existing ? `Key at ${key.time.toFixed(2)}s updated` : `Key set at ${key.time.toFixed(2)}s`);
+      setToastMessage(existing ? `Key at ${key.time.toFixed(2)}s re-taken` : `Key set at ${key.time.toFixed(2)}s`);
       setTimeout(() => setToastMessage(null), 2000);
     },
     [activeTake, updateActiveTake]
   );
+
+  /**
+   * Jump the playhead to the key before or after the current time, and select it.
+   *
+   * Scrubbing by hand never lands exactly on a key, and "exactly on it" is what re-taking and
+   * re-easing a key need - a hair off and Set Key makes a second key beside the first.
+   */
+  const goToAdjacentKey = useCallback(
+    (direction: 1 | -1) => {
+      const keys = activeTake?.keyframes || [];
+      if (keys.length === 0) return;
+      const EPS = 1e-3;
+      const target =
+        direction > 0
+          ? keys.find((k) => k.time > timelineSec + EPS)
+          : [...keys].reverse().find((k) => k.time < timelineSec - EPS);
+      if (!target) return;
+      setIsPlaying(false);
+      setTimelineSec(target.time);
+      setSelectedKeyTime(target.time);
+    },
+    [activeTake, timelineSec]
+  );
+
+  /** Replaces the selected key's pose with wherever the camera is now, keeping its time. */
+  const handleRetakeKey = (time: number) => {
+    captureAtRef.current = time;
+    setKeyCaptureTrigger((n) => n + 1);
+  };
 
   const handleDeleteKey = (time: number) => {
     updateActiveTake((t) => ({ ...t, keyframes: t.keyframes.filter((k) => k.time !== time) }));
@@ -208,6 +276,34 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     });
     setSelectedKeyTime(clamped);
   };
+
+  /** Play/pause, from the transport button or the spacebar. */
+  const togglePlay = useCallback(() => {
+    setIsPlaying((playing) => {
+      if (!playing && timelineSec >= effectiveDuration) setTimelineSec(0);
+      return !playing;
+    });
+  }, [timelineSec, effectiveDuration]);
+
+  /**
+   * Space starts and stops playback, and nothing else.
+   *
+   * Without this it did whatever the focused control did, because a button keeps focus after a
+   * click and the browser fires it again on space - so tapping space after pressing Set Key set
+   * another key. preventDefault also stops the page scrolling under the viewport.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' && e.key !== ' ') return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
+      e.preventDefault();
+      togglePlay();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [togglePlay]);
 
   // Keyframes buffer collected while recording
   const recordedFramesRef = useRef<CameraKeyframe[]>([]);
@@ -884,9 +980,19 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         cameraFov={currentFov}
         isRecordingCamera={isRecording}
         onRecordCameraFrame={handleRecordFrame}
-        // While keying, the camera must stay under your control even in playback mode - otherwise
-        // the take drives it and there is no way to fly somewhere and set the next key.
-        isPlaybackTake={viewMode === 'playback' && !(isKeyedTake && !isPlaying)}
+        // A keyed move ignores the live/playback switch entirely: playing means watch it, paused
+        // means fly the camera and set the next key. Tying it to playback mode meant pressing play
+        // while flying in live mode animated nothing, which is exactly backwards.
+        //
+        // Under two keys there is no move to watch, and handing the camera to a take that cannot
+        // drive it would just freeze it - so it stays flyable until there is something to play.
+        isPlaybackTake={
+          isKeyedTake ? isPlaying && (activeTake?.keyframes.length ?? 0) >= 2 : viewMode === 'playback'
+        }
+        // Paused on a keyed move: scrubbing shows the move, but the camera is still yours to fly
+        // to the next position and key. Without this, dragging the playhead moved the actors and
+        // left the camera behind.
+        followTake={isKeyedTake && !isPlaying && (activeTake?.keyframes.length ?? 0) >= 2}
         playbackTake={stabilizedTake}
         keyCaptureTrigger={keyCaptureTrigger}
         onKeyCaptured={handleKeyCaptured}
@@ -957,8 +1063,11 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
       {/* Cinematic Viewfinder HUD Overlay */}
       <div className="absolute inset-0 pointer-events-none p-4 pb-2 flex flex-col justify-between z-20">
-        {/* Top HUD Bar */}
-        <div className="flex justify-between items-start">
+        {/* Top HUD Bar
+            Everything that is a setting rather than a transport control lives on this one line:
+            pairing, keyframing, focus, iris, lens and ISO. They used to be spread along the bottom
+            bar, which is where the timeline needs the width. */}
+        <div className="flex justify-between items-start gap-3">
           {/* Left: Mode Switcher, Recording Status & Active Cast */}
           <div className="flex flex-col gap-2 pointer-events-auto">
             {/* Primary Mode Switcher Pills */}
@@ -1143,6 +1252,220 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                 {takes.length} {takes.length === 1 ? 'TAKE' : 'TAKES'} RECORDED
               </div>
             )}
+          </div>
+          {/* Right of the top row: pairing, keyframing and the lens controls, all one line. */}
+          <div className="flex items-center flex-wrap justify-end gap-2 pointer-events-auto">
+            {/* Left: Mobile Camera Pairing Button */}
+            <button
+              onClick={() => setShowQRPairing(true)}
+              className={`border px-3 py-2 rounded-xl backdrop-blur-md text-xs font-label-caps tracking-wider flex items-center gap-1.5 cursor-pointer shadow-lg whitespace-nowrap transition-colors ${
+                isPhoneConnected
+                  ? 'bg-[#4ade80]/15 border-[#4ade80] text-[#4ade80]'
+                  : 'bg-surface-container/90 border-outline-variant/40 hover:border-primary text-primary'
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  isPhoneConnected ? 'bg-[#4ade80] shadow-[0_0_6px_#4ade80]' : 'bg-primary'
+                }`}
+              />
+              {isPhoneConnected ? '📱 PHONE SYNCED' : 'PAIR PHONE'}
+            </button>
+
+            {/* Hand-keyed camera moves, as opposed to recording one by flying it. */}
+            <button
+              onClick={() => setShowKeyPanel((v) => !v)}
+              className={`border px-3 py-2 rounded-xl backdrop-blur-md text-xs font-label-caps tracking-wider flex items-center gap-1.5 cursor-pointer shadow-lg whitespace-nowrap transition-colors ${
+                showKeyPanel || isKeyedTake
+                  ? 'bg-primary/15 border-primary text-primary'
+                  : 'bg-surface-container/90 border-outline-variant/40 hover:border-primary text-on-surface-variant'
+              }`}
+              title="Build a camera move from keyframes instead of recording it"
+            >
+              <span className="material-symbols-outlined text-[15px]">linear_scale</span>
+              KEYFRAME
+            </button>
+
+
+            {/* Right: Focus Puller, Iris (DoF), Lens & ISO Selectors */}
+            <div className="flex items-center gap-2">
+              {/* Focus Puller & Depth of Field Controls */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowFocusPullerMenu(!showFocusPullerMenu)}
+                  className={`px-2 py-1 text-[11px] font-label-caps rounded-xl border flex items-center gap-1.5 cursor-pointer transition-all shadow-md ${
+                    showFocusPullerMenu || focusMode === 'manual' || focusPeaking
+                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/60 font-semibold'
+                      : 'bg-surface-container/90 text-on-surface-variant border-outline-variant/40 hover:text-on-surface'
+                  }`}
+                  title="Focus Puller & Depth of Field Engine"
+                >
+                  <span className="material-symbols-outlined text-[15px] text-cyan-400">center_focus_strong</span>
+                  <span>{focusMode === 'auto' ? `AF ${(autoFocusReadout || focusDistance).toFixed(1)}m` : `MF ${focusDistance.toFixed(1)}m`}</span>
+                </button>
+
+                {/* Floating Focus Puller HUD Box */}
+                {/* Opens downward. This button used to live on the bottom bar, where upward was
+                    the only direction that fitted; on the top row that ran off the screen. */}
+                {showFocusPullerMenu && (
+                  <div className="absolute top-full mt-2 right-0 w-64 bg-surface-container/95 backdrop-blur-xl border border-outline-variant/50 p-3 rounded-2xl shadow-2xl flex flex-col gap-2.5 z-40 animate-in fade-in slide-in-from-top-2 duration-150">
+                    <div className="flex justify-between items-center pb-1.5 border-b border-outline-variant/20">
+                      <div className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[16px] text-cyan-400">tune</span>
+                        <span className="font-label-caps text-[11px] text-cyan-300 font-bold uppercase tracking-wider">
+                          Cinema Focus Puller
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setShowFocusPullerMenu(false)}
+                        className="text-on-surface-variant hover:text-on-surface text-[12px] cursor-pointer"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    {/* Mode Toggle: Auto (Center Raycast) vs Manual (Rack Focus) */}
+                    <div className="flex items-center bg-surface-container-high/60 p-0.5 rounded-lg border border-outline-variant/30">
+                      <button
+                        onClick={() => setFocusMode('auto')}
+                        className={`flex-1 py-1 rounded text-[10px] font-label-caps transition-all cursor-pointer ${
+                          focusMode === 'auto'
+                            ? 'bg-cyan-500 text-black font-bold shadow'
+                            : 'text-on-surface-variant hover:text-on-surface'
+                        }`}
+                      >
+                        AUTOFOCUS (CENTER)
+                      </button>
+                      <button
+                        onClick={() => setFocusMode('manual')}
+                        className={`flex-1 py-1 rounded text-[10px] font-label-caps transition-all cursor-pointer ${
+                          focusMode === 'manual'
+                            ? 'bg-cyan-500 text-black font-bold shadow'
+                            : 'text-on-surface-variant hover:text-on-surface'
+                        }`}
+                      >
+                        MANUAL FOCUS
+                      </button>
+                    </div>
+
+                    {/* Focus Distance Slider (Manual Mode) */}
+                    <div className="space-y-1">
+                      <div className="flex justify-between items-center text-[10px] font-mono">
+                        <span className="text-on-surface-variant">Focus Plane Distance:</span>
+                        <span className="text-cyan-300 font-bold">
+                          {(focusMode === 'auto' ? autoFocusReadout || focusDistance : focusDistance).toFixed(2)}m
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.5}
+                        max={25.0}
+                        step={0.1}
+                        disabled={focusMode === 'auto'}
+                        value={focusDistance}
+                        onChange={(e) => {
+                          setFocusDistance(parseFloat(e.target.value));
+                          if (focusMode === 'auto') setFocusMode('manual');
+                        }}
+                        className="w-full h-1.5 bg-surface-variant rounded-lg appearance-none cursor-pointer accent-cyan-400 disabled:opacity-40"
+                      />
+                      {/* Quick Rack Focus Distance Presets */}
+                      <div className="flex items-center justify-between gap-1 pt-0.5">
+                        {[
+                          { label: 'Close', dist: 1.5 },
+                          { label: 'Med', dist: 3.0 },
+                          { label: 'Body', dist: 5.0 },
+                          { label: 'Stage', dist: 10.0 },
+                          { label: 'Inf', dist: 25.0 },
+                        ].map((p) => (
+                          <button
+                            key={p.label}
+                            onClick={() => {
+                              setFocusDistance(p.dist);
+                              setFocusMode('manual');
+                            }}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-mono border transition-colors cursor-pointer ${
+                              focusMode === 'manual' && Math.abs(focusDistance - p.dist) < 0.2
+                                ? 'bg-cyan-400/20 text-cyan-300 border-cyan-400/50'
+                                : 'text-on-surface-variant border-outline-variant/30 hover:text-on-surface'
+                            }`}
+                          >
+                            {p.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Focus Peaking Assist Toggle */}
+                    <div className="flex items-center justify-between pt-1.5 border-t border-outline-variant/20">
+                      <span className="text-[10px] text-on-surface-variant flex items-center gap-1 font-mono">
+                        <span className="material-symbols-outlined text-[13px] text-emerald-400">filter_center_focus</span>
+                        Focus Peaking (Assist)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setFocusPeaking(!focusPeaking)}
+                        className={`px-2 py-0.5 rounded text-[9px] font-label-caps font-bold transition-colors cursor-pointer border ${
+                          focusPeaking
+                            ? 'bg-emerald-500/20 text-emerald-400 border-emerald-400/50'
+                            : 'bg-surface-container-high/60 text-on-surface-variant border-outline-variant/30'
+                        }`}
+                      >
+                        {focusPeaking ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* IRIS / Aperture (DoF) */}
+              <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
+                <span className="font-label-caps text-[9px] text-on-surface-variant px-1" title="Aperture / Depth of Field (Circle of Confusion)">IRIS</span>
+                {['f/1.4', 'f/2.0', 'f/2.8', 'f/4.0', 'f/8.0', 'OFF'].map((val) => (
+                  <button
+                    key={val}
+                    onClick={() => setAperture(val)}
+                    className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
+                      aperture === val ? 'bg-amber-400 text-black font-bold shadow' : 'text-on-surface-variant hover:text-amber-300'
+                    }`}
+                  >
+                    {val}
+                  </button>
+                ))}
+              </div>
+
+              {/* Lens Selector */}
+              <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
+                <span className="font-label-caps text-[9px] text-on-surface-variant px-1">LENS</span>
+                {['18mm', '24mm', '35mm', '50mm', '85mm', '135mm'].map((fl) => (
+                  <button
+                    key={fl}
+                    onClick={() => setFocalLength(fl)}
+                    className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
+                      focalLength === fl ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
+                    }`}
+                  >
+                    {fl}
+                  </button>
+                ))}
+              </div>
+
+              {/* ISO Selector */}
+              <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
+                <span className="font-label-caps text-[9px] text-on-surface-variant px-1">ISO</span>
+                {['400', '800', '1600'].map((val) => (
+                  <button
+                    key={val}
+                    onClick={() => setIso(val)}
+                    className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
+                      iso === val ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
+                    }`}
+                  >
+                    {val}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1329,41 +1652,13 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
           </div>
         </div>
 
-        {/* Bottom Floating Control Bar - Unified Single Row Anchored at Bottom */}
-        <div className="w-full flex items-center justify-between gap-3 pointer-events-auto pb-1">
-          {/* Left: Mobile Camera Pairing Button */}
-          <button
-            onClick={() => setShowQRPairing(true)}
-            className={`border px-3 py-2 rounded-xl backdrop-blur-md text-xs font-label-caps tracking-wider flex items-center gap-1.5 cursor-pointer shadow-lg whitespace-nowrap transition-colors ${
-              isPhoneConnected
-                ? 'bg-[#4ade80]/15 border-[#4ade80] text-[#4ade80]'
-                : 'bg-surface-container/90 border-outline-variant/40 hover:border-primary text-primary'
-            }`}
-          >
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isPhoneConnected ? 'bg-[#4ade80] shadow-[0_0_6px_#4ade80]' : 'bg-primary'
-              }`}
-            />
-            {isPhoneConnected ? '📱 PHONE SYNCED' : 'PAIR PHONE'}
-          </button>
-
-          {/* Hand-keyed camera moves, as opposed to recording one by flying it. */}
-          <button
-            onClick={() => setShowKeyPanel((v) => !v)}
-            className={`border px-3 py-2 rounded-xl backdrop-blur-md text-xs font-label-caps tracking-wider flex items-center gap-1.5 cursor-pointer shadow-lg whitespace-nowrap transition-colors ${
-              showKeyPanel || isKeyedTake
-                ? 'bg-primary/15 border-primary text-primary'
-                : 'bg-surface-container/90 border-outline-variant/40 hover:border-primary text-on-surface-variant'
-            }`}
-            title="Build a camera move from keyframes instead of recording it"
-          >
-            <span className="material-symbols-outlined text-[15px]">linear_scale</span>
-            KEYFRAME
-          </button>
-
-          {/* Center: Unified Play & Record Bar */}
-          <div className="flex-1 max-w-3xl bg-surface-container/95 border border-outline-variant/40 rounded-xl px-3 py-2 backdrop-blur-xl shadow-2xl flex items-center gap-3">
+        {/* One card under the picture: transport, then the keys, then the curve.
+            They were three floating pieces; a camera move is one thing, so it reads as one. */}
+        <div className="w-full flex justify-center pointer-events-auto pb-1">
+          <div className="w-full max-w-6xl bg-surface-container/95 border border-outline-variant/40 rounded-xl backdrop-blur-xl shadow-2xl overflow-hidden">
+            {/* Transport */}
+            <div className="flex items-center gap-3 px-3 py-2">
+          <div className="flex-1 flex items-center gap-3 min-w-0">
             {/* Record / Stop Button right next to play controls */}
             {viewMode === 'live' ? (
               <button
@@ -1429,12 +1724,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
             {/* Play/Pause Button */}
             <button
-              onClick={() => {
-                if (!isPlaying && timelineSec >= effectiveDuration) {
-                  setTimelineSec(0);
-                }
-                setIsPlaying(!isPlaying);
-              }}
+              onClick={togglePlay}
               className={`p-1.5 rounded-lg border transition-colors flex items-center justify-center cursor-pointer ${
                 viewMode === 'playback'
                   ? 'bg-cyan-500/20 hover:bg-cyan-500 hover:text-background text-cyan-300 border-cyan-500/50'
@@ -1504,340 +1794,58 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             )}
           </div>
 
-          {/* Right: Focus Puller, Iris (DoF), Lens & ISO Selectors */}
-          <div className="flex items-center gap-2">
-            {/* Focus Puller & Depth of Field Controls */}
-            <div className="relative">
-              <button
-                onClick={() => setShowFocusPullerMenu(!showFocusPullerMenu)}
-                className={`px-2 py-1 text-[11px] font-label-caps rounded-xl border flex items-center gap-1.5 cursor-pointer transition-all shadow-md ${
-                  showFocusPullerMenu || focusMode === 'manual' || focusPeaking
-                    ? 'bg-cyan-500/20 text-cyan-300 border-cyan-400/60 font-semibold'
-                    : 'bg-surface-container/90 text-on-surface-variant border-outline-variant/40 hover:text-on-surface'
-                }`}
-                title="Focus Puller & Depth of Field Engine"
-              >
-                <span className="material-symbols-outlined text-[15px] text-cyan-400">center_focus_strong</span>
-                <span>{focusMode === 'auto' ? `AF ${(autoFocusReadout || focusDistance).toFixed(1)}m` : `MF ${focusDistance.toFixed(1)}m`}</span>
-              </button>
-
-              {/* Floating Focus Puller HUD Box */}
-              {showFocusPullerMenu && (
-                <div className="absolute bottom-12 right-0 w-64 bg-surface-container/95 backdrop-blur-xl border border-outline-variant/50 p-3 rounded-2xl shadow-2xl flex flex-col gap-2.5 z-40 animate-in fade-in slide-in-from-bottom-2 duration-150">
-                  <div className="flex justify-between items-center pb-1.5 border-b border-outline-variant/20">
-                    <div className="flex items-center gap-1.5">
-                      <span className="material-symbols-outlined text-[16px] text-cyan-400">tune</span>
-                      <span className="font-label-caps text-[11px] text-cyan-300 font-bold uppercase tracking-wider">
-                        Cinema Focus Puller
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => setShowFocusPullerMenu(false)}
-                      className="text-on-surface-variant hover:text-on-surface text-[12px] cursor-pointer"
-                    >
-                      ✕
-                    </button>
-                  </div>
-
-                  {/* Mode Toggle: Auto (Center Raycast) vs Manual (Rack Focus) */}
-                  <div className="flex items-center bg-surface-container-high/60 p-0.5 rounded-lg border border-outline-variant/30">
-                    <button
-                      onClick={() => setFocusMode('auto')}
-                      className={`flex-1 py-1 rounded text-[10px] font-label-caps transition-all cursor-pointer ${
-                        focusMode === 'auto'
-                          ? 'bg-cyan-500 text-black font-bold shadow'
-                          : 'text-on-surface-variant hover:text-on-surface'
-                      }`}
-                    >
-                      AUTOFOCUS (CENTER)
-                    </button>
-                    <button
-                      onClick={() => setFocusMode('manual')}
-                      className={`flex-1 py-1 rounded text-[10px] font-label-caps transition-all cursor-pointer ${
-                        focusMode === 'manual'
-                          ? 'bg-cyan-500 text-black font-bold shadow'
-                          : 'text-on-surface-variant hover:text-on-surface'
-                      }`}
-                    >
-                      MANUAL FOCUS
-                    </button>
-                  </div>
-
-                  {/* Focus Distance Slider (Manual Mode) */}
-                  <div className="space-y-1">
-                    <div className="flex justify-between items-center text-[10px] font-mono">
-                      <span className="text-on-surface-variant">Focus Plane Distance:</span>
-                      <span className="text-cyan-300 font-bold">
-                        {(focusMode === 'auto' ? autoFocusReadout || focusDistance : focusDistance).toFixed(2)}m
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={0.5}
-                      max={25.0}
-                      step={0.1}
-                      disabled={focusMode === 'auto'}
-                      value={focusDistance}
-                      onChange={(e) => {
-                        setFocusDistance(parseFloat(e.target.value));
-                        if (focusMode === 'auto') setFocusMode('manual');
-                      }}
-                      className="w-full h-1.5 bg-surface-variant rounded-lg appearance-none cursor-pointer accent-cyan-400 disabled:opacity-40"
-                    />
-                    {/* Quick Rack Focus Distance Presets */}
-                    <div className="flex items-center justify-between gap-1 pt-0.5">
-                      {[
-                        { label: 'Close', dist: 1.5 },
-                        { label: 'Med', dist: 3.0 },
-                        { label: 'Body', dist: 5.0 },
-                        { label: 'Stage', dist: 10.0 },
-                        { label: 'Inf', dist: 25.0 },
-                      ].map((p) => (
-                        <button
-                          key={p.label}
-                          onClick={() => {
-                            setFocusDistance(p.dist);
-                            setFocusMode('manual');
-                          }}
-                          className={`px-1.5 py-0.5 rounded text-[9px] font-mono border transition-colors cursor-pointer ${
-                            focusMode === 'manual' && Math.abs(focusDistance - p.dist) < 0.2
-                              ? 'bg-cyan-400/20 text-cyan-300 border-cyan-400/50'
-                              : 'text-on-surface-variant border-outline-variant/30 hover:text-on-surface'
-                          }`}
-                        >
-                          {p.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Focus Peaking Assist Toggle */}
-                  <div className="flex items-center justify-between pt-1.5 border-t border-outline-variant/20">
-                    <span className="text-[10px] text-on-surface-variant flex items-center gap-1 font-mono">
-                      <span className="material-symbols-outlined text-[13px] text-emerald-400">filter_center_focus</span>
-                      Focus Peaking (Assist)
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setFocusPeaking(!focusPeaking)}
-                      className={`px-2 py-0.5 rounded text-[9px] font-label-caps font-bold transition-colors cursor-pointer border ${
-                        focusPeaking
-                          ? 'bg-emerald-500/20 text-emerald-400 border-emerald-400/50'
-                          : 'bg-surface-container-high/60 text-on-surface-variant border-outline-variant/30'
-                      }`}
-                    >
-                      {focusPeaking ? 'ON' : 'OFF'}
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
 
-            {/* IRIS / Aperture (DoF) */}
-            <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
-              <span className="font-label-caps text-[9px] text-on-surface-variant px-1" title="Aperture / Depth of Field (Circle of Confusion)">IRIS</span>
-              {['f/1.4', 'f/2.0', 'f/2.8', 'f/4.0', 'f/8.0', 'OFF'].map((val) => (
-                <button
-                  key={val}
-                  onClick={() => setAperture(val)}
-                  className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
-                    aperture === val ? 'bg-amber-400 text-black font-bold shadow' : 'text-on-surface-variant hover:text-amber-300'
-                  }`}
-                >
-                  {val}
-                </button>
-              ))}
-            </div>
-
-            {/* Lens Selector */}
-            <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
-              <span className="font-label-caps text-[9px] text-on-surface-variant px-1">LENS</span>
-              {['18mm', '24mm', '35mm', '50mm', '85mm', '135mm'].map((fl) => (
-                <button
-                  key={fl}
-                  onClick={() => setFocalLength(fl)}
-                  className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
-                    focalLength === fl ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
-                  }`}
-                >
-                  {fl}
-                </button>
-              ))}
-            </div>
-
-            {/* ISO Selector */}
-            <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
-              <span className="font-label-caps text-[9px] text-on-surface-variant px-1">ISO</span>
-              {['400', '800', '1600'].map((val) => (
-                <button
-                  key={val}
-                  onClick={() => setIso(val)}
-                  className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
-                    iso === val ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
-                  }`}
-                >
-                  {val}
-                </button>
-              ))}
-            </div>
+            {/* Keys and curve, in the same card so time reads straight down it. */}
+            {showKeyPanel && (
+              <div className="border-t border-outline-variant/30">
+                {!isKeyedTake ? (
+                  <div className="px-3 py-2.5 flex items-center justify-between gap-4">
+                    <p className="text-[11px] text-on-surface-variant leading-snug">
+                      A keyed move is built from positions you place yourself: fly the camera, set a key,
+                      move the playhead, set another. The path between them is a curve, and the timing is yours.
+                    </p>
+                    <button
+                      onClick={handleNewKeyedTake}
+                      className="shrink-0 px-4 py-2 bg-primary/15 border border-primary/50 text-primary rounded-lg text-xs font-label-caps tracking-wider hover:bg-primary/25 transition-colors cursor-pointer"
+                    >
+                      New Keyed Move
+                    </button>
+                  </div>
+                ) : (
+                  <KeyframeTimeline
+                    take={activeTake!}
+                    currentTime={timelineSec}
+                    selectedKeyTime={selectedKeyTime}
+                    onSelectKey={setSelectedKeyTime}
+                    onMoveKey={handleMoveKey}
+                    onChangeKey={handleKeyChange}
+                    onScrub={(t) => { setIsPlaying(false); setTimelineSec(t); }}
+                  />
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Keyframe panel: build a move by placing keys rather than flying it live. */}
-      {showKeyPanel && (
-        <div className="fixed right-4 top-32 bottom-28 z-40 w-[320px] bg-surface-container/95 border border-outline-variant/50 rounded-xl backdrop-blur-xl shadow-2xl flex flex-col overflow-hidden pointer-events-auto">
-          <div className="flex items-center justify-between px-md py-2.5 border-b border-outline-variant/40 shrink-0">
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-primary text-[18px]">linear_scale</span>
-              <span className="text-xs font-label-caps tracking-wider text-on-surface">Keyframed Move</span>
-            </div>
-            <button
-              onClick={() => setShowKeyPanel(false)}
-              className="p-1 rounded hover:bg-surface-container-highest text-on-surface-variant cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-[18px]">close</span>
-            </button>
-          </div>
 
-          {!isKeyedTake ? (
-            <div className="p-md flex flex-col gap-sm">
-              <p className="text-[11px] text-on-surface-variant leading-relaxed">
-                A keyed move is built from a few positions you place yourself: fly the camera, set a
-                key, move the playhead, set another. The path between them is a curve you can shape,
-                and the timing is yours to ease.
-              </p>
-              <button
-                onClick={handleNewKeyedTake}
-                className="w-full py-2 bg-primary/15 border border-primary/50 text-primary rounded-lg text-xs font-label-caps tracking-wider hover:bg-primary/25 transition-colors cursor-pointer"
-              >
-                New Keyed Move
-              </button>
-            </div>
-          ) : (
-            <>
-              <div className="p-md flex flex-col gap-sm border-b border-outline-variant/30 shrink-0">
-                <button
-                  onClick={() => setKeyCaptureTrigger((n) => n + 1)}
-                  className="w-full py-2.5 bg-primary text-surface-container-lowest rounded-lg text-xs font-label-caps tracking-wider font-bold hover:bg-primary/90 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  <span className="material-symbols-outlined text-[16px]">vpn_key</span>
-                  Set Key at {timelineSec.toFixed(2)}s
-                </button>
-                <p className="text-[10px] text-on-surface-variant leading-snug">
-                  Pause, fly the camera where you want it, then set a key. Setting one at a time that
-                  already has a key replaces it.
-                </p>
-
-                <div className="flex items-center gap-2 pt-1">
-                  <span className="text-[10px] font-label-caps text-on-surface-variant w-16 shrink-0">Curve</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={activeTake?.tension ?? DEFAULT_TENSION}
-                    onChange={(e) => updateActiveTake((t) => ({ ...t, tension: Number(e.target.value) }))}
-                    className="flex-1 accent-primary cursor-pointer"
-                  />
-                  <span className="text-[10px] font-mono text-on-surface w-8 text-right">
-                    {(activeTake?.tension ?? DEFAULT_TENSION).toFixed(2)}
-                  </span>
-                </div>
-                <p className="text-[10px] text-on-surface-variant leading-snug -mt-1">
-                  0 walks in straight lines between keys; higher rounds the corners.
-                </p>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-md flex flex-col gap-1.5">
-                {(activeTake?.keyframes.length ?? 0) === 0 ? (
-                  <p className="text-[11px] text-on-surface-variant text-center py-4">
-                    No keys yet. Position the camera and press Set Key.
-                  </p>
-                ) : (
-                  activeTake!.keyframes.map((k, i) => (
-                    <div
-                      key={`${k.time}_${i}`}
-                      className={`rounded-lg border p-2 flex flex-col gap-1.5 cursor-pointer transition-colors ${
-                        selectedKeyTime === k.time
-                          ? 'border-primary bg-primary/10'
-                          : 'border-outline-variant/40 bg-surface-container-low hover:border-outline-variant'
-                      }`}
-                      onClick={() => {
-                        setSelectedKeyTime(k.time);
-                        setTimelineSec(k.time);
-                        setIsPlaying(false);
-                      }}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-mono text-on-surface">KEY {i + 1}</span>
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="number"
-                            step={0.1}
-                            min={0}
-                            value={k.time}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => handleMoveKey(k.time, Number(e.target.value))}
-                            className="w-16 bg-surface-container-lowest border border-outline-variant/50 rounded px-1 py-0.5 text-[11px] font-mono text-on-surface text-right outline-none focus:border-primary"
-                          />
-                          <span className="text-[10px] text-on-surface-variant">s</span>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleDeleteKey(k.time); }}
-                            className="p-0.5 rounded hover:bg-red-500/20 text-on-surface-variant hover:text-red-400 cursor-pointer"
-                            title="Delete this key"
-                          >
-                            <span className="material-symbols-outlined text-[15px]">delete</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] text-on-surface-variant w-10 shrink-0">Ease</span>
-                        <select
-                          value={k.ease || 'linear'}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => handleKeyChange(k.time, { ease: e.target.value as any })}
-                          className="flex-1 bg-surface-container-lowest border border-outline-variant/50 rounded px-1 py-0.5 text-[10px] text-on-surface outline-none focus:border-primary cursor-pointer"
-                        >
-                          <option value="linear">Linear — constant speed</option>
-                          <option value="ease-in">Ease in — starts slow</option>
-                          <option value="ease-out">Ease out — arrives slow</option>
-                          <option value="ease-in-out">Ease in & out — both</option>
-                          <option value="bezier">Bezier — custom</option>
-                          <option value="hold">Hold — wait, then cut</option>
-                        </select>
-                      </div>
-
-                      {k.fov !== undefined && (
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] text-on-surface-variant w-10 shrink-0">Lens</span>
-                          <input
-                            type="range"
-                            min={10}
-                            max={100}
-                            step={1}
-                            value={k.fov}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => handleKeyChange(k.time, { fov: Number(e.target.value) })}
-                            className="flex-1 accent-primary cursor-pointer"
-                          />
-                          <span className="text-[10px] font-mono text-on-surface w-10 text-right">
-                            {Math.round(k.fov)}°
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div className="px-md py-2 border-t border-outline-variant/30 text-[10px] text-on-surface-variant shrink-0">
-                {activeTake!.keyframes.length} key{activeTake!.keyframes.length === 1 ? '' : 's'} ·{' '}
-                {activeTake!.duration.toFixed(2)}s · press play to watch it
-              </div>
-            </>
-          )}
+      {/* The selected key's values, floated bottom-left on its own.
+          Kept out of the timeline card so editing a key never costs the viewport any height. */}
+      {showKeyPanel && isKeyedTake && activeTake && (
+        <div className="fixed left-4 bottom-4 z-40 pointer-events-none">
+          <KeyInspector
+            take={activeTake}
+            selectedKey={activeTake.keyframes.find((k) => k.time === selectedKeyTime) || null}
+            keyIndex={activeTake.keyframes.findIndex((k) => k.time === selectedKeyTime)}
+            onChangeKey={handleKeyChange}
+            onMoveKey={handleMoveKey}
+            onDeleteKey={handleDeleteKey}
+            onSetKey={() => setKeyCaptureTrigger((n) => n + 1)}
+            onRetakeKey={handleRetakeKey}
+            onGoToKey={goToAdjacentKey}
+            onTensionChange={(tension) => updateActiveTake((t) => ({ ...t, tension }))}
+          />
         </div>
       )}
 
