@@ -2056,32 +2056,6 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
 
         {/* Input Bar */}
         <div className="w-full bg-surface-container-high/90 backdrop-blur-xl border border-outline-variant/60 p-xs rounded-xl shadow-2xl flex items-center justify-between gap-sm">
-          {/* Dual Engine Selector Switch */}
-          <div className="flex items-center bg-surface-container/80 p-[2px] rounded-lg border border-outline-variant/30 shrink-0">
-            <button
-              onClick={() => setSelectedEngine('trellis')}
-              className={`px-sm py-xs rounded text-[10px] font-label-caps transition-all cursor-pointer ${
-                selectedEngine === 'trellis'
-                  ? 'bg-primary text-background font-bold shadow'
-                  : 'text-on-surface-variant hover:text-on-surface'
-              }`}
-              title="TRELLIS: Generates full-color PBR textured 3D models"
-            >
-              TRELLIS (TEXTURED)
-            </button>
-            <button
-              onClick={() => setSelectedEngine('hunyuan3d')}
-              className={`px-sm py-xs rounded text-[10px] font-label-caps transition-all cursor-pointer ${
-                selectedEngine === 'hunyuan3d'
-                  ? 'bg-primary text-background font-bold shadow'
-                  : 'text-on-surface-variant hover:text-on-surface'
-              }`}
-              title="Hunyuan3D-2: Geometry Mesh (Shape Only on ZeroGPU)"
-            >
-              HUNYUAN 3D (SHAPE)
-            </button>
-          </div>
-
           {/* Mesh quality — TRELLIS only; Hunyuan3D runs its own fixed pipeline */}
           {selectedEngine === 'trellis' && (
             <div
@@ -2166,33 +2140,6 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           >
             <span className="material-symbols-outlined text-[14px]">auto_awesome</span>
             GENERATE 3D MODEL
-          </button>
-        </div>
-
-        {/* Secondary Navigation Links */}
-        <div className="flex items-center gap-md mt-xs text-[11px] font-label-caps text-on-surface-variant">
-          <button
-            onClick={() => setShowHunyuanWorldModal(true)}
-            className="flex items-center gap-xs text-primary hover:underline cursor-pointer font-bold"
-          >
-            <span className="material-symbols-outlined text-[14px]">domain</span>
-            🏛️ HunyuanWorld 3D Scene Reconstruction (3DGS)
-          </button>
-          <div className="w-[1px] h-3 bg-outline-variant/30" />
-          <button
-            onClick={() => setShowPanoramaModal(true)}
-            className="flex items-center gap-xs hover:text-on-surface cursor-pointer font-medium"
-          >
-            <span className="material-symbols-outlined text-[14px]">360</span>
-            360° AI Skybox
-          </button>
-          <div className="w-[1px] h-3 bg-outline-variant/30" />
-          <button
-            onClick={() => setShowImagePicker(true)}
-            className="flex items-center gap-xs hover:text-on-surface cursor-pointer"
-          >
-            <span className="material-symbols-outlined text-[14px]">image</span>
-            Sample Prop Presets
           </button>
         </div>
       </div>
@@ -2440,10 +2387,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           {generatedPreviewImage && (
             <div className="bg-surface-container-high/95 border-2 border-primary/60 p-md rounded-2xl flex flex-col gap-md shadow-2xl animate-fade-in">
               <div className="flex items-center justify-between border-b border-outline-variant/30 pb-xs">
-                <div className="flex items-center gap-xs text-primary font-label-caps text-xs font-bold">
-                  <span className="material-symbols-outlined text-[18px]">collections</span>
-                  4 AI REFERENCE CANDIDATES — CHOOSE YOUR PREFERRED SHAPE & ANGLE
-                </div>
+                <div />
                 <span className="text-[10px] font-mono text-on-surface-variant font-medium">
                   Active: #{selectedPreviewImageIndex + 1} of {generatedPreviewImages.length || 1}
                 </span>
@@ -2497,11 +2441,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                 </div>
                 <div className="flex-1 flex flex-col justify-between h-full gap-sm w-full">
                   <div>
-                    <div className="flex items-center gap-xs text-primary font-label-caps text-xs font-bold">
-                      <span className="material-symbols-outlined text-[18px]">verified</span>
-                      SELECTED CANDIDATE READY FOR 3D MESH RECONSTRUCTION
-                    </div>
-                    <p className="text-xs text-on-surface-variant font-medium mt-1 line-clamp-2 italic bg-surface-container-low/60 p-xs rounded-lg border border-outline-variant/30">
+                    <p className="text-xs text-on-surface-variant font-medium line-clamp-2 italic bg-surface-container-low/60 p-xs rounded-lg border border-outline-variant/30">
                       "{generatedPreviewPrompt}"
                     </p>
                   </div>
@@ -2513,7 +2453,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                         title="TRELLIS extracts full-color PBR materials and textures into the 3D model"
                       >
                         <span className="material-symbols-outlined text-[18px]">palette</span>
-                        ✓ SEND TO TRELLIS (COLOR & TEXTURE)
+                        ✓ WITH TEXTURE
                       </button>
                       <button
                         onClick={handleAcceptAndSendToHunyuan}
@@ -2521,27 +2461,15 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                         title="Hunyuan3D-2 outputs clean high-poly geometry"
                       >
                         <span className="material-symbols-outlined text-[18px]">view_in_ar</span>
-                        ✓ SEND TO HUNYUAN (SHAPE ONLY)
+                        ✓ WITHOUT TEXTURE
                       </button>
                     </div>
-                    <p className="text-[10px] text-on-surface-variant/80 text-center font-sans mt-[2px]">
-                      ✨ <strong>TRELLIS</strong> outputs full colors & textures. <strong>Hunyuan 3D</strong> outputs clean geometry.
-                    </p>
                     <div className="flex gap-xs mt-1">
                       <button
                         onClick={handleAcceptReferenceOnly}
                         className="flex-1 text-on-surface hover:text-primary bg-surface-container hover:bg-surface-container-high border border-outline-variant/50 font-label-caps text-[10px] font-semibold py-1.5 px-sm rounded-lg transition-colors cursor-pointer text-center"
                       >
                         Accept as Reference Only
-                      </button>
-                      <button
-                        onClick={() => {
-                          setGeneratedPreviewImage(null);
-                          setGeneratedPreviewImages([]);
-                        }}
-                        className="text-on-surface-variant hover:text-error bg-surface-container hover:bg-surface-container-high border border-outline-variant/50 font-label-caps text-[10px] py-1.5 px-sm rounded-lg transition-colors cursor-pointer"
-                      >
-                        ↺ Regenerate (4 New)
                       </button>
                     </div>
                   </div>
