@@ -130,6 +130,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   // Naming belongs to saving, so SAVE STAGE opens this and the Load dialog no longer carries it.
   const [showSaveStageModal, setShowSaveStageModal] = useState<boolean>(false);
   const [stageSaveName, setStageSaveName] = useState<string>('');
+  // The library stage last loaded or saved here, so SAVE STAGE can offer to update it in place.
+  const [activeStage, setActiveStage] = useState<{ id: string; name: string } | null>(null);
   const [saveProgress, setSaveProgress] = useState<string | null>(null);
 
   // Baked models that are in the scene but not on the server yet. The id is the scene asset's id.
@@ -1049,7 +1051,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     return scenes.map((a) => (uploaded.has(a.id) ? { ...a, glbUrl: uploaded.get(a.id)! } : a));
   };
 
-  const handleSaveStage = async (nameOverride?: string) => {
+  // `target` overwrites that exact library entry (UPDATE); without it the id comes from the name.
+  const handleSaveStage = async (nameOverride?: string, target?: { id: string; name: string }) => {
     setIsSavingStage(true);
     // The thumbnail is taken before anything else, so it shows the stage the user is looking at.
     const thumbnail = captureStageThumbnail() || currentProject.thumbnail;
@@ -1075,10 +1078,11 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     // The id carries the name, so saving under a new name creates a new preset and saving under
     // an existing one overwrites it. Keying on the project alone would mean a project could only
     // ever have one stage, which is what the old "Save Current" button existed to get around.
-    const stageName = (nameOverride || currentProject.name || 'Current Stage').trim();
+    const stageName = (target?.name || nameOverride || currentProject.name || 'Current Stage').trim();
     const nameKey = stageName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    const stageId = target?.id || `stage_proj_${currentProject.id}_${nameKey}`;
     const stageTemplate: SavedStageTemplate = {
-      id: `stage_proj_${currentProject.id}_${nameKey}`,
+      id: stageId,
       name: stageName,
       createdAt: new Date().toISOString(),
       scenes: JSON.parse(JSON.stringify(savedScenes)),
@@ -1095,12 +1099,13 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     try {
       const updatedLib = await saveStageTemplate(stageTemplate);
       setStageLibrary(updatedLib);
+      setActiveStage({ id: stageId, name: stageName });
     } catch (err) {
       console.warn('Failed to sync to stage library:', err);
     }
 
     const lightMsg = pointLights.length > 0 ? ` + ${pointLights.length} point light${pointLights.length === 1 ? '' : 's'}` : '';
-    setSaveToast(`✓ Stage "${stageName}" saved to disk & library (${assets.length} object${assets.length === 1 ? '' : 's'}${lightMsg})`);
+    setSaveToast(`✓ Stage "${stageName}" ${target ? 'updated' : 'saved'} to disk & library (${assets.length} object${assets.length === 1 ? '' : 's'}${lightMsg})`);
     setTimeout(() => {
       setSaveToast(null);
       setIsSavingStage(false);
@@ -1139,6 +1144,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     });
 
     setShowStageLibraryModal(false);
+    setActiveStage({ id: template.id, name: template.name });
     const lightCount = template.pointLights?.length || 0;
     const lightDesc = lightCount > 0 ? `, ${lightCount} point light${lightCount === 1 ? '' : 's'}` : '';
     setSaveToast(`✓ Loaded stage "${template.name}" (${template.scenes?.length || 0} objects${lightDesc})`);
@@ -1150,6 +1156,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     if (window.confirm('Delete this saved stage from your library?')) {
       const updated = await deleteStageTemplate(id);
       setStageLibrary(updated);
+      if (activeStage?.id === id) setActiveStage(null);
     }
   };
 
@@ -1517,7 +1524,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           {/* Save Stage Button */}
           <button
             onClick={() => {
-              setStageSaveName(currentProject.name || 'Current Stage');
+              setStageSaveName(activeStage ? '' : currentProject.name || 'Current Stage');
               setShowSaveStageModal(true);
             }}
             disabled={isSavingStage}
@@ -2784,7 +2791,29 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             </div>
 
             <div className="p-md flex flex-col gap-sm">
-              <label className="text-[11px] font-label-caps text-on-surface-variant">Stage name</label>
+              {activeStage && (
+                <>
+                  <button
+                    onClick={() => {
+                      setShowSaveStageModal(false);
+                      handleSaveStage(undefined, activeStage);
+                    }}
+                    className="w-full flex items-center justify-center gap-xs px-md py-2.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/50 rounded-lg text-xs font-label-caps font-bold transition-all cursor-pointer"
+                    title="Overwrite this saved stage with what is on screen now"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">sync</span>
+                    <span className="truncate">Update "{activeStage.name}"</span>
+                  </button>
+                  <div className="flex items-center gap-xs text-[10px] font-label-caps text-on-surface-variant/70 mt-xs">
+                    <div className="flex-1 h-px bg-outline-variant/30" />
+                    or save as a new stage
+                    <div className="flex-1 h-px bg-outline-variant/30" />
+                  </div>
+                </>
+              )}
+              <label className="text-[11px] font-label-caps text-on-surface-variant">
+                {activeStage ? 'New stage name' : 'Stage name'}
+              </label>
               <input
                 type="text"
                 autoFocus
@@ -2829,7 +2858,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                 className="flex items-center gap-1 px-md py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/40 rounded-lg text-xs font-label-caps transition-all cursor-pointer disabled:opacity-40"
               >
                 <span className="material-symbols-outlined text-[15px]">save</span>
-                <span>Save Stage</span>
+                <span>{activeStage ? 'Save as New' : 'Save Stage'}</span>
               </button>
             </div>
           </div>
