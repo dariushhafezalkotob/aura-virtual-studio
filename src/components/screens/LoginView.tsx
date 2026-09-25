@@ -51,12 +51,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSignedIn }) => {
         <div className="flex flex-col gap-sm">
           <label className="flex flex-col gap-xs">
             <span className="text-[11px] font-label-caps uppercase tracking-wider text-on-surface-variant">
-              Email
+              Email or username
             </span>
             <input
               id="login-email"
-              type="email"
+              type="text"
               autoComplete="username"
+              spellCheck={false}
+              autoCapitalize="none"
               autoFocus
               required
               value={email}
