@@ -131,6 +131,8 @@ export function sceneAsProject(project: Project, scene: FilmScene): Project {
   // camera remote's case, to give each scene its own pairing room rather than one per film.
   view.name = `${project.name} · ${scene.number}`;
   view.sceneId = scene.id;
+  // The slugline, e.g. "01 - INT. BAR - NIGHT": tells the render writer where and when this is.
+  view.sceneHeading = sluglineFor(scene);
   return view as Project;
 }
 

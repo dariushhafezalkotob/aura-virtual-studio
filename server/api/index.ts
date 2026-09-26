@@ -13,6 +13,8 @@ import { loadProjectsForUser, saveProjectsForUser } from '../lib/projectRepo';
 import { handleAuthApi, isSecureRequest, sessionTokenFrom } from './auth';
 import { claimPairingCode, createPairingCode, remotePassCookie } from '../lib/cameraPairing';
 import { handleCrewApi } from './crew';
+import { handleLooksApi } from './looks';
+import { handleRenderApi } from './render';
 import { userForSession } from '../lib/users';
 import { consumeGeneration, dailyLimitFor, isMeteredRoute, refundGeneration, usageToday } from '../lib/quota';
 import {
@@ -129,6 +131,7 @@ export function createApiMiddleware(ctx: ApiContext) {
           gemini: !!(env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY),
           hf: !!getHfToken(),
           openai: !!env.OPENAI_API_KEY,
+          wavespeed: !!env.WAVESPEED_API_KEY,
         },
       }));
       return;
@@ -186,8 +189,10 @@ export function createApiMiddleware(ctx: ApiContext) {
       return;
     }
 
-    // Crew seats live under a project, so this has to run before the projects route.
+    // Crew seats and looks live under a project, so these have to run before the projects route.
     if (await handleCrewApi(req, res)) return;
+    if (await handleLooksApi(req, res)) return;
+    if (await handleRenderApi(req, res)) return;
 
     // 0. Local Disk File Persistence for Projects & Scenes (Bulletproof Local Dev)
     if (req.url?.startsWith('/api/projects')) {

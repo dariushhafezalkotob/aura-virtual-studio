@@ -6,12 +6,15 @@ interface WorkflowSequenceViewProps {
   onSelectStage: (stage: WorkflowStage) => void;
   /** Opens the crew panel for this project. */
   onOpenCrew?: () => void;
+  /** Opens the look library for this project. */
+  onOpenLooks?: () => void;
 }
 
 export const WorkflowSequenceView: React.FC<WorkflowSequenceViewProps> = ({
   currentProject,
   onSelectStage,
   onOpenCrew,
+  onOpenLooks,
 }) => {
   return (
     <main className="flex-1 flex flex-col items-center justify-center px-margin-safe py-xl z-10 w-full max-w-7xl mx-auto my-auto">
@@ -28,9 +31,10 @@ export const WorkflowSequenceView: React.FC<WorkflowSequenceViewProps> = ({
           <span className="text-primary font-medium">{currentProject.name}</span>.
         </p>
 
+        <div className="mt-md flex items-center justify-center gap-sm">
         <button
           onClick={onOpenCrew}
-          className="mt-md inline-flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container/60 text-on-surface-variant hover:text-primary hover:border-primary/50 transition-colors cursor-pointer text-[11px] font-label-caps tracking-wider"
+          className="inline-flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container/60 text-on-surface-variant hover:text-primary hover:border-primary/50 transition-colors cursor-pointer text-[11px] font-label-caps tracking-wider"
           title="Who can work on this project"
         >
           <span className="material-symbols-outlined text-[16px]">group</span>
@@ -39,6 +43,17 @@ export const WorkflowSequenceView: React.FC<WorkflowSequenceViewProps> = ({
             <span className="ml-xs text-[10px] text-amber-300">· shared with you</span>
           )}
         </button>
+        {onOpenLooks && (
+          <button
+            onClick={onOpenLooks}
+            className="inline-flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container/60 text-on-surface-variant hover:text-primary hover:border-primary/50 transition-colors cursor-pointer text-[11px] font-label-caps tracking-wider"
+            title="Camera, lens, film and colour looks for this film"
+          >
+            <span className="material-symbols-outlined text-[16px]">photo_camera</span>
+            LOOKS
+          </button>
+        )}
+        </div>
       </div>
 
       {/* Workflow Cards (Bento 3 columns) */}

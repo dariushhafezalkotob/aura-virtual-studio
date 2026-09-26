@@ -9,6 +9,7 @@ import { CameraRecordView } from './components/screens/CameraRecordView';
 import { MobileCameraRemote } from './components/screens/MobileCameraRemote';
 import { LoginView } from './components/screens/LoginView';
 import { CrewPanel } from './components/screens/CrewPanel';
+import { LookLibraryPanel } from './components/screens/LookLibraryPanel';
 import { ScenesView } from './components/screens/ScenesView';
 import { applySceneEdit, sceneAsProject, scenesOf, sluglineFor } from './services/filmScenes';
 import { AuthUser, fetchCurrentUser, nameOf, signOut } from './services/authService';
@@ -88,6 +89,7 @@ export function App() {
 
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [showCrew, setShowCrew] = useState(false);
+  const [showLooks, setShowLooks] = useState(false);
   const [currentSceneId, setCurrentSceneId] = useState<string | null>(null);
   const [currentStage, setCurrentStage] = useState<WorkflowStage>('projects');
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
@@ -203,6 +205,7 @@ export function App() {
     setCurrentStage('projects');
     setCurrentProjectId(null);
     setShowCrew(false);
+    setShowLooks(false);
   };
 
   // The three studio screens are handed the current scene dressed as a project, so they carry on
@@ -289,6 +292,7 @@ export function App() {
             onUpdateProject={handleUpdateProject}
             onOpenScene={handleOpenScene}
             onOpenCrew={() => setShowCrew(true)}
+            onOpenLooks={() => setShowLooks(true)}
           />
         )}
 
@@ -297,6 +301,7 @@ export function App() {
             currentProject={currentProject}
             onSelectStage={setCurrentStage}
             onOpenCrew={() => setShowCrew(true)}
+            onOpenLooks={() => setShowLooks(true)}
           />
         )}
 
@@ -330,6 +335,14 @@ export function App() {
           projectName={currentProject.name}
           canManage={!(currentProject as any).sharedWithMe}
           onClose={() => setShowCrew(false)}
+        />
+      )}
+
+      {showLooks && currentProject && (
+        <LookLibraryPanel
+          projectId={currentProject.id}
+          projectName={currentProject.name}
+          onClose={() => setShowLooks(false)}
         />
       )}
     </div>

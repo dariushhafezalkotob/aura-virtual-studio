@@ -75,6 +75,29 @@ export interface CameraTake {
    * ordinary smooth curve. Per-key tangent handles override this where they are set.
    */
   tension?: number;
+
+  /** Camera body, lens set and film back the operator chose when recording (cameraPackage.ts). */
+  cameraPackage?: { cameraId: string; lensId: string; backId: string };
+  /** Iris and ISO at the time of recording, e.g. "f/2.8" and "800". */
+  aperture?: string;
+  iso?: string;
+  /** Realistic frames rendered from this take's first frame, newest last. */
+  renders?: TakeRender[];
+}
+
+/** One realistic frame made from a take's first frame (POST /api/render-frame). */
+export interface TakeRender {
+  id: string;
+  createdAt: string;
+  /** The rendered frame, stored on the server (/api/assets/...). */
+  url: string;
+  /** The previs frame it was made from. */
+  sourceUrl: string;
+  cameraPackage: { cameraId: string; lensId: string; backId: string };
+  lookId?: string;
+  /** The full prompt the image model was given. */
+  prompt: string;
+  model: string;
 }
 
 export interface StagePointLight {
@@ -491,3 +514,31 @@ export type CameraRemoteMessage =
   | { type: 'rtc_answer'; sdp: any }
   | { type: 'rtc_ice'; candidate: any };
 
+
+/**
+ * One entry in a project's look library: a camera / lens / film / grade recipe, stored on the
+ * server per project (`/api/projects/:id/looks`). `lookPrompt` is the text sent to the image
+ * model; the other fields are what it was written from.
+ */
+export interface FilmLook {
+  id: string;
+  name: string;
+  /** Where the look comes from, e.g. a film title and year. */
+  source: string;
+  camera: string;
+  lens: string;
+  filmStock: string;
+  format: string;
+  aspectRatio: string;
+  lighting: string;
+  colorNotes: string;
+  /** Hex colours, darkest to lightest. */
+  palette: string[];
+  /** A reference still stored in Pantilt (`/api/assets/...`), or ''. */
+  referenceUrl: string;
+  lookPrompt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type FilmLookFields = Omit<FilmLook, 'id' | 'createdAt' | 'updatedAt'>;

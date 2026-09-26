@@ -43,6 +43,7 @@ async function ensureIndexes(database: Db) {
   // "projects I can open" is owner OR crew member.
   await database.collection('projects').createIndex({ 'members.userId': 1 });
   await database.collection('projects').createIndex({ ownerId: 1, modified: -1 });
+  await database.collection('looks').createIndex({ projectId: 1, updatedAt: -1 });
 }
 
 export async function closeDb() {

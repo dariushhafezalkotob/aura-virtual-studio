@@ -8,6 +8,7 @@ import {
   RemoteMoveData,
   CameraPoseData,
   DepthOfFieldConfig,
+  TakeRender,
 } from '../../types';
 import { ThreeStage } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
@@ -16,6 +17,9 @@ import { stabilizeKeyframes } from '../../services/cameraStabilizer';
 import { DEFAULT_TENSION, insertKeyframe } from '../../services/cameraAnimation';
 import { KeyframeTimeline } from '../camera/KeyframeTimeline';
 import { KeyInspector } from '../camera/KeyInspector';
+import { CameraPackagePicker } from '../camera/CameraPackagePicker';
+import { TakeRenderPanel } from '../camera/TakeRenderPanel';
+import { DEFAULT_PACKAGE, normalizePackage, packageLabel, cameraById, lensById, type CameraPackage } from '../../services/cameraPackage';
 import { useDialogueAudioSync } from '../../services/dialogueService';
 import qrcode from 'qrcode-generator';
 
@@ -43,6 +47,19 @@ function formatTime(seconds: number): string {
 /** Stabilizer strength for newly recorded takes: removes typical hand shake, keeps deliberate moves. */
 const DEFAULT_STABILIZER = 35;
 
+// The operator's current camera package is a per-browser preference; each take stores its own.
+const PACKAGE_STORAGE_KEY = 'pantilt.cameraPackage';
+
+function loadStoredPackage(): CameraPackage {
+  try {
+    return normalizePackage(JSON.parse(localStorage.getItem(PACKAGE_STORAGE_KEY) || 'null') || DEFAULT_PACKAGE);
+  } catch {
+    return DEFAULT_PACKAGE;
+  }
+}
+
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
 export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProject, onUpdateProject }) => {
   // Mode: Live Camera Flight vs Playback Take Review
   const [viewMode, setViewMode] = useState<'live' | 'playback'>('live');
@@ -51,6 +68,19 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const [showQRPairing, setShowQRPairing] = useState(false);
   const [focalLength, setFocalLength] = useState('35mm');
   const [iso, setIso] = useState('800');
+
+  // Camera body, lens set and film back: recorded onto every take, used when the take is rendered.
+  const [cameraPackage, setCameraPackageState] = useState<CameraPackage>(loadStoredPackage);
+  const [showPackageMenu, setShowPackageMenu] = useState(false);
+  const setCameraPackage = (pkg: CameraPackage) => {
+    setCameraPackageState(pkg);
+    try {
+      localStorage.setItem(PACKAGE_STORAGE_KEY, JSON.stringify(pkg));
+    } catch {
+      // Private windows can refuse storage; the choice still holds for this visit.
+    }
+  };
+  const [renderTakeId, setRenderTakeId] = useState<string | null>(null);
 
   // Cinematic Depth of Field & Optics State
   const [aperture, setAperture] = useState<string>('f/2.8');
@@ -163,6 +193,66 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     },
     [activeTake, takes, currentProject, onUpdateProject]
   );
+
+  // A render finishes about two minutes after it starts, so it must write into the takes and the
+  // project as they are THEN, not as they were when the button was pressed.
+  const latestRef = useRef({ takes, currentProject, onUpdateProject });
+  latestRef.current = { takes, currentProject, onUpdateProject };
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    // Set on mount as well as cleared on unmount: React's development mode mounts every screen
+    // twice, and a flag only ever cleared stayed false, so every finished render was dropped.
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const handleTakeRendered = useCallback((takeId: string, render: TakeRender) => {
+    // Once this screen is gone its project copy is stale, and writing it would undo later edits.
+    // The frame itself is already saved on the server either way.
+    if (!mountedRef.current) return;
+    const { takes: latestTakes, currentProject: project, onUpdateProject: update } = latestRef.current;
+    const next = latestTakes.map((t) => (t.id === takeId ? { ...t, renders: [...(t.renders || []), render] } : t));
+    setTakes(next);
+    update?.({ ...project, cameraTakes: next });
+    setToastMessage('Render finished.');
+    setTimeout(() => setToastMessage(null), 3000);
+  }, []);
+
+  /**
+   * The take's first frame exactly as the viewport draws it, depth of field included: the take
+   * is put in playback at 0s and paused, a few frames are let through so the camera and the actors
+   * reach frame 1, then the canvas is cropped to 16:9 the same way stills and exports are.
+   */
+  const captureTakeFirstFrame = useCallback(async (takeId: string): Promise<string | null> => {
+    setActiveTakeId(takeId);
+    setViewMode('playback');
+    setIsPlaying(false);
+    setTimelineSec(0);
+    for (let i = 0; i < 6; i++) await nextFrame();
+    await new Promise((r) => setTimeout(r, 250));
+    await nextFrame();
+
+    const canvas = webglCanvasRef.current;
+    if (!canvas || !canvas.width || !canvas.height) return null;
+    const out = document.createElement('canvas');
+    out.width = 1920;
+    out.height = 1080;
+    const ctx = out.getContext('2d', { alpha: false });
+    if (!ctx) return null;
+    const target = 16 / 9;
+    let sx = 0, sy = 0, sw = canvas.width, sh = canvas.height;
+    if (sw / sh > target) {
+      sw = sh * target;
+      sx = (canvas.width - sw) / 2;
+    } else {
+      sh = sw / target;
+      sy = (canvas.height - sh) / 2;
+    }
+    ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, 1920, 1080);
+    return out.toDataURL('image/jpeg', 0.92);
+  }, []);
 
   /** Starts an empty hand-keyed move and makes it the take being edited. */
   const handleNewKeyedTake = () => {
@@ -329,6 +419,9 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         duration: recordedDuration,
         keyframes: frames,
         focalLength,
+        aperture,
+        iso,
+        cameraPackage,
         fps: 60,
         stabilizer: DEFAULT_STABILIZER,
       };
@@ -352,7 +445,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       setToastMessage('Take too short — recorded frames discarded.');
       setTimeout(() => setToastMessage(null), 3000);
     }
-  }, [takes, timelineSec, focalLength, currentProject, onUpdateProject]);
+  }, [takes, timelineSec, focalLength, aperture, iso, cameraPackage, currentProject, onUpdateProject]);
 
   // 60 FPS Master Timeline Animation Loop
   const lastTimeRef = useRef<number>(performance.now());
@@ -1167,6 +1260,16 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
+                            setRenderTakeId(t.id);
+                          }}
+                          title="Render the first frame as a real film frame"
+                          className="hover:text-amber-300 text-cyan-300"
+                        >
+                          <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
                             exportTakeToVideo(t);
                           }}
                           title="Export 16:9 MP4 Video"
@@ -1287,8 +1390,45 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             </button>
 
 
-            {/* Right: Focus Puller, Iris (DoF), Lens & ISO Selectors */}
+            {/* Right: Camera package, Focus Puller, Iris (DoF), Lens & ISO Selectors */}
             <div className="flex items-center gap-2">
+              {/* Camera package: body, lens set, film back. Stored on every take recorded. */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowPackageMenu(!showPackageMenu)}
+                  className={`px-2 py-1 text-[11px] font-label-caps rounded-xl border flex items-center gap-1.5 cursor-pointer transition-all shadow-md ${
+                    showPackageMenu
+                      ? 'bg-amber-400/20 text-amber-100 border-amber-300 font-semibold'
+                      : 'bg-surface-container/90 text-on-surface border-amber-300/50 hover:border-amber-300'
+                  }`}
+                  title={`Camera package: ${packageLabel(cameraPackage)}`}
+                >
+                  <span className="material-symbols-outlined text-[15px] text-amber-300">photo_camera</span>
+                  <span className="text-amber-300 font-bold">PACKAGE</span>
+                  <span className="max-w-[160px] truncate">
+                    {cameraById(cameraPackage.cameraId)?.name.replace(/^(ARRI|RED|Sony|Panavision|Blackmagic) /, '')} ·{' '}
+                    {lensById(cameraPackage.lensId)?.name.replace(/^(Panavision|ARRI|Zeiss|Leica|Canon) /, '')}
+                  </span>
+                </button>
+                {showPackageMenu && (
+                  <div className="absolute top-full mt-2 right-0 w-72 bg-surface-container/95 backdrop-blur-xl border border-outline-variant/50 p-3 rounded-2xl shadow-2xl flex flex-col gap-2.5 z-40 animate-in fade-in slide-in-from-top-2 duration-150">
+                    <div className="flex justify-between items-center pb-1.5 border-b border-outline-variant/20">
+                      <div className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[16px] text-amber-300">photo_camera</span>
+                        <span className="font-label-caps text-[11px] text-amber-200 font-bold uppercase tracking-wider">Camera package</span>
+                      </div>
+                      <button onClick={() => setShowPackageMenu(false)} className="text-on-surface-variant hover:text-on-surface text-[12px] cursor-pointer">
+                        ✕
+                      </button>
+                    </div>
+                    <CameraPackagePicker value={cameraPackage} onChange={setCameraPackage} idPrefix="record" />
+                    <span className="text-[10px] text-on-surface-variant/80 leading-snug">
+                      Every take you record keeps this package, with its focal length, iris and ISO. It is used when the take is sent to RENDER.
+                    </span>
+                  </div>
+                )}
+              </div>
+
               {/* Focus Puller & Depth of Field Controls */}
               <div className="relative">
                 <button
@@ -1614,6 +1754,14 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                   <span className="material-symbols-outlined text-[20px]">photo_camera</span>
                   CAPTURE 1ST FRAME
                 </button>
+                <button
+                  onClick={() => setRenderTakeId(activeTake.id)}
+                  className="px-5 py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-300 text-black font-label-caps text-sm tracking-widest font-bold shadow-2xl flex items-center gap-2 hover:scale-105 active:scale-95 transition-all cursor-pointer"
+                  title="Turn this take's first frame into a real film frame with its camera package"
+                >
+                  <span className="material-symbols-outlined text-[20px]">auto_awesome</span>
+                  RENDER 1ST FRAME
+                </button>
               </div>
 
               <div className="flex items-center gap-2 bg-background/90 px-3 py-1 rounded-full border border-cyan-500/40 backdrop-blur-md text-[11px] font-mono text-cyan-300 shadow-lg">
@@ -1716,6 +1864,15 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                 >
                   <span className="material-symbols-outlined text-[15px]">photo_camera</span>
                   <span>STILL</span>
+                </button>
+                <button
+                  onClick={() => activeTake && setRenderTakeId(activeTake.id)}
+                  disabled={isExportingVideo || !activeTake}
+                  className="h-9 px-2.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-black font-label-caps text-xs font-bold tracking-wider flex items-center gap-1 cursor-pointer shadow-lg transition-all whitespace-nowrap disabled:opacity-50"
+                  title="Turn this take's first frame into a real film frame with its camera package"
+                >
+                  <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+                  <span>RENDER</span>
                 </button>
               </div>
             )}
@@ -1990,6 +2147,17 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             </button>
           </div>
         </div>
+      )}
+
+      {renderTakeId && takes.some((t) => t.id === renderTakeId) && (
+        <TakeRenderPanel
+          projectId={currentProject.id}
+          take={takes.find((t) => t.id === renderTakeId)!}
+          sceneHeading={(currentProject as any).sceneHeading}
+          captureFirstFrame={() => captureTakeFirstFrame(renderTakeId)}
+          onRendered={handleTakeRendered}
+          onClose={() => setRenderTakeId(null)}
+        />
       )}
     </div>
   );

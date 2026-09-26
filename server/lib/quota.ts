@@ -20,6 +20,8 @@ const METERED_ROUTES = [
   '/api/generate-motion',
   '/api/generate-360-from-image',
   '/api/reconstruct-hunyuan-world',
+  // Starting a render; polling /api/render-jobs is free.
+  '/api/render-frame',
 ];
 
 export function isMeteredRoute(url: string | undefined): boolean {

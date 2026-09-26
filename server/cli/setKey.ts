@@ -3,6 +3,7 @@
  *
  *   ssh -t root@<SERVER> "cd /srv/aura && node dist-server/set-key.mjs gemini"
  *   ssh -t root@<SERVER> "cd /srv/aura && node dist-server/set-key.mjs hf"
+ *   ssh -t root@<SERVER> "cd /srv/aura && node dist-server/set-key.mjs wavespeed"
  *
  * The key is typed at a prompt with no echo, never appears on a command line, never enters
  * shell history, and is never printed back. Editing the file by hand works too, but an editor
@@ -15,6 +16,8 @@ import { execSync } from 'node:child_process';
 const KEYS: Record<string, { envVar: string; label: string }> = {
   gemini: { envVar: 'GEMINI_API_KEY', label: 'Gemini API key' },
   hf: { envVar: 'HF_TOKEN', label: 'Hugging Face token' },
+  // Seedream 5 Pro renders of take frames (/api/render-frame).
+  wavespeed: { envVar: 'WAVESPEED_API_KEY', label: 'WaveSpeed API key' },
 };
 
 const which = process.argv[2];
@@ -44,7 +47,7 @@ function readSecret(prompt: string): Promise<string> {
 async function main() {
   const target = KEYS[which];
   if (!target) {
-    console.log('Usage: set-key gemini|hf');
+    console.log('Usage: set-key gemini|hf|wavespeed');
     process.exit(1);
   }
 

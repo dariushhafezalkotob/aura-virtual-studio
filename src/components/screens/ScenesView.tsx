@@ -16,6 +16,7 @@ interface ScenesViewProps {
   onUpdateProject: (project: Project) => void;
   onOpenScene: (sceneId: string) => void;
   onOpenCrew?: () => void;
+  onOpenLooks?: () => void;
 }
 
 const SETTINGS: SceneSetting[] = ['interior', 'exterior'];
@@ -27,6 +28,7 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
   onUpdateProject,
   onOpenScene,
   onOpenCrew,
+  onOpenLooks,
 }) => {
   const scenes = scenesOf(currentProject);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -111,6 +113,16 @@ export const ScenesView: React.FC<ScenesViewProps> = ({
               >
                 <span className="material-symbols-outlined text-[16px]">group</span>
                 CREW
+              </button>
+            )}
+            {onOpenLooks && (
+              <button
+                onClick={onOpenLooks}
+                className="inline-flex items-center gap-xs px-md py-sm rounded-lg border border-outline-variant/50 bg-surface-container/60 text-on-surface-variant hover:text-primary hover:border-primary/50 transition-colors cursor-pointer text-[11px] font-label-caps tracking-wider"
+                title="Camera, lens, film and colour looks for this film"
+              >
+                <span className="material-symbols-outlined text-[16px]">photo_camera</span>
+                LOOKS
               </button>
             )}
           </div>
