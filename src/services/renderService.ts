@@ -16,6 +16,8 @@ export interface RenderRequest {
   lookId?: string;
   sceneHeading?: string;
   note?: string;
+  /** 'layout' (default): previs fixes camera, geometry, composition only. 'exact': copy it closely. */
+  fidelity?: 'layout' | 'exact';
 }
 
 export interface RenderResult {

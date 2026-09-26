@@ -41,6 +41,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   const [looks, setLooks] = useState<FilmLook[]>([]);
   const [lookId, setLookId] = useState('');
   const [note, setNote] = useState('');
+  const [fidelity, setFidelity] = useState<'layout' | 'exact'>('layout');
   const [stage, setStage] = useState<RenderStage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const renders = take.renders || [];
@@ -83,6 +84,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
           lookId: lookId || undefined,
           sceneHeading,
           note: note.trim() || undefined,
+          fidelity,
         },
         setStage
       );
@@ -205,6 +207,29 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
                 {!take.cameraPackage && (
                   <span className="text-[11px] text-amber-300/90">This take was recorded before packages existed; choose one here.</span>
                 )}
+              </div>
+
+              <div className="flex flex-col gap-[3px]">
+                <span className="font-label-caps text-[9px] tracking-[0.15em] uppercase text-on-surface-variant">Use the previs as</span>
+                <div className="flex bg-surface-container rounded-lg border border-outline-variant p-[2px]">
+                  {([['layout', 'Layout only'], ['exact', 'Exact']] as const).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setFidelity(id)}
+                      className={`flex-1 py-[5px] rounded text-[11px] font-label-caps cursor-pointer ${
+                        fidelity === id ? 'bg-primary text-background font-bold' : 'text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-[10px] text-on-surface-variant/70">
+                  {fidelity === 'layout'
+                    ? 'Keeps camera angle, set geometry and composition; reads the materials and invents all detail fresh.'
+                    : 'Copies the previs closely, surfaces and all.'}
+                </span>
               </div>
 
               <label className="flex flex-col gap-[3px]">

@@ -90,6 +90,19 @@ function saveAsset(prefix: string, ext: string, buf: Buffer): string {
 // ---------------------------------------------------------------------------------------------
 // The shot and its light, written by Gemini from the frame itself
 
+// 'layout': the previs fixes camera, geometry and composition only; the model invents every
+// surface and detail. 'exact': the previs is copied closely (the first version). Users found
+// 'exact' carried the previs's CG detail into the render and held realism back (2026-09-26).
+export type RenderFidelity = 'layout' | 'exact';
+
+const LAYOUT_WRITER = `You look at one frame from the 3D previsualization of a film and write two parts of a prompt for an image model. The previs is only a LAYOUT GUIDE: its CG textures, low detail and flat surfaces must NOT be copied. The model will photograph the scene from scratch, freely inventing rich, real detail, while keeping the shot's layout.
+
+"keep": one paragraph. Start with: "The input image is a 3D previs layout, not a picture to copy. Use it only for the camera angle, the geometry of the set and the composition, then photograph the scene for real, inventing all surface detail freely." Then state precisely what the layout fixes: the camera position, height, angle and lens framing; the shape and placement of the space (walls, openings, floor, ceiling); where each large object and piece of furniture stands; each person's place in the frame, pose and eyeline. Then, object by object, say what each thing is MADE OF and where it is (e.g. "the long counter on the right is dark, worn hardwood with a brass foot rail"; "the back wall is exposed brick"), reading the materials from the previs colours and shapes. Say that textures, wear, small props, dressing and every fine detail should be generated anew and richly, as on a real, lived-in set, and should not follow the previs surfaces. Untextured or single-colour figures and mannequins are stand-ins: replace each with a real person in the same pose, and describe a believable person for each (age range, build, hair, wardrobe that suits the scene), unless the director's note says who they are. End with: "Do not change the camera angle, the layout or where anyone stands."
+
+"lighting": one paragraph that starts with "Lighting:" and describes the light as a cinematographer would: which sources light the scene (lamps, windows, sun, screens), direction, hardness, colour temperature, time of day and contrast. Stay true to the frame and the scene heading.
+
+Rules: never add or remove large objects or people; say nothing about camera bodies, lenses, film stock or grading, which are written separately; plain, direct sentences with no hype words.`;
+
 const SHOT_WRITER = `You look at one frame from the 3D previsualization of a film and write two parts of a prompt for an image-editing model. That model will turn this exact frame into a real frame photographed on set, so your words must pin the shot down precisely.
 
 "keep": one paragraph. Start with: "The input image is a frame from the 3D previsualization of a film. Recreate it as a real frame photographed on set for the finished movie." Then say exactly what must not change: the camera position, height, angle and framing; every person's place in the frame (left, centre, right; foreground or background), their pose, where they look and what their hands are doing; the set, furniture and props and where each one is; every visible light source. Name things by what they are and where they are in the frame. Then write: "Do not move the camera and do not move anyone." Untextured or single-colour figures and mannequins are stand-ins for actors: tell the model to replace each with a real person in the same pose, and describe a believable person for each (age range, build, hair, wardrobe that suits the scene), unless the director's note says who they are. Finish by saying the CG surfaces become real materials, naming the materials you can see (wood, leather, brass, glass, concrete...).
@@ -104,7 +117,7 @@ const SHOT_SCHEMA = {
   required: ['keep', 'lighting'],
 };
 
-async function describeShot(frameBase64: string, mimeType: string, sceneHeading: string, note: string) {
+async function describeShot(frameBase64: string, mimeType: string, sceneHeading: string, note: string, fidelity: RenderFidelity) {
   const context = [
     sceneHeading && `Scene heading: ${sceneHeading}`,
     note && `Director's note: ${note}`,
@@ -113,7 +126,7 @@ async function describeShot(frameBase64: string, mimeType: string, sceneHeading:
   if (context) parts.push({ text: context });
   // From a network behind a VPN one call measured 12-37s (2026-09-26); from the server it is a few
   // seconds. The limit only has to stop a hung call, not a slow one.
-  const raw = await geminiText({ system: SHOT_WRITER, parts, json: { schema: SHOT_SCHEMA }, timeoutMs: 180_000 });
+  const raw = await geminiText({ system: fidelity === 'exact' ? SHOT_WRITER : LAYOUT_WRITER, parts, json: { schema: SHOT_SCHEMA }, timeoutMs: 180_000 });
   const parsed = JSON.parse(raw);
   const lighting = String(parsed.lighting || '').trim();
   return {
@@ -195,6 +208,7 @@ async function seedreamEdit(prompt: string, frameDataUrl: string): Promise<Buffe
 // ---------------------------------------------------------------------------------------------
 
 export interface RenderPromptInput {
+  fidelity: RenderFidelity;
   projectId: string;
   frameBase64: string;
   mimeType: string;
@@ -207,7 +221,7 @@ export interface RenderPromptInput {
 
 /** The full prompt for one frame. Exported so it can be checked without paying for a render. */
 export async function buildRenderPrompt(input: RenderPromptInput): Promise<{ prompt: string; lookUsed: boolean }> {
-  const shot = await describeShot(input.frameBase64, input.mimeType, input.sceneHeading, input.note);
+  const shot = await describeShot(input.frameBase64, input.mimeType, input.sceneHeading, input.note, input.fidelity);
 
   const monochrome = backById(input.cameraPackage.backId)?.id === 'doublex';
   const lookGrade = input.lookId && !monochrome ? await gradeFromLook(input.projectId, input.lookId) : null;
@@ -316,6 +330,7 @@ export async function handleRenderApi(req: any, res: any): Promise<boolean> {
       lookId: body.lookId ? clip(body.lookId, 40) : undefined,
       sceneHeading: clip(body.sceneHeading, 200),
       note: clip(body.note, 1000),
+      fidelity: body.fidelity === 'exact' ? 'exact' : 'layout',
     });
 
     sendJson(res, 200, { success: true, jobId: job.id });
