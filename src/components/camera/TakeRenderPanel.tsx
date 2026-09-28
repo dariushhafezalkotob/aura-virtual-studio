@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type { CameraTake, FilmLook, TakeRender } from '../../types';
 import { DEFAULT_PACKAGE, normalizePackage, packageLabel, type CameraPackage } from '../../services/cameraPackage';
 import { listLooks } from '../../services/lookService';
-import { defaultPassFor, makeBlurPass, renderFrame, type RenderPass, type RenderStage } from '../../services/renderService';
+import { defaultPassFor, makeBlurPass, makeClayPass, renderFrame, type RenderPass, type RenderStage } from '../../services/renderService';
 import { CameraPackagePicker } from './CameraPackagePicker';
 
 interface TakeRenderPanelProps {
@@ -11,8 +11,6 @@ interface TakeRenderPanelProps {
   sceneHeading?: string;
   /** Grabs the take's first frame from the viewport as a JPEG data URL. */
   captureFirstFrame: () => Promise<string | null>;
-  /** The same frame re-rendered with every surface in grey matte: the clay layout pass. */
-  captureClayFrame: () => Promise<string | null>;
   /** Called when a render finishes, even if this panel was closed in the meantime. */
   onRendered: (takeId: string, render: TakeRender) => void;
   onClose: () => void;
@@ -34,7 +32,6 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   take,
   sceneHeading,
   captureFirstFrame,
-  captureClayFrame,
   onRendered,
   onClose,
 }) => {
@@ -70,12 +67,12 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   }, [take.id]);
 
   // Prepare the chosen layout pass once the frame is in, so it can be checked before paying for a
-  // render. Clay is re-rendered by the viewport, so it waits for the textured capture to finish.
+  // render. Both passes are made from the textured frame.
   useEffect(() => {
     if (!frame || pass === 'full' || layouts[pass]) return;
     let alive = true;
     setLayoutError(null);
-    const make = pass === 'blur' ? makeBlurPass(frame) : captureClayFrame();
+    const make = pass === 'blur' ? makeBlurPass(frame) : makeClayPass(frame);
     make
       .then((url) => {
         if (!alive) return;
@@ -275,7 +272,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
                   {pass === 'blur'
                     ? 'Grey and blurred: keeps camera, room and poses, frees every surface. Best for interiors.'
                     : pass === 'clay'
-                      ? 'Every model in grey matte: keeps hard edges and structure, no textures. Best for exteriors.'
+                      ? 'Flat grey tones: keeps edges, windows and structure, drops colour and surface detail. Best for exteriors.'
                       : 'The textured previs itself. Copies its surfaces and light closely.'}
                 </span>
               </div>

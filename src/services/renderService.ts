@@ -2,7 +2,8 @@ import type { CameraPackage } from './cameraPackage';
 
 /**
  * What Seedream gets as image 1. An edit model copies whatever that image shows, so the textured
- * previs leaks its CG look; a texture-free pass does not. Blur suits interiors, clay exteriors.
+ * previs leaks its CG look; a pass with no colour or surface detail does not. Blur suits interiors,
+ * clay (flat grey tones, edges kept) suits exteriors.
  */
 export type RenderPass = 'blur' | 'clay' | 'full';
 
@@ -49,6 +50,71 @@ export async function makeBlurPass(frameDataUrl: string): Promise<string> {
   octx.imageSmoothingQuality = 'high';
   octx.drawImage(small, 0, 0, out.width, out.height);
   return out.toDataURL('image/jpeg', 0.9);
+}
+
+/**
+ * The clay pass: grey, smoothed and flattened into eight tones, so every edge and window the
+ * textures draw survives as a flat shape while colour and CG surface detail are gone. Made from
+ * the textured frame, not by re-rendering the models: scanned and generated sets keep most of
+ * their detail in their textures, and a real grey-material render of them came out as flat
+ * silhouettes with the cars lost against the road (tested on pantilt.app, 2026-09-28).
+ *
+ * Same steps as the hand-made pass that tested best for exteriors: greyscale, a median filter
+ * (smooths texture noise but keeps edges), a light blur, posterize to 3 bits.
+ */
+export async function makeClayPass(frameDataUrl: string): Promise<string> {
+  const img = await loadImage(frameDataUrl);
+  const w = 960;
+  const h = 540;
+  const work = document.createElement('canvas');
+  work.width = w;
+  work.height = h;
+  const ctx = work.getContext('2d', { willReadFrequently: true })!;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, w, h);
+  const src = ctx.getImageData(0, 0, w, h).data;
+
+  const grey = new Uint8ClampedArray(w * h);
+  for (let i = 0, p = 0; p < grey.length; i += 4, p++) {
+    grey[p] = 0.2126 * src[i] + 0.7152 * src[i + 1] + 0.0722 * src[i + 2];
+  }
+
+  // 5x5 median at half size is the 9x9 median of the full-size hand pass.
+  const r = 2;
+  const med = new Uint8ClampedArray(w * h);
+  const hist = new Uint16Array(256);
+  const n = (2 * r + 1) * (2 * r + 1);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      hist.fill(0);
+      for (let dy = -r; dy <= r; dy++) {
+        const yy = Math.min(h - 1, Math.max(0, y + dy)) * w;
+        for (let dx = -r; dx <= r; dx++) hist[grey[yy + Math.min(w - 1, Math.max(0, x + dx))]]++;
+      }
+      let count = 0;
+      let v = 0;
+      while ((count += hist[v]) <= n >> 1) v++;
+      med[y * w + x] = v;
+    }
+  }
+
+  const out = ctx.createImageData(w, h);
+  for (let p = 0, i = 0; p < med.length; p++, i += 4) {
+    const v = med[p] & 0xe0; // 3 bits: eight flat tones
+    out.data[i] = out.data[i + 1] = out.data[i + 2] = v;
+    out.data[i + 3] = 255;
+  }
+  ctx.putImageData(out, 0, 0);
+
+  const full = document.createElement('canvas');
+  full.width = 1920;
+  full.height = 1080;
+  const fctx = full.getContext('2d')!;
+  fctx.imageSmoothingEnabled = true;
+  fctx.imageSmoothingQuality = 'high';
+  fctx.filter = 'blur(1px)';
+  fctx.drawImage(work, 0, 0, full.width, full.height);
+  return full.toDataURL('image/jpeg', 0.9);
 }
 
 /**
