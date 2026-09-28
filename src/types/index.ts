@@ -93,6 +93,9 @@ export interface TakeRender {
   url: string;
   /** The previs frame it was made from. */
   sourceUrl: string;
+  /** What Seedream actually got as image 1 (the blur or clay pass, or the frame itself). */
+  layoutUrl?: string;
+  pass?: 'blur' | 'clay' | 'full';
   cameraPackage: { cameraId: string; lensId: string; backId: string };
   lookId?: string;
   /** The full prompt the image model was given. */

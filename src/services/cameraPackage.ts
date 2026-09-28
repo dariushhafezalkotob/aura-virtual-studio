@@ -22,6 +22,8 @@ export type CaptureKind = 'digital' | 'film';
 export interface CameraBody {
   id: string;
   name: string;
+  /** Two or three visible traits, for the short render template ('' when the name says it all). */
+  short: string;
   kind: CaptureKind;
   /** Sensor or gate, shown in the picker. */
   format: string;
@@ -31,6 +33,8 @@ export interface CameraBody {
 export interface LensSet {
   id: string;
   name: string;
+  /** Two or three visible traits, for the short render template ('' when the name says it all). */
+  short: string;
   /** Spherical or anamorphic, vintage or modern - shown in the picker. */
   character: string;
   anamorphic?: boolean;
@@ -40,6 +44,8 @@ export interface LensSet {
 export interface FilmBack {
   id: string;
   name: string;
+  /** Two or three visible traits, for the short render template ('' when the name says it all). */
+  short: string;
   kind: CaptureKind;
   prompt: string;
 }
@@ -54,6 +60,7 @@ export interface CameraPackage {
 export const CAMERA_BODIES: CameraBody[] = [
   {
     id: 'alexa35',
+    short: 'gentle highlight roll-off, soft natural skin',
     name: 'ARRI Alexa 35',
     kind: 'digital',
     format: 'Super 35 digital',
@@ -62,6 +69,7 @@ export const CAMERA_BODIES: CameraBody[] = [
   },
   {
     id: 'alexaminilf',
+    short: 'gentle highlight roll-off, soft skin, shallow large-format focus',
     name: 'ARRI Alexa Mini LF',
     kind: 'digital',
     format: 'Large format digital',
@@ -70,6 +78,7 @@ export const CAMERA_BODIES: CameraBody[] = [
   },
   {
     id: 'vraptor',
+    short: 'crisp fine detail, punchy contrast',
     name: 'RED V-Raptor 8K VV',
     kind: 'digital',
     format: 'VistaVision digital',
@@ -78,6 +87,7 @@ export const CAMERA_BODIES: CameraBody[] = [
   },
   {
     id: 'venice2',
+    short: 'clean neutral colour, deep shadow detail',
     name: 'Sony Venice 2',
     kind: 'digital',
     format: 'Full frame digital',
@@ -86,6 +96,7 @@ export const CAMERA_BODIES: CameraBody[] = [
   },
   {
     id: 'dxl2',
+    short: 'rich filmic colour, smooth large-format focus',
     name: 'Panavision DXL2',
     kind: 'digital',
     format: 'Large format digital',
@@ -94,6 +105,7 @@ export const CAMERA_BODIES: CameraBody[] = [
   },
   {
     id: 'ursa12k',
+    short: 'fine detail, natural noise texture',
     name: 'Blackmagic URSA 12K',
     kind: 'digital',
     format: 'Super 35 digital',
@@ -102,6 +114,7 @@ export const CAMERA_BODIES: CameraBody[] = [
   },
   {
     id: 'arri435',
+    short: '',
     name: 'Arri 435',
     kind: 'film',
     format: '35mm film, 4-perf',
@@ -109,6 +122,7 @@ export const CAMERA_BODIES: CameraBody[] = [
   },
   {
     id: 'millenniumxl2',
+    short: '',
     name: 'Panavision Millennium XL2',
     kind: 'film',
     format: '35mm film, 3-perf',
@@ -116,6 +130,7 @@ export const CAMERA_BODIES: CameraBody[] = [
   },
   {
     id: 'arri416',
+    short: 'coarser 16mm grain, softer detail',
     name: 'Arri 416',
     kind: 'film',
     format: 'Super 16 film',
@@ -127,6 +142,7 @@ export const CAMERA_BODIES: CameraBody[] = [
 export const LENS_SETS: LensSet[] = [
   {
     id: 'zeisssupreme',
+    short: 'sharp and clean, round bokeh, little flare',
     name: 'Zeiss Supreme Prime',
     character: 'Modern spherical, clean',
     prompt:
@@ -134,6 +150,7 @@ export const LENS_SETS: LensSet[] = [
   },
   {
     id: 'masterprime',
+    short: 'clean and neutral, round bokeh, almost no flare',
     name: 'ARRI Master Prime',
     character: 'Modern spherical, clean',
     prompt:
@@ -141,6 +158,7 @@ export const LENS_SETS: LensSet[] = [
   },
   {
     id: 'cookes4',
+    short: 'gentle, warm rendering, soft round bokeh, subtle warm flares',
     name: 'Cooke S4/i',
     character: 'Spherical, warm',
     prompt:
@@ -148,6 +166,7 @@ export const LENS_SETS: LensSet[] = [
   },
   {
     id: 'primo',
+    short: 'clean, firm contrast, round bokeh',
     name: 'Panavision Primo',
     character: 'Spherical, classic',
     prompt:
@@ -155,6 +174,7 @@ export const LENS_SETS: LensSet[] = [
   },
   {
     id: 'summiluxc',
+    short: 'crisp, natural colour, faint neutral flares',
     name: 'Leica Summilux-C',
     character: 'Spherical, natural',
     prompt:
@@ -162,6 +182,7 @@ export const LENS_SETS: LensSet[] = [
   },
   {
     id: 'cseries',
+    short: 'horizontal blue streak flares from bright lights, vertically oval bokeh, soft edges',
     name: 'Panavision C-Series anamorphic',
     character: '2x anamorphic, vintage',
     anamorphic: true,
@@ -170,6 +191,7 @@ export const LENS_SETS: LensSet[] = [
   },
   {
     id: 'cookeanamorphic',
+    short: 'warm amber streak flares, vertically oval bokeh, gentle barrel bend',
     name: 'Cooke Anamorphic/i',
     character: '2x anamorphic, warm',
     anamorphic: true,
@@ -178,6 +200,7 @@ export const LENS_SETS: LensSet[] = [
   },
   {
     id: 'k35',
+    short: 'low contrast, glowing highlights, amber flares, darker corners',
     name: 'Canon K35',
     character: 'Vintage spherical, 1970s',
     prompt:
@@ -185,6 +208,7 @@ export const LENS_SETS: LensSet[] = [
   },
   {
     id: 'superbaltar',
+    short: 'soft, smoky glow around highlights, old-Hollywood texture',
     name: 'Super Baltar',
     character: 'Vintage spherical, 1960s',
     prompt:
@@ -192,6 +216,7 @@ export const LENS_SETS: LensSet[] = [
   },
   {
     id: 'helios44',
+    short: 'sharp only in the centre, round flare orbs, glowing highlights',
     name: 'Helios 44-2',
     character: 'Vintage spherical, swirly',
     prompt:
@@ -202,12 +227,14 @@ export const LENS_SETS: LensSet[] = [
 export const FILM_BACKS: FilmBack[] = [
   {
     id: 'digital',
+    short: '',
     name: 'Digital sensor',
     kind: 'digital',
     prompt: 'A clean digital image with fine, natural sensor noise only in the deepest shadows.',
   },
   {
     id: 'vision3_500t',
+    short: 'fine visible grain, faint red halation around lights, soft highlights',
     name: 'Kodak Vision3 500T 5219',
     kind: 'film',
     prompt:
@@ -215,6 +242,7 @@ export const FILM_BACKS: FilmBack[] = [
   },
   {
     id: 'vision3_250d',
+    short: 'fine tight grain, rich natural colour',
     name: 'Kodak Vision3 250D 5207',
     kind: 'film',
     prompt:
@@ -222,6 +250,7 @@ export const FILM_BACKS: FilmBack[] = [
   },
   {
     id: 'vision3_200t',
+    short: 'fine grain, clean tungsten colour',
     name: 'Kodak Vision3 200T 5213',
     kind: 'film',
     prompt:
@@ -229,6 +258,7 @@ export const FILM_BACKS: FilmBack[] = [
   },
   {
     id: 'vision3_50d',
+    short: 'almost invisible grain, crisp saturated colour',
     name: 'Kodak Vision3 50D 5203',
     kind: 'film',
     prompt:
@@ -236,6 +266,7 @@ export const FILM_BACKS: FilmBack[] = [
   },
   {
     id: 'eterna250d',
+    short: 'low contrast, muted pastel colour, fine grain',
     name: 'Fujifilm Eterna 250D',
     kind: 'film',
     prompt:
@@ -243,6 +274,7 @@ export const FILM_BACKS: FilmBack[] = [
   },
   {
     id: 'doublex',
+    short: 'black-and-white film, classic silver grain, rich blacks',
     name: 'Kodak Double-X 5222 (B&W)',
     kind: 'film',
     prompt:
@@ -250,6 +282,7 @@ export const FILM_BACKS: FilmBack[] = [
   },
   {
     id: 'ektachrome100d',
+    short: 'vivid saturated colour, high contrast, fine grain',
     name: 'Kodak Ektachrome 100D',
     kind: 'film',
     prompt:
@@ -316,4 +349,21 @@ export function packagePromptSections(input: CameraPackage, settings: LensSettin
     `Lens:${focal}${stop}. ${lens.prompt}`,
     camera.kind === 'film' ? `Film stock: ${back.prompt}` : `Capture: ${back.prompt}`,
   ];
+}
+
+/**
+ * The whole package as ONE short sentence for the render template: names plus a few visible
+ * traits each, ~40 words. Names carry most of it (Seedream links them to real footage); focal
+ * length, framing and depth of field come from the layout image, so they are only named.
+ */
+export function packageShortLine(input: CameraPackage, settings: LensSettings = {}): string {
+  const pkg = normalizePackage(input);
+  const camera = cameraById(pkg.cameraId)!;
+  const lens = lensById(pkg.lensId)!;
+  const back = backById(pkg.backId)!;
+  const stop = settings.aperture && settings.aperture !== 'OFF' ? ` at ${settings.aperture.replace('f/', 'T')}` : '';
+  const focal = settings.focalLength ? ` ${settings.focalLength}` : '';
+  const film = camera.kind === 'film' ? ` on ${back.name.replace(/\s*\(B&W\)/, '')}` : '';
+  const traits = [camera.short, lens.short, camera.kind === 'film' ? back.short : ''].filter(Boolean).join('; ');
+  return `Shot on ${camera.name} with a ${lens.name}${focal}${stop}${film}${traits ? `: ${traits}` : ''}.`;
 }

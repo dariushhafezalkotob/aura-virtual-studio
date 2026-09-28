@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import * as THREE from 'three';
 import {
   Project,
   CharacterActor,
@@ -220,20 +221,14 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     setTimeout(() => setToastMessage(null), 3000);
   }, []);
 
-  /**
-   * The take's first frame exactly as the viewport draws it, depth of field included: the take
-   * is put in playback at 0s and paused, a few frames are let through so the camera and the actors
-   * reach frame 1, then the canvas is cropped to 16:9 the same way stills and exports are.
-   */
-  const captureTakeFirstFrame = useCallback(async (takeId: string): Promise<string | null> => {
-    setActiveTakeId(takeId);
-    setViewMode('playback');
-    setIsPlaying(false);
-    setTimelineSec(0);
-    for (let i = 0; i < 6; i++) await nextFrame();
-    await new Promise((r) => setTimeout(r, 250));
-    await nextFrame();
+  /** The viewport's three.js scene, for the clay pass. */
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const handleSceneReady = useCallback((scene: THREE.Scene) => {
+    sceneRef.current = scene;
+  }, []);
 
+  /** The viewport canvas cropped to 16:9 at 1080p, the same way stills and exports are. */
+  const grabViewport = (): string | null => {
     const canvas = webglCanvasRef.current;
     if (!canvas || !canvas.width || !canvas.height) return null;
     const out = document.createElement('canvas');
@@ -252,6 +247,42 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     }
     ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, 1920, 1080);
     return out.toDataURL('image/jpeg', 0.92);
+  };
+
+  /**
+   * The take's first frame exactly as the viewport draws it, depth of field included: the take
+   * is put in playback at 0s and paused, and a few frames are let through so the camera and the
+   * actors reach frame 1.
+   *
+   * With `clay`, every surface is drawn in one grey matte material and the sky in flat grey for
+   * that capture only, then everything is put back. That is the clay layout pass: the shot's
+   * camera, shapes and poses with no texture or colour for the image model to copy.
+   */
+  const captureTakeFirstFrame = useCallback(async (takeId: string, clay = false): Promise<string | null> => {
+    setActiveTakeId(takeId);
+    setViewMode('playback');
+    setIsPlaying(false);
+    setTimelineSec(0);
+    for (let i = 0; i < 6; i++) await nextFrame();
+    await new Promise((r) => setTimeout(r, 250));
+    await nextFrame();
+    if (!clay) return grabViewport();
+
+    const scene = sceneRef.current;
+    if (!scene) return null;
+    const clayMaterial = new THREE.MeshStandardMaterial({ color: '#b4b4b4', roughness: 1, metalness: 0, emissive: '#2c2c2c' });
+    const previousOverride = scene.overrideMaterial;
+    const previousBackground = scene.background;
+    scene.overrideMaterial = clayMaterial;
+    scene.background = new THREE.Color('#70747a');
+    try {
+      for (let i = 0; i < 4; i++) await nextFrame();
+      return grabViewport();
+    } finally {
+      scene.overrideMaterial = previousOverride;
+      scene.background = previousBackground;
+      clayMaterial.dispose();
+    }
   }, []);
 
   /** Starts an empty hand-keyed move and makes it the take being edited. */
@@ -1101,6 +1132,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         incomingCameraPoseRef={incomingCameraPoseRef}
         dofConfig={dofConfig}
         onAutoFocusDistance={(dist) => setAutoFocusReadout(dist)}
+        onSceneReady={handleSceneReady}
         onCanvasReady={(canvas) => {
           webglCanvasRef.current = canvas;
         }}
@@ -2155,6 +2187,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
           take={takes.find((t) => t.id === renderTakeId)!}
           sceneHeading={(currentProject as any).sceneHeading}
           captureFirstFrame={() => captureTakeFirstFrame(renderTakeId)}
+          captureClayFrame={() => captureTakeFirstFrame(renderTakeId, true)}
           onRendered={handleTakeRendered}
           onClose={() => setRenderTakeId(null)}
         />

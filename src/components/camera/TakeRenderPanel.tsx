@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import type { CameraTake, FilmLook, TakeRender } from '../../types';
 import { DEFAULT_PACKAGE, normalizePackage, packageLabel, type CameraPackage } from '../../services/cameraPackage';
 import { listLooks } from '../../services/lookService';
-import { renderFrame, type RenderStage } from '../../services/renderService';
+import { defaultPassFor, makeBlurPass, renderFrame, type RenderPass, type RenderStage } from '../../services/renderService';
 import { CameraPackagePicker } from './CameraPackagePicker';
 
 interface TakeRenderPanelProps {
@@ -11,6 +11,8 @@ interface TakeRenderPanelProps {
   sceneHeading?: string;
   /** Grabs the take's first frame from the viewport as a JPEG data URL. */
   captureFirstFrame: () => Promise<string | null>;
+  /** The same frame re-rendered with every surface in grey matte: the clay layout pass. */
+  captureClayFrame: () => Promise<string | null>;
   /** Called when a render finishes, even if this panel was closed in the meantime. */
   onRendered: (takeId: string, render: TakeRender) => void;
   onClose: () => void;
@@ -32,6 +34,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   take,
   sceneHeading,
   captureFirstFrame,
+  captureClayFrame,
   onRendered,
   onClose,
 }) => {
@@ -41,7 +44,9 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   const [looks, setLooks] = useState<FilmLook[]>([]);
   const [lookId, setLookId] = useState('');
   const [note, setNote] = useState('');
-  const [fidelity, setFidelity] = useState<'layout' | 'exact'>('layout');
+  const [pass, setPass] = useState<RenderPass>(defaultPassFor(sceneHeading));
+  const [layouts, setLayouts] = useState<{ blur?: string; clay?: string }>({});
+  const [layoutError, setLayoutError] = useState<string | null>(null);
   const [stage, setStage] = useState<RenderStage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const renders = take.renders || [];
@@ -64,13 +69,35 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [take.id]);
 
+  // Prepare the chosen layout pass once the frame is in, so it can be checked before paying for a
+  // render. Clay is re-rendered by the viewport, so it waits for the textured capture to finish.
+  useEffect(() => {
+    if (!frame || pass === 'full' || layouts[pass]) return;
+    let alive = true;
+    setLayoutError(null);
+    const make = pass === 'blur' ? makeBlurPass(frame) : captureClayFrame();
+    make
+      .then((url) => {
+        if (!alive) return;
+        if (url) setLayouts((prev) => ({ ...prev, [pass]: url }));
+        else setLayoutError('The layout pass could not be made.');
+      })
+      .catch(() => alive && setLayoutError('The layout pass could not be made.'));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frame, pass]);
+
+  const layout = pass === 'full' ? frame : layouts[pass] || null;
+
   // A new render arriving on the take is shown straight away.
   useEffect(() => {
     if (renders.length) setShownId(renders[renders.length - 1].id);
   }, [renders.length]);
 
   const handleRender = async () => {
-    if (!frame || stage) return;
+    if (!frame || !layout || stage) return;
     setError(null);
     try {
       const result = await renderFrame(
@@ -84,7 +111,8 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
           lookId: lookId || undefined,
           sceneHeading,
           note: note.trim() || undefined,
-          fidelity,
+          pass,
+          layout: pass === 'full' ? undefined : layout,
         },
         setStage
       );
@@ -93,6 +121,8 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
         createdAt: new Date().toISOString(),
         url: result.url,
         sourceUrl: result.sourceUrl,
+        layoutUrl: result.layoutUrl,
+        pass: result.pass,
         cameraPackage: result.cameraPackage,
         lookId: result.lookId,
         prompt: result.prompt,
@@ -131,40 +161,55 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
           <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_300px] gap-lg">
             {/* Frames */}
             <div className="flex flex-col gap-sm min-w-0">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-sm">
+              <div className="grid grid-cols-2 gap-sm">
                 <figure className="flex flex-col gap-xs">
                   <figcaption className="font-label-caps text-[9px] tracking-[0.15em] uppercase text-on-surface-variant">Previs · frame 1</figcaption>
                   <div className="aspect-video bg-black/50 rounded-lg overflow-hidden border border-outline-variant/30 flex items-center justify-center">
                     {frame ? (
                       <img src={frame} alt="Previs first frame" className="w-full h-full object-cover" />
                     ) : (
-                      <span className="text-[12px] text-on-surface-variant">{captureError || 'Capturing the first frame…'}</span>
+                      <span className="text-[11px] text-on-surface-variant px-sm text-center">{captureError || 'Capturing the first frame…'}</span>
                     )}
                   </div>
                 </figure>
                 <figure className="flex flex-col gap-xs">
                   <figcaption className="font-label-caps text-[9px] tracking-[0.15em] uppercase text-on-surface-variant">
-                    {shown ? `Render · ${packageLabel(shown.cameraPackage)}` : 'Render'}
+                    Sent to Seedream · {pass === 'full' ? 'the frame itself' : `${pass} pass`}
                   </figcaption>
-                  <div className="relative aspect-video bg-black/50 rounded-lg overflow-hidden border border-outline-variant/30 flex items-center justify-center">
-                    {shown ? (
-                      <a href={shown.url} target="_blank" rel="noreferrer" title="Open full size">
-                        <img src={shown.url} alt="Rendered frame" className="w-full h-full object-cover" />
-                      </a>
+                  <div className="aspect-video bg-black/50 rounded-lg overflow-hidden border border-outline-variant/30 flex items-center justify-center">
+                    {layout ? (
+                      <img src={layout} alt={`${pass} layout pass`} className="w-full h-full object-cover" />
                     ) : (
-                      <span className="text-[12px] text-on-surface-variant px-md text-center">
-                        {stage ? '' : 'Choose the package and press Render.'}
+                      <span className="text-[11px] text-on-surface-variant px-sm text-center">
+                        {layoutError || (frame ? `Making the ${pass} pass…` : '')}
                       </span>
-                    )}
-                    {stage && (
-                      <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-sm text-on-surface">
-                        <span className="material-symbols-outlined text-[28px] text-primary animate-spin">progress_activity</span>
-                        <span className="text-[12px]">{STAGE_TEXT[stage]}</span>
-                      </div>
                     )}
                   </div>
                 </figure>
               </div>
+
+              <figure className="flex flex-col gap-xs">
+                <figcaption className="font-label-caps text-[9px] tracking-[0.15em] uppercase text-on-surface-variant">
+                  {shown ? `Render · ${shown.pass ? `${shown.pass} pass · ` : ''}${packageLabel(shown.cameraPackage)}` : 'Render'}
+                </figcaption>
+                <div className="relative aspect-video bg-black/50 rounded-lg overflow-hidden border border-outline-variant/30 flex items-center justify-center">
+                  {shown ? (
+                    <a href={shown.url} target="_blank" rel="noreferrer" title="Open full size" className="w-full h-full">
+                      <img src={shown.url} alt="Rendered frame" className="w-full h-full object-cover" />
+                    </a>
+                  ) : (
+                    <span className="text-[12px] text-on-surface-variant px-md text-center">
+                      {stage ? '' : 'Choose the package and press Render.'}
+                    </span>
+                  )}
+                  {stage && (
+                    <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-sm text-on-surface">
+                      <span className="material-symbols-outlined text-[28px] text-primary animate-spin">progress_activity</span>
+                      <span className="text-[12px]">{STAGE_TEXT[stage]}</span>
+                    </div>
+                  )}
+                </div>
+              </figure>
 
               {renders.length > 0 && (
                 <div className="flex flex-col gap-xs mt-xs">
@@ -210,15 +255,16 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
               </div>
 
               <div className="flex flex-col gap-[3px]">
-                <span className="font-label-caps text-[9px] tracking-[0.15em] uppercase text-on-surface-variant">Use the previs as</span>
+                <span className="font-label-caps text-[9px] tracking-[0.15em] uppercase text-on-surface-variant">Layout pass sent to Seedream</span>
                 <div className="flex bg-surface-container rounded-lg border border-outline-variant p-[2px]">
-                  {([['layout', 'Layout only'], ['exact', 'Exact']] as const).map(([id, label]) => (
+                  {([['blur', 'Blur'], ['clay', 'Clay'], ['full', 'Full']] as const).map(([id, label]) => (
                     <button
                       key={id}
                       type="button"
-                      onClick={() => setFidelity(id)}
-                      className={`flex-1 py-[5px] rounded text-[11px] font-label-caps cursor-pointer ${
-                        fidelity === id ? 'bg-primary text-background font-bold' : 'text-on-surface-variant hover:text-on-surface'
+                      onClick={() => setPass(id)}
+                      disabled={!!stage}
+                      className={`flex-1 py-[5px] rounded text-[11px] font-label-caps cursor-pointer disabled:cursor-wait ${
+                        pass === id ? 'bg-primary text-background font-bold' : 'text-on-surface-variant hover:text-on-surface'
                       }`}
                     >
                       {label}
@@ -226,9 +272,11 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
                   ))}
                 </div>
                 <span className="text-[10px] text-on-surface-variant/70">
-                  {fidelity === 'layout'
-                    ? 'Keeps camera angle, set geometry and composition; reads the materials and invents all detail fresh.'
-                    : 'Copies the previs closely, surfaces and all.'}
+                  {pass === 'blur'
+                    ? 'Grey and blurred: keeps camera, room and poses, frees every surface. Best for interiors.'
+                    : pass === 'clay'
+                      ? 'Every model in grey matte: keeps hard edges and structure, no textures. Best for exteriors.'
+                      : 'The textured previs itself. Copies its surfaces and light closely.'}
                 </span>
               </div>
 
@@ -268,7 +316,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
 
               <button
                 onClick={handleRender}
-                disabled={!frame || !!stage}
+                disabled={!frame || !layout || !!stage}
                 className="inline-flex items-center justify-center gap-xs py-sm rounded-lg bg-primary text-background font-label-caps text-[12px] tracking-wider font-bold hover:brightness-110 cursor-pointer disabled:opacity-50 disabled:cursor-wait"
               >
                 <span className="material-symbols-outlined text-[18px]">auto_awesome</span>

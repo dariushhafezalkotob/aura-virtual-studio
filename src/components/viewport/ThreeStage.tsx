@@ -115,6 +115,8 @@ interface ThreeStageProps {
   onKeyCaptured?: (frame: CameraKeyframe) => void;
   showCameraTrajectory?: boolean;
   onCanvasReady?: (canvas: HTMLCanvasElement) => void;
+  /** The live three.js scene, for passes that re-render the shot differently (the clay pass). */
+  onSceneReady?: (scene: THREE.Scene) => void;
   remoteOrientation?: DeviceOrientationData | null;
   remoteOrientationRef?: React.MutableRefObject<DeviceOrientationData | null>;
   remoteMove?: RemoteMoveData | null;
@@ -1410,11 +1412,17 @@ const CameraFovUpdater: React.FC<{ fov?: number }> = ({ fov }) => {
 };
 
 // Canvas Publisher Component to share the WebGL DOM element for video capture
-const CanvasPublisher: React.FC<{ onCanvasReady?: (canvas: HTMLCanvasElement) => void }> = ({ onCanvasReady }) => {
-  const { gl } = useThree();
+const CanvasPublisher: React.FC<{
+  onCanvasReady?: (canvas: HTMLCanvasElement) => void;
+  onSceneReady?: (scene: THREE.Scene) => void;
+}> = ({ onCanvasReady, onSceneReady }) => {
+  const { gl, scene } = useThree();
   useEffect(() => {
     onCanvasReady?.(gl.domElement);
   }, [gl, onCanvasReady]);
+  useEffect(() => {
+    onSceneReady?.(scene);
+  }, [scene, onSceneReady]);
   return null;
 };
 
@@ -1779,6 +1787,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   onKeyCaptured,
   showCameraTrajectory = true,
   onCanvasReady,
+  onSceneReady,
   remoteOrientation = null,
   remoteOrientationRef,
   remoteMove = null,
@@ -1824,7 +1833,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           }
         }}
       >
-        <CanvasPublisher onCanvasReady={onCanvasReady} />
+        <CanvasPublisher onCanvasReady={onCanvasReady} onSceneReady={onSceneReady} />
         <CameraFovUpdater fov={cameraFov} />
         {dofConfig && dofConfig.enabled && dofConfig.aperture < 100 && (
           <CinematicDepthOfField config={dofConfig} onAutoFocusDistance={onAutoFocusDistance} lensRef={keyedLensRef} />

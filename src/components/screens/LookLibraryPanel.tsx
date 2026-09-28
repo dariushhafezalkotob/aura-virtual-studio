@@ -490,7 +490,7 @@ export const LookLibraryPanel: React.FC<LookLibraryPanelProps> = ({ projectId, p
                   <div className="flex flex-col gap-xs border-t border-outline-variant/30 pt-md mt-xs">
                     <div className="flex items-center justify-between gap-sm flex-wrap">
                       <span className="font-label-caps text-[10px] tracking-[0.15em] uppercase text-on-surface-variant">
-                        Look text for the image model
+                        Grade for the render
                       </span>
                       <div className="flex gap-xs">
                         <button
@@ -498,7 +498,7 @@ export const LookLibraryPanel: React.FC<LookLibraryPanelProps> = ({ projectId, p
                           onClick={handleWrite}
                           disabled={busy !== null}
                           className="inline-flex items-center gap-xs px-sm py-[5px] rounded-lg bg-primary/15 border border-primary/50 text-primary font-label-caps text-[10px] tracking-wider hover:bg-primary/25 cursor-pointer disabled:opacity-50 disabled:cursor-wait"
-                          title="Gemini writes the look from the details, the palette and the reference picture"
+                          title="Gemini writes the grade from the palette, the colour notes and the reference picture"
                         >
                           <span className={`material-symbols-outlined text-[14px] ${busy === 'writing' ? 'animate-spin' : ''}`}>
                             {busy === 'writing' ? 'progress_activity' : 'auto_awesome'}
@@ -518,10 +518,10 @@ export const LookLibraryPanel: React.FC<LookLibraryPanelProps> = ({ projectId, p
                     </div>
                     <textarea
                       id="look-prompt"
-                      rows={12}
+                      rows={6}
                       value={draft.lookPrompt}
                       onChange={(e) => set('lookPrompt', e.target.value)}
-                      placeholder="Format and camera: … Lens: … Film stock: … Lighting: … Color grade: …  Write it yourself, or let Gemini write it from the details above, then edit."
+                      placeholder="Grade: the mood of the colour, how shadows, midtones and highlights read (with the palette), contrast, and where skin sits. 40-70 words. Write it yourself, or let Gemini write it from the palette and the reference picture."
                       className={`${inputClass} font-mono text-[12px] leading-relaxed resize-y`}
                     />
                   </div>

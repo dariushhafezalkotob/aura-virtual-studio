@@ -7,7 +7,7 @@ import { describeFetchError } from '../lib/errors';
 import { geminiKey, geminiText } from '../lib/gemini';
 import { getLook } from '../lib/looks';
 import { refundGeneration } from '../lib/quota';
-import { backById, normalizePackage, packagePromptSections } from '../../src/services/cameraPackage';
+import { backById, normalizePackage, packagePromptSections, packageShortLine } from '../../src/services/cameraPackage';
 
 /**
  * Turns a take's first frame into a realistic film frame.
@@ -39,7 +39,7 @@ interface RenderJob {
   status: JobStatus;
   createdAt: number;
   error?: string;
-  result?: { url: string; sourceUrl: string; prompt: string; model: string; cameraPackage: any; lookId?: string };
+  result?: { url: string; sourceUrl: string; layoutUrl: string; pass: RenderPass; prompt: string; model: string; cameraPackage: any; lookId?: string };
 }
 
 const jobs = new Map<string, RenderJob>();
@@ -90,18 +90,28 @@ function saveAsset(prefix: string, ext: string, buf: Buffer): string {
 // ---------------------------------------------------------------------------------------------
 // The shot and its light, written by Gemini from the frame itself
 
-// 'layout': the previs fixes camera, geometry and composition only; the model invents every
-// surface and detail. 'exact': the previs is copied closely (the first version). Users found
-// 'exact' carried the previs's CG detail into the render and held realism back (2026-09-26).
-export type RenderFidelity = 'layout' | 'exact';
+// What image 1 (the one Seedream sees) is. Found by hand-testing in Seedream (2026-09-26..28):
+// an edit model copies whatever the input image shows, so a textured previs leaks its CG textures,
+// colours and flat light however the prompt is worded. A texture-free layout pass fixes that:
+// 'blur' (grey + heavily blurred) suits interiors, 'clay' (every model grey matte) suits exteriors,
+// whose hard lines blur melts. 'full' sends the textured frame and copies it closely.
+export type RenderPass = 'blur' | 'clay' | 'full';
 
-const LAYOUT_WRITER = `You look at one frame from the 3D previsualization of a film and write two parts of a prompt for an image model. The previs is only a LAYOUT GUIDE: its CG textures, low detail and flat surfaces must NOT be copied. The model will photograph the scene from scratch, freely inventing rich, real detail, while keeping the shot's layout.
+const TEMPLATE_WRITER = `You read one frame from the 3D previsualization of a film and write three short lines for a fixed image-generation prompt. The image model will NOT see this frame: it only gets a grey, texture-free layout of the same shot. So every colour and material must come from your words, and nothing else.
 
-"keep": one paragraph. Start with: "The input image is a 3D previs layout, not a picture to copy. Use it only for the camera angle, the geometry of the set and the composition, then photograph the scene for real, inventing all surface detail freely." Then state precisely what the layout fixes: the camera position, height, angle and lens framing; the shape and placement of the space (walls, openings, floor, ceiling); where each large object and piece of furniture stands; each person's place in the frame, pose and eyeline. Then, object by object, say what each thing is MADE OF and where it is (e.g. "the long counter on the right is dark, worn hardwood with a brass foot rail"; "the back wall is exposed brick"), reading the materials from the previs colours and shapes. Say that textures, wear, small props, dressing and every fine detail should be generated anew and richly, as on a real, lived-in set, and should not follow the previs surfaces. Untextured or single-colour figures and mannequins are stand-ins: replace each with a real person in the same pose, and describe a believable person for each (age range, build, hair, wardrobe that suits the scene), unless the director's note says who they are. End with: "Do not change the camera angle, the layout or where anyone stands."
+"light": one sentence, at most 25 words: the time of day and the sources that light the scene, e.g. "Night, lit only by small warm lamps; everything else falls into deep shadow." Use the scene heading.
 
-"lighting": one paragraph that starts with "Lighting:" and describes the light as a cinematographer would: which sources light the scene (lamps, windows, sun, screens), direction, hardness, colour temperature, time of day and contrast. Stay true to the frame and the scene heading.
+"place": at most 70 words. Start with what the place is ("An old pub at night:", "A New York street:"). Then its main parts, each with its material AND colour, tied to where it is in the frame ("the townhouses on the left are brownstone with black iron railings; the corner building in the centre is red brick with black fire escapes"). Read the colours from the frame; they are needed. Add age and wear (old, scuffed, stained, cracked). If you see holes in the models, floating blobs, grid or guide lines, end with one short sentence starting "Ignore" that names them as errors.
 
-Rules: never add or remove large objects or people; say nothing about camera bodies, lenses, film stock or grading, which are written separately; plain, direct sentences with no hype words.`;
+"people": at most 40 words per person. Every untextured or single-colour figure is a stand-in: describe a believable real person (age, hair, wardrobe that suits the scene, with colours) who is exactly where the figure is, in exactly its pose, doing what it is doing ("sits exactly where the figure sits, hands on his knees, looking away to the left"; "walks along the far sidewalk"). The figure's own colour (turquoise, yellow, purple...) is only a marker in the previs: never give the person, their clothes or anything else that colour. If a seated figure has nothing under it, give it a chair that suits the place. Follow the director's note when it names who someone is. Use an empty string when there are no figures.
+
+Rules: nothing about camera, lens, film stock, grading or mood beyond the light sentence; never add or remove large objects; plain words, no hype.`;
+
+const TEMPLATE_SCHEMA = {
+  type: 'OBJECT',
+  properties: { light: { type: 'STRING' }, place: { type: 'STRING' }, people: { type: 'STRING' } },
+  required: ['light', 'place', 'people'],
+};
 
 const SHOT_WRITER = `You look at one frame from the 3D previsualization of a film and write two parts of a prompt for an image-editing model. That model will turn this exact frame into a real frame photographed on set, so your words must pin the shot down precisely.
 
@@ -117,16 +127,30 @@ const SHOT_SCHEMA = {
   required: ['keep', 'lighting'],
 };
 
-async function describeShot(frameBase64: string, mimeType: string, sceneHeading: string, note: string, fidelity: RenderFidelity) {
+function frameParts(frameBase64: string, mimeType: string, sceneHeading: string, note: string): any[] {
   const context = [
     sceneHeading && `Scene heading: ${sceneHeading}`,
     note && `Director's note: ${note}`,
   ].filter(Boolean).join('\n');
   const parts: any[] = [{ inlineData: { mimeType, data: frameBase64 } }];
   if (context) parts.push({ text: context });
-  // From a network behind a VPN one call measured 12-37s (2026-09-26); from the server it is a few
-  // seconds. The limit only has to stop a hung call, not a slow one.
-  const raw = await geminiText({ system: fidelity === 'exact' ? SHOT_WRITER : LAYOUT_WRITER, parts, json: { schema: SHOT_SCHEMA }, timeoutMs: 180_000 });
+  return parts;
+}
+
+// From a network behind a VPN one call measured 12-37s (2026-09-26); from the server it is a few
+// seconds. The limit only has to stop a hung call, not a slow one.
+async function writeTemplateLines(frameBase64: string, mimeType: string, sceneHeading: string, note: string) {
+  const raw = await geminiText({ system: TEMPLATE_WRITER, parts: frameParts(frameBase64, mimeType, sceneHeading, note), json: { schema: TEMPLATE_SCHEMA }, timeoutMs: 180_000 });
+  const parsed = JSON.parse(raw);
+  return {
+    light: String(parsed.light || '').trim(),
+    place: String(parsed.place || '').trim(),
+    people: String(parsed.people || '').trim(),
+  };
+}
+
+async function describeShot(frameBase64: string, mimeType: string, sceneHeading: string, note: string) {
+  const raw = await geminiText({ system: SHOT_WRITER, parts: frameParts(frameBase64, mimeType, sceneHeading, note), json: { schema: SHOT_SCHEMA }, timeoutMs: 180_000 });
   const parsed = JSON.parse(raw);
   const lighting = String(parsed.lighting || '').trim();
   return {
@@ -138,27 +162,48 @@ async function describeShot(frameBase64: string, mimeType: string, sceneHeading:
 // ---------------------------------------------------------------------------------------------
 // The grade
 
-/** The grade paragraph from a saved Look: its "Color grade:" section, or one built from its fields. */
-async function gradeFromLook(projectId: string, lookId: string): Promise<string | null> {
+/**
+ * What a saved Look contributes: its grade paragraph (newer looks hold only that; older ones hold
+ * a long text whose "Color grade:" part is taken) and its reference still, sent as image 2.
+ */
+async function lookParts(projectId: string, lookId: string): Promise<{ grade: string | null; imageDataUrl: string | null }> {
   const look = await getLook(projectId, lookId);
-  if (!look) return null;
-  const idx = look.lookPrompt.search(/colou?r grade:/i);
-  if (idx >= 0) return look.lookPrompt.slice(idx).trim();
-  const bits = [
-    look.colorNotes && `Color grade: ${look.colorNotes}.`,
-    look.palette.length > 0 && `Use this palette, darkest to lightest: ${look.palette.join(', ')}.`,
-  ].filter(Boolean);
-  return bits.length ? bits.join(' ') : null;
+  if (!look) return { grade: null, imageDataUrl: null };
+
+  const text = look.lookPrompt.trim();
+  const idx = text.search(/(colou?r )?grade:/i);
+  let grade: string | null = idx >= 0 ? text.slice(idx).trim() : null;
+  if (grade && !/^grade:/i.test(grade)) grade = grade.replace(/^colou?r grade:/i, 'Grade:');
+  if (!grade) {
+    const bits = [look.colorNotes, look.palette.length > 0 && `palette, darkest to lightest: ${look.palette.join(', ')}`].filter(Boolean);
+    grade = bits.length ? `Grade: ${bits.join('; ')}.` : null;
+  }
+
+  let imageDataUrl: string | null = null;
+  if (look.referenceUrl) {
+    const file = path.join(assetsDir(), path.basename(look.referenceUrl.replace('/api/assets/', '')));
+    if (fs.existsSync(file)) {
+      const ext = path.extname(file).toLowerCase();
+      const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+      imageDataUrl = `data:${mime};base64,${fs.readFileSync(file).toString('base64')}`;
+    }
+  }
+  return { grade, imageDataUrl };
 }
 
-const NEUTRAL_GRADE = 'Grade: a natural film grade that shows the camera, lens and film exactly as they are, with no added stylised colour.';
-const MONO_GRADE = 'Grade: black and white only. Keep the frame fully monochrome whatever the lights and props are.';
-const CLEAN = 'Deliver one clean photograph filling the whole frame: no text, no captions, no letterbox bars, no film borders, no watermark.';
+const NEUTRAL_GRADE = 'Grade: natural, muted film colour; rich blacks that are not crushed; natural skin.';
+const MONO_GRADE = 'Grade: black and white only, every object a shade of grey; rich blacks, bright glowing highlights.';
+const CLEAN = 'One clean photograph filling the frame, no text, no borders, no watermark.';
+const LOOK_IMAGE_LINE = 'Image 2 is the look: match its light, darkness, colour grade, haze and grain, but take none of its content or layout.';
+const IMAGE_ROLE: Record<Exclude<RenderPass, 'full'>, string> = {
+  blur: 'Image 1 is a blurred grey layout sketch of the shot',
+  clay: 'Image 1 is a grey clay model of the shot',
+};
 
 // ---------------------------------------------------------------------------------------------
 // Seedream via WaveSpeed
 
-async function seedreamEdit(prompt: string, frameDataUrl: string): Promise<Buffer> {
+async function seedreamEdit(prompt: string, images: string[]): Promise<Buffer> {
   const key = env.WAVESPEED_API_KEY;
   const auth = { Authorization: `Bearer ${key}` };
 
@@ -167,7 +212,7 @@ async function seedreamEdit(prompt: string, frameDataUrl: string): Promise<Buffe
     const res = await fetch(SEEDREAM_EDIT, {
       method: 'POST',
       headers: { ...auth, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, images: [frameDataUrl], aspect_ratio: '16:9', resolution: RENDER_RESOLUTION, output_format: 'jpeg' }),
+      body: JSON.stringify({ prompt, images, aspect_ratio: '16:9', resolution: RENDER_RESOLUTION, output_format: 'jpeg' }),
       signal: AbortSignal.timeout(60_000),
     });
     submitted = await res.json().catch(() => null);
@@ -208,8 +253,9 @@ async function seedreamEdit(prompt: string, frameDataUrl: string): Promise<Buffe
 // ---------------------------------------------------------------------------------------------
 
 export interface RenderPromptInput {
-  fidelity: RenderFidelity;
+  pass: RenderPass;
   projectId: string;
+  /** The textured previs frame: Gemini reads it; Seedream only sees it in 'full' mode. */
   frameBase64: string;
   mimeType: string;
   cameraPackage: ReturnType<typeof normalizePackage>;
@@ -219,36 +265,63 @@ export interface RenderPromptInput {
   note: string;
 }
 
-/** The full prompt for one frame. Exported so it can be checked without paying for a render. */
-export async function buildRenderPrompt(input: RenderPromptInput): Promise<{ prompt: string; lookUsed: boolean }> {
-  const shot = await describeShot(input.frameBase64, input.mimeType, input.sceneHeading, input.note, input.fidelity);
-
+/**
+ * The full prompt for one frame, and the reference images that go with it after image 1.
+ * Exported so it can be checked without paying for a render.
+ *
+ * Layout passes use the short fixed template (~150 words): what each image is for, one film-still
+ * line with the light, the place with colours tied to positions, the people, the camera package
+ * in one sentence, the grade, the director's note, the clean-frame rule.
+ */
+export async function buildRenderPrompt(input: RenderPromptInput): Promise<{ prompt: string; lookUsed: boolean; extraImages: string[] }> {
   const monochrome = backById(input.cameraPackage.backId)?.id === 'doublex';
-  const lookGrade = input.lookId && !monochrome ? await gradeFromLook(input.projectId, input.lookId) : null;
-  const grade = monochrome ? MONO_GRADE : lookGrade || NEUTRAL_GRADE;
+  // A colour look image would fight a black-and-white stock, so it is left out there.
+  const look = input.lookId && !monochrome ? await lookParts(input.projectId, input.lookId) : { grade: null, imageDataUrl: null };
+  const grade = monochrome ? MONO_GRADE : look.grade || NEUTRAL_GRADE;
+  const extraImages = look.imageDataUrl ? [look.imageDataUrl] : [];
 
+  if (input.pass === 'full') {
+    const shot = await describeShot(input.frameBase64, input.mimeType, input.sceneHeading, input.note);
+    const prompt = [
+      shot.keep,
+      extraImages.length ? LOOK_IMAGE_LINE : null,
+      ...packagePromptSections(input.cameraPackage, input.settings),
+      shot.lighting,
+      grade,
+      input.note && `Director's note: ${input.note}`,
+      CLEAN,
+    ].filter(Boolean).join('\n\n');
+    return { prompt, lookUsed: !!look.grade, extraImages };
+  }
+
+  const lines = await writeTemplateLines(input.frameBase64, input.mimeType, input.sceneHeading, input.note);
   const prompt = [
-    shot.keep,
-    ...packagePromptSections(input.cameraPackage, input.settings),
-    shot.lighting,
+    [
+      `${IMAGE_ROLE[input.pass]}: keep its camera angle, framing, the geometry of the space, where every object stands and every person's position and pose; it has no colour, texture or light, so invent them.`,
+      extraImages.length ? LOOK_IMAGE_LINE : null,
+    ].filter(Boolean).join(' '),
+    `A candid film still from a feature film, shot on location, not a render. ${lines.light}`,
+    lines.place,
+    lines.people,
+    packageShortLine(input.cameraPackage, input.settings),
     grade,
     input.note && `Director's note: ${input.note}`,
     CLEAN,
   ].filter(Boolean).join('\n\n');
-  return { prompt, lookUsed: !!lookGrade };
+  return { prompt, lookUsed: !!look.grade, extraImages };
 }
 
-async function runJob(job: RenderJob, input: RenderPromptInput & { frameDataUrl: string; sourceUrl: string }) {
+async function runJob(job: RenderJob, input: RenderPromptInput & { layoutDataUrl: string; sourceUrl: string; layoutUrl: string }) {
   const started = Date.now();
   try {
-    const { prompt, lookUsed } = await buildRenderPrompt(input);
+    const { prompt, lookUsed, extraImages } = await buildRenderPrompt(input);
     console.log(`[API render-frame] ${job.id} prompt written in ${((Date.now() - started) / 1000).toFixed(1)}s`);
 
     job.status = 'rendering';
-    const image = await seedreamEdit(prompt, input.frameDataUrl);
+    const image = await seedreamEdit(prompt, [input.layoutDataUrl, ...extraImages]);
     const url = saveAsset('render', 'jpg', image);
 
-    job.result = { url, sourceUrl: input.sourceUrl, prompt, model: SEEDREAM_MODEL, cameraPackage: input.cameraPackage, lookId: lookUsed ? input.lookId : undefined };
+    job.result = { url, sourceUrl: input.sourceUrl, layoutUrl: input.layoutUrl, pass: input.pass, prompt, model: SEEDREAM_MODEL, cameraPackage: input.cameraPackage, lookId: lookUsed ? input.lookId : undefined };
     job.status = 'done';
     console.log(`[API render-frame] ${job.id} done in ${((Date.now() - started) / 1000).toFixed(1)}s -> ${url}`);
   } catch (err: any) {
@@ -289,7 +362,7 @@ export async function handleRenderApi(req: any, res: any): Promise<boolean> {
       return true;
     }
 
-    const body = await readJsonBody(req, 16 * 1024 * 1024);
+    const body = await readJsonBody(req, 24 * 1024 * 1024);
     const projectId = String(body.projectId || '');
     if (!(await canOpenProject(user._id, projectId))) {
       sendJson(res, 404, { success: false, error: 'No such project.' });
@@ -302,8 +375,22 @@ export async function handleRenderApi(req: any, res: any): Promise<boolean> {
       return true;
     }
     const [, mimeType, frameBase64] = match;
-    const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg';
-    const sourceUrl = saveAsset('render_src', ext, Buffer.from(frameBase64, 'base64'));
+    const extOf = (mime: string) => (mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg');
+    const sourceUrl = saveAsset('render_src', extOf(mimeType), Buffer.from(frameBase64, 'base64'));
+
+    // Image 1 for Seedream: the texture-free layout pass, or the frame itself in 'full' mode.
+    const pass: RenderPass = body.pass === 'clay' || body.pass === 'full' ? body.pass : 'blur';
+    let layoutDataUrl = String(body.frame);
+    let layoutUrl = sourceUrl;
+    if (pass !== 'full') {
+      const layout = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(body.layout || ''));
+      if (!layout) {
+        sendJson(res, 400, { success: false, error: 'The layout pass did not arrive as an image.' });
+        return true;
+      }
+      layoutDataUrl = String(body.layout);
+      layoutUrl = saveAsset(`render_${pass}`, extOf(layout[1]), Buffer.from(layout[2], 'base64'));
+    }
 
     forgetOldJobs();
     const job: RenderJob = {
@@ -317,11 +404,13 @@ export async function handleRenderApi(req: any, res: any): Promise<boolean> {
 
     const cameraPackage = normalizePackage(body.cameraPackage);
     const clip = (v: unknown, n: number) => String(v ?? '').trim().slice(0, n);
-    console.log(`[API render-frame] ${job.id} for ${user.email}: ${cameraPackage.cameraId} / ${cameraPackage.lensId} / ${cameraPackage.backId}`);
+    console.log(`[API render-frame] ${job.id} for ${user.email}: ${pass} pass, ${cameraPackage.cameraId} / ${cameraPackage.lensId} / ${cameraPackage.backId}`);
 
     runJob(job, {
       projectId,
-      frameDataUrl: body.frame,
+      pass,
+      layoutDataUrl,
+      layoutUrl,
       frameBase64,
       mimeType,
       sourceUrl,
@@ -330,7 +419,6 @@ export async function handleRenderApi(req: any, res: any): Promise<boolean> {
       lookId: body.lookId ? clip(body.lookId, 40) : undefined,
       sceneHeading: clip(body.sceneHeading, 200),
       note: clip(body.note, 1000),
-      fidelity: body.fidelity === 'exact' ? 'exact' : 'layout',
     });
 
     sendJson(res, 200, { success: true, jobId: job.id });

@@ -43,20 +43,19 @@ function sendJson(res: any, status: number, payload: any) {
 // What the image model needs from a look, learned from the previs tests (2026-09-25): it follows
 // descriptions of what is visible (flare, grain, colour, light) and ignores equipment jargon, and
 // it copies whatever depth of field the previs frame already has.
-const WRITER_INSTRUCTIONS = `You write the "look" section of a prompt for Google's Gemini image model (Nano Banana). That prompt turns a 3D previs frame into a frame photographed for a feature film. The same look is reused on many different shots, so describe only how the picture is captured, lit and graded. Never describe what is in the picture: no people, objects, places, wardrobe or story, even if the reference image shows them.
+// A look is the GRADE only (2026-09-28). The camera, lens and film come from the take's camera
+// package and the light from the shot, so a look that also described them repeated or fought
+// them, and pushed the render prompt past the model's word budget. Its reference still travels
+// with every render as image 2, which carries far more than words.
+const WRITER_INSTRUCTIONS = `You write the "Grade" paragraph of an image-generation prompt that turns a film's previs into a photographed frame. The same grade is reused on many different shots, so describe only how the picture's colour and tone feel. Never describe what is in the picture (people, objects, places, wardrobe, story), and say nothing about camera bodies, lenses, film stock or where the light comes from: those are written separately.
 
-How to write it so the image model follows it:
-- Translate every technical fact into what is visible in the picture. Sensor names, gamma curves, bit depth, resolution, MTF, lab processes and mastering mean nothing to the image model: leave them out or state only their visible result.
-- Name the real camera, lens and film stock once each, then say what they look like.
-- Spherical lenses give round out-of-focus highlights and straight lines. Anamorphic lenses give vertically oval bokeh, long horizontal streak flares, slight barrel bend at the edges and a widescreen frame. Vintage lenses give lower contrast, bloom around lights, coloured flare and softer edges.
-- Film stocks: grain size and where it shows, highlight roll-off, halation around bright lights, colour bias of shadows and highlights. Digital capture: clean image, fine noise only in deep shadows.
-- Lighting: direction, hardness, colour temperature and how it falls (key, fill, rim, window light, practical lamps), in general terms that fit any shot.
-- Colour grade: give every palette colour as its hex value with a role (deep shadows, dark midtones, accents, midtones, highlights, peak white), and say where skin tones sit. Use exactly the palette colours you are given, all of them and no others. Only when no palette is given, choose colours from the reference image.
-- Plain, direct sentences. No hype such as "masterpiece", "8K", "award-winning", "hyper-realistic".
+Write one paragraph that starts with "Grade:" and is 40 to 70 words:
+- the mood of the colour in a few words (e.g. "warm, saturated yellow-green, like a hot, stale afternoon"; "low-key and moody");
+- how shadows, midtones and highlights read, giving every palette colour as its hex value with its role (deep shadows, dark midtones, accents, midtones, highlights, peak), using exactly the palette colours you are given, all of them and no others; only when there is no palette, take the colours from the reference image;
+- contrast and how deep the blacks are;
+- where skin tones sit.
 
-The facts you are given always win. The reference image only fills in what the facts leave open (quality of light, contrast, grain, colour). If the image shows something the facts contradict, such as streak flares when the lens is spherical, or lamplight when the lighting is daylight, follow the facts and ignore that part of the image.
-
-Output exactly five paragraphs, each starting with its label: "Format and camera:", "Lens:", "Film stock:", "Lighting:", "Color grade:". The colour grade may list the palette as short lines starting with "- ". If a fact is missing, choose what fits the other facts and the reference image, without saying you chose it. No title, no preamble, no closing remarks.`;
+Do not name object colours (red brick, green door): the grade sets how colours read, not what they are. The facts you are given win over the reference image. Plain, direct words, no hype. Output only the paragraph: no title, no preamble, no closing remarks.`;
 
 function describeFields(fields: ReturnType<typeof cleanLookFields>): string {
   const rows: [string, string][] = [
