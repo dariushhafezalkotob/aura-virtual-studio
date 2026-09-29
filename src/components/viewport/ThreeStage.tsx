@@ -510,6 +510,13 @@ const GLTFModel: React.FC<{
           mesh.castShadow = true;
           mesh.receiveShadow = true;
           if (mesh.material) {
+            // scene.clone() copies the meshes but keeps the loaded model's materials, so every
+            // copy of one model - and every screen showing it - wrote its specularity and glow into
+            // the SAME materials, and whichever copy was drawn last won. Each copy gets its own.
+            // Textures stay shared; only the material settings are per copy.
+            mesh.material = Array.isArray(mesh.material)
+              ? mesh.material.map((m) => m.clone())
+              : mesh.material.clone();
             const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
             for (const m of mats) {
               const mat = m as THREE.MeshStandardMaterial;
@@ -527,7 +534,21 @@ const GLTFModel: React.FC<{
         }
       });
       return c;
-    }, [scene, effectiveSpecularity, effectiveEmissiveBoost]);
+      // Only a new model re-copies; slider changes are applied in place by the effect below.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scene]);
+
+    // The copied materials belong to this copy alone, so they are released with it.
+    useEffect(
+      () => () => {
+        cloned.traverse((child) => {
+          const mesh = child as THREE.Mesh;
+          if (!mesh.isMesh || !mesh.material) return;
+          (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).forEach((m) => m.dispose());
+        });
+      },
+      [cloned]
+    );
 
     // Live specularity & emissive update without re-instantiation
     useEffect(() => {
