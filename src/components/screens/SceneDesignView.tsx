@@ -223,11 +223,11 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [rotationSnapAngle, setRotationSnapAngle] = useState<'10deg' | 'free'>('10deg');
-  const [lightIntensity, setLightIntensity] = useState<number>(1.0);
+  const [lightIntensity, setLightIntensity] = useState<number>(currentProject.lightIntensity ?? 1.0);
   const [stageSpecularity, setStageSpecularity] = useState<number>(
     currentProject.stageSpecularity !== undefined ? currentProject.stageSpecularity : 0.15
   );
-  const [environmentPreset, setEnvironmentPreset] = useState<LightingEnvironmentPreset>('studio');
+  const [environmentPreset, setEnvironmentPreset] = useState<LightingEnvironmentPreset>(currentProject.environmentPreset || 'studio');
   const [showGrid, setShowGrid] = useState<boolean>(true);
 
   // High-Performance Point Lights State (Physical Decay, Zero Shadow Map Overhead)
@@ -239,7 +239,19 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     if (currentProject.stageSpecularity !== undefined) {
       setStageSpecularity(currentProject.stageSpecularity);
     }
+    setLightIntensity(currentProject.lightIntensity ?? 1.0);
+    setEnvironmentPreset(currentProject.environmentPreset || 'studio');
   }, [currentProject.id]);
+
+  // Light intensity, the environment preset and specularity are part of the scene: Camera Record
+  // and Acting read them from it. They used to live only in this screen's state (specularity
+  // reached the scene only on SAVE STAGE), so every other screen showed the defaults.
+  const updateLookSetting = (patch: Pick<Project, 'lightIntensity'> | Pick<Project, 'environmentPreset'> | Pick<Project, 'stageSpecularity'>) => {
+    if ('lightIntensity' in patch) setLightIntensity(patch.lightIntensity ?? 1.0);
+    if ('environmentPreset' in patch) setEnvironmentPreset(patch.environmentPreset || 'studio');
+    if ('stageSpecularity' in patch) setStageSpecularity(patch.stageSpecularity ?? 0.15);
+    onUpdateProject({ ...currentProject, ...patch });
+  };
 
   useEffect(() => {
     if (currentProject.pointLights) {
@@ -1067,6 +1079,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       panoramaRotation: panoramaRotation || 0,
       splatUrl: splatUrl || undefined,
       stageSpecularity,
+      lightIntensity,
+      environmentPreset,
       pointLights: JSON.parse(JSON.stringify(pointLights)),
       thumbnail,
       modified: 'Just now',
@@ -1139,6 +1153,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       panoramaRotation: template.panoramaRotation || 0,
       splatUrl: template.splatUrl || undefined,
       stageSpecularity: template.stageSpecularity,
+      lightIntensity: template.lightIntensity ?? lightIntensity,
+      environmentPreset: (template.environmentPreset as LightingEnvironmentPreset) || environmentPreset,
       pointLights: template.pointLights || [],
       modified: 'Just now',
     });
@@ -1454,7 +1470,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               (preset) => (
                 <button
                   key={preset}
-                  onClick={() => setEnvironmentPreset(preset)}
+                  onClick={() => updateLookSetting({ environmentPreset: preset })}
                   className={`px-xs py-[2px] rounded text-[10px] font-label-caps uppercase transition-colors cursor-pointer ${
                     environmentPreset === preset
                       ? 'bg-primary/20 text-primary font-semibold border border-primary/40'
@@ -1479,7 +1495,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               max={3.0}
               step={0.05}
               value={lightIntensity}
-              onChange={(e) => setLightIntensity(parseFloat(e.target.value))}
+              onChange={(e) => updateLookSetting({ lightIntensity: parseFloat(e.target.value) })}
               className="w-16 h-1 bg-surface-variant rounded-lg appearance-none cursor-pointer accent-amber-400"
             />
             <span className="text-[10px] font-mono font-medium text-on-surface-variant w-7 text-right">
@@ -1499,7 +1515,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               max={1.0}
               step={0.05}
               value={stageSpecularity}
-              onChange={(e) => setStageSpecularity(parseFloat(e.target.value))}
+              onChange={(e) => updateLookSetting({ stageSpecularity: parseFloat(e.target.value) })}
               className="w-16 h-1 bg-surface-variant rounded-lg appearance-none cursor-pointer accent-cyan-400"
             />
             <span className="text-[10px] font-mono font-medium text-on-surface-variant w-8 text-right">
