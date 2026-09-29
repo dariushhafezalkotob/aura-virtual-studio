@@ -10,7 +10,7 @@ import {
   DepthOfFieldConfig,
   TakeRender,
 } from '../../types';
-import { ThreeStage, type DepthCaptureFn } from '../viewport/ThreeStage';
+import { ThreeStage, type DepthCaptureFn, type DepthMap } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
 import { CameraRemoteSocket, LinkStats } from '../../services/cameraRemoteService';
 import { stabilizeKeyframes } from '../../services/cameraStabilizer';
@@ -227,7 +227,39 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const autoFocusRef = useRef(autoFocusReadout);
   autoFocusRef.current = autoFocusReadout;
 
-  /** The viewport canvas cropped to 16:9 at 1080p, the same way stills and exports are. */
+  /** The on-screen camera frame (the blue 16:9 rectangle) - what the operator is framing. */
+  const frameGuideRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Where the camera frame sits on the canvas, as fractions of its width and height. The frame is
+   * a DOM overlay (88% of the window, capped), smaller than the canvas, so cropping the canvas's
+   * own widest 16:9 captured more than the operator framed. Falls back to that crop if the frame
+   * is not on screen.
+   */
+  const frameRectOnCanvas = (canvas: HTMLCanvasElement) => {
+    const c = canvas.getBoundingClientRect();
+    const f = frameGuideRef.current?.getBoundingClientRect();
+    if (f && c.width > 0 && c.height > 0 && f.width > 0 && f.height > 0) {
+      // Its width and max-height rules can leave the box a little off 16:9 on some window
+      // shapes; take the largest 16:9 centred inside it so nothing is squashed.
+      let fw = f.width;
+      let fh = f.height;
+      if (fw / fh > 16 / 9) fw = fh * (16 / 9);
+      else fh = fw / (16 / 9);
+      const left = f.left + (f.width - fw) / 2;
+      const top = f.top + (f.height - fh) / 2;
+      const x = Math.max(0, (left - c.left) / c.width);
+      const y = Math.max(0, (top - c.top) / c.height);
+      return { x, y, w: Math.min(1 - x, fw / c.width), h: Math.min(1 - y, fh / c.height) };
+    }
+    const target = 16 / 9;
+    const aspect = canvas.width / canvas.height;
+    return aspect > target
+      ? { x: (1 - target / aspect) / 2, y: 0, w: target / aspect, h: 1 }
+      : { x: 0, y: (1 - aspect / target) / 2, w: 1, h: aspect / target };
+  };
+
+  /** Exactly the camera frame, at 1080p. */
   const grabViewport = (): string | null => {
     const canvas = webglCanvasRef.current;
     if (!canvas || !canvas.width || !canvas.height) return null;
@@ -236,17 +268,23 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     out.height = 1080;
     const ctx = out.getContext('2d', { alpha: false });
     if (!ctx) return null;
-    const target = 16 / 9;
-    let sx = 0, sy = 0, sw = canvas.width, sh = canvas.height;
-    if (sw / sh > target) {
-      sw = sh * target;
-      sx = (canvas.width - sw) / 2;
-    } else {
-      sh = sw / target;
-      sy = (canvas.height - sh) / 2;
-    }
-    ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, 1920, 1080);
+    const r = frameRectOnCanvas(canvas);
+    ctx.drawImage(canvas, r.x * canvas.width, r.y * canvas.height, r.w * canvas.width, r.h * canvas.height, 0, 0, 1920, 1080);
     return out.toDataURL('image/jpeg', 0.92);
+  };
+
+  /** The depth map cut to the same camera frame as the picture. */
+  const cropDepthToFrame = (depth: DepthMap | null): DepthMap | null => {
+    const canvas = webglCanvasRef.current;
+    if (!depth || !canvas) return depth;
+    const r = frameRectOnCanvas(canvas);
+    const x0 = Math.floor(r.x * depth.width);
+    const y0 = Math.floor(r.y * depth.height);
+    const w = Math.max(1, Math.min(depth.width - x0, Math.round(r.w * depth.width)));
+    const h = Math.max(1, Math.min(depth.height - y0, Math.round(r.h * depth.height)));
+    const metres = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) metres.set(depth.metres.subarray((y0 + y) * depth.width + x0, (y0 + y) * depth.width + x0 + w), y * w);
+    return { width: w, height: h, metres };
   };
 
   /**
@@ -267,7 +305,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
     // The same moment's depth, at the size the layout passes are worked on, and the lens the
     // viewport drew this frame with - so the passes can blur by exactly what that lens would.
-    const depth = depthCaptureRef.current?.(960) ?? null;
+    // Captured over the whole canvas, then cut to the camera frame like the picture.
+    const depth = cropDepthToFrame(depthCaptureRef.current?.(1600) ?? null);
     const dof = dofRef.current;
     const lens = {
       focalMm: dof.focalLengthMm,
@@ -1635,6 +1674,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
         {/* Large 16:9 Director Viewfinder Framing Guide & Matte Mask */}
         <div
+          ref={frameGuideRef}
           className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[88vw] max-w-5xl max-h-[66vh] aspect-video pointer-events-none z-20 flex flex-col justify-between p-3"
           style={{ aspectRatio: '16 / 9' }}
         >
