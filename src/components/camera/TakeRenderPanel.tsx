@@ -1,13 +1,14 @@
-import React, { useEffect, useState } from 'react';
-import type { CameraTake, FilmLook, TakeRender } from '../../types';
+import React, { useEffect, useRef, useState } from 'react';
+import type { CameraTake, CharacterActor, FilmLook, TakeRender } from '../../types';
 import { DEFAULT_PACKAGE, normalizePackage, packageLabel, type CameraPackage } from '../../services/cameraPackage';
-import { listLooks } from '../../services/lookService';
+import { listLooks, uploadReferenceImage } from '../../services/lookService';
 import {
   defaultPassFor,
   depthOfField,
   makeBlurPass,
   makeClayPass,
   renderFrame,
+  standInColourName,
   type DepthInfo,
   type LensAtFrame,
   type RenderPass,
@@ -30,6 +31,10 @@ interface TakeRenderPanelProps {
   captureFirstFrame: () => Promise<FirstFrameCapture | null>;
   /** Called when a render finishes, even if this panel was closed in the meantime. */
   onRendered: (takeId: string, render: TakeRender) => void;
+  /** The scene's characters, whose character sheets go with the render. */
+  characters: CharacterActor[];
+  /** Stores a changed sheet on its character (saved with the scene). */
+  onUpdateCharacter: (id: string, patch: Partial<CharacterActor>) => void;
   onClose: () => void;
 }
 
@@ -50,6 +55,8 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   sceneHeading,
   captureFirstFrame,
   onRendered,
+  characters,
+  onUpdateCharacter,
   onClose,
 }) => {
   const [capture, setCapture] = useState<FirstFrameCapture | null>(null);
@@ -60,6 +67,13 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   const [looks, setLooks] = useState<FilmLook[]>([]);
   const [lookId, setLookId] = useState('');
   const [note, setNote] = useState('');
+  // Characters left out of this one render (their sheet stays on the character).
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  const [uploadingFor, setUploadingFor] = useState<string | null>(null);
+  const sheetInputRef = useRef<HTMLInputElement>(null);
+  const sheetTargetRef = useRef<string | null>(null);
+  const cast = characters.filter((c) => c.visible !== false);
+  const castSent = cast.filter((c) => c.referenceSheetUrl && !skipped.has(c.id)).slice(0, 8);
   const [pass, setPass] = useState<RenderPass>(defaultPassFor(sceneHeading));
   const [layouts, setLayouts] = useState<{ blur?: string; clay?: string }>({});
   const [layoutError, setLayoutError] = useState<string | null>(null);
@@ -131,6 +145,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
           pass,
           layout: pass === 'full' ? undefined : layout,
           dof,
+          cast: castSent.map((c) => ({ name: c.name, colorName: standInColourName(c.color), sheetUrl: c.referenceSheetUrl! })),
         },
         setStage
       );
@@ -205,6 +220,33 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
                   </div>
                 </figure>
               </div>
+
+              {(() => {
+                const look = looks.find((l) => l.id === lookId);
+                const lookPicture = pkg.backId !== 'doublex' ? look?.referenceUrl : undefined;
+                const sent: { label: string; src: string | null }[] = [
+                  { label: `1 · ${pass === 'full' ? 'frame' : `${pass} pass`}`, src: layout },
+                  ...(lookPicture ? [{ label: `${2} · look`, src: lookPicture }] : []),
+                  ...castSent.map((c, i) => ({ label: `${(lookPicture ? 3 : 2) + i} · ${c.name}`, src: c.referenceSheetUrl! })),
+                ];
+                return (
+                  <div className="flex flex-col gap-xs">
+                    <span className="font-label-caps text-[9px] tracking-[0.15em] uppercase text-on-surface-variant">
+                      Images sent to Seedream · {sent.length}
+                    </span>
+                    <div className="flex gap-xs overflow-x-auto pb-[2px]">
+                      {sent.map((img) => (
+                        <figure key={img.label} className="shrink-0 w-28 flex flex-col gap-[2px]">
+                          <div className="aspect-video bg-black/50 rounded overflow-hidden border border-outline-variant/30">
+                            {img.src && <img src={img.src} alt={img.label} className="w-full h-full object-cover" />}
+                          </div>
+                          <figcaption className="text-[10px] text-on-surface-variant truncate">Image {img.label}</figcaption>
+                        </figure>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
 
               <figure className="flex flex-col gap-xs">
                 <figcaption className="font-label-caps text-[9px] tracking-[0.15em] uppercase text-on-surface-variant">
@@ -321,6 +363,77 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
                 </select>
                 <span className="text-[10px] text-on-surface-variant/70">Looks come from the LOOKS library of this film.</span>
               </label>
+
+              <div className="flex flex-col gap-xs">
+                <span className="font-label-caps text-[9px] tracking-[0.15em] uppercase text-on-surface-variant">Cast · character sheets</span>
+                {cast.length === 0 && <span className="text-[10px] text-on-surface-variant/70">No characters in this scene.</span>}
+                {cast.map((c) => {
+                  const on = !!c.referenceSheetUrl && !skipped.has(c.id);
+                  return (
+                    <div key={c.id} className="flex items-center gap-xs bg-surface-container rounded-lg border border-outline-variant/30 p-[4px]">
+                      <span className="w-3 h-3 rounded-full shrink-0 border border-white/20" style={{ background: c.color || '#00ffcc' }} title={`${standInColourName(c.color)} stand-in`} />
+                      <div className="w-10 h-10 rounded bg-black/40 overflow-hidden shrink-0 border border-outline-variant/30">
+                        {c.referenceSheetUrl && <img src={c.referenceSheetUrl} alt="" className="w-full h-full object-cover" />}
+                      </div>
+                      <div className="flex flex-col min-w-0 flex-1">
+                        <span className="text-[11px] text-on-surface truncate">{c.name}</span>
+                        <span className="text-[10px] text-on-surface-variant/70 truncate">
+                          {uploadingFor === c.id ? 'Uploading…' : c.referenceSheetUrl ? (on ? 'Sheet goes with the render' : 'Left out of this render') : 'No sheet: Seedream invents this person'}
+                        </span>
+                      </div>
+                      {c.referenceSheetUrl && (
+                        <button
+                          type="button"
+                          onClick={() => setSkipped((prev) => { const next = new Set(prev); next.has(c.id) ? next.delete(c.id) : next.add(c.id); return next; })}
+                          title={on ? 'Leave this person out of this render' : 'Send this person\'s sheet'}
+                          className={`material-symbols-outlined text-[16px] cursor-pointer ${on ? 'text-primary' : 'text-on-surface-variant/50'}`}
+                        >
+                          {on ? 'check_circle' : 'radio_button_unchecked'}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={uploadingFor !== null}
+                        onClick={() => { sheetTargetRef.current = c.id; sheetInputRef.current?.click(); }}
+                        className="text-[10px] font-label-caps text-on-surface-variant hover:text-primary px-[6px] py-[3px] rounded border border-outline-variant/40 cursor-pointer disabled:opacity-40"
+                      >
+                        {c.referenceSheetUrl ? 'REPLACE' : 'ADD SHEET'}
+                      </button>
+                      {c.referenceSheetUrl && (
+                        <button type="button" onClick={() => onUpdateCharacter(c.id, { referenceSheetUrl: undefined })} title="Remove the sheet" className="material-symbols-outlined text-[16px] text-on-surface-variant hover:text-red-400 cursor-pointer">
+                          close
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+                <input
+                  ref={sheetInputRef}
+                  id="render-cast-sheet"
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    const id = sheetTargetRef.current;
+                    e.target.value = '';
+                    if (!file || !id) return;
+                    setUploadingFor(id);
+                    setError(null);
+                    try {
+                      onUpdateCharacter(id, { referenceSheetUrl: await uploadReferenceImage(file) });
+                      setSkipped((prev) => { const next = new Set(prev); next.delete(id); return next; });
+                    } catch (err: any) {
+                      setError(err.message || 'The sheet could not be uploaded.');
+                    } finally {
+                      setUploadingFor(null);
+                    }
+                  }}
+                />
+                {cast.filter((c) => c.referenceSheetUrl).length > 8 && (
+                  <span className="text-[10px] text-amber-300/90">Seedream takes 8 people at most; the first 8 with sheets are sent.</span>
+                )}
+              </div>
 
               <label className="flex flex-col gap-[3px]">
                 <span className="font-label-caps text-[9px] tracking-[0.15em] uppercase text-on-surface-variant">Note for this shot</span>

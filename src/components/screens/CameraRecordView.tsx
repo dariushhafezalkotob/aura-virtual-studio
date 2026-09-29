@@ -208,6 +208,17 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     };
   }, []);
 
+  /**
+   * A character sheet added or removed in the render window goes onto that character in the
+   * scene, so every later render of the scene sends it too. A scene still showing the default
+   * actors gets them written out as its own characters, with the sheet on the one it belongs to.
+   */
+  const handleUpdateCharacter = useCallback((id: string, patch: Partial<CharacterActor>) => {
+    const { currentProject: project, onUpdateProject: update } = latestRef.current;
+    const current = project.characters && project.characters.length > 0 ? project.characters : DEFAULT_INITIAL_ACTORS;
+    update?.({ ...project, characters: current.map((c) => (c.id === id ? { ...c, ...patch } : c)) });
+  }, []);
+
   const handleTakeRendered = useCallback((takeId: string, render: TakeRender) => {
     // Once this screen is gone its project copy is stale, and writing it would undo later edits.
     // The frame itself is already saved on the server either way.
@@ -2220,6 +2231,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
           sceneHeading={(currentProject as any).sceneHeading}
           captureFirstFrame={() => captureTakeFirstFrame(renderTakeId)}
           onRendered={handleTakeRendered}
+          characters={characters}
+          onUpdateCharacter={handleUpdateCharacter}
           onClose={() => setRenderTakeId(null)}
         />
       )}

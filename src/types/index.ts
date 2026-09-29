@@ -420,6 +420,11 @@ export interface CharacterActor {
   motionData?: MotionData;
   bvhUrl?: string;
   color?: string;
+  /**
+   * A character sheet of the real person this stand-in becomes (`/api/assets/...`): sent with
+   * every render of the scene so the same face, hair and clothes come back in every shot.
+   */
+  referenceSheetUrl?: string;
   renderMode?: 'mesh' | 'skeleton' | 'hybrid';
   visible?: boolean;
   constraints?: ActorConstraint[];

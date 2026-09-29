@@ -105,6 +105,8 @@ const TEMPLATE_WRITER = `You read one frame from the 3D previsualization of a fi
 
 "people": at most 40 words per person. Every untextured or single-colour figure is a stand-in: describe a believable real person (age, hair, wardrobe that suits the scene, with colours) who is exactly where the figure is, in exactly its pose, doing what it is doing ("sits exactly where the figure sits, hands on his knees, looking away to the left"; "walks along the far sidewalk"). The figure's own colour (turquoise, yellow, purple...) is only a marker in the previs: never give the person, their clothes or anything else that colour. If a seated figure has nothing under it, give it a chair that suits the place. Follow the director's note when it names who someone is. Use an empty string when there are no figures.
 
+When the cast list names a figure by its colour, that person comes from a reference image: call them by the name and image given ("Ali from image 3 sits exactly where the turquoise figure sits...") and describe ONLY where they are, their pose and what they are doing. Never describe their face, hair, age, build or clothes; the reference image carries all of that. The chair rule still applies: a seated figure with nothing under it sits on a real chair or stool that suits the place; never write "invisible" or say that something is missing.
+
 Rules: nothing about camera, lens, film stock, grading or mood beyond the light sentence; never add or remove large objects; plain words, no hype.`;
 
 const TEMPLATE_SCHEMA = {
@@ -127,10 +129,11 @@ const SHOT_SCHEMA = {
   required: ['keep', 'lighting'],
 };
 
-function frameParts(frameBase64: string, mimeType: string, sceneHeading: string, note: string): any[] {
+function frameParts(frameBase64: string, mimeType: string, sceneHeading: string, note: string, castNote = ''): any[] {
   const context = [
     sceneHeading && `Scene heading: ${sceneHeading}`,
     note && `Director's note: ${note}`,
+    castNote,
   ].filter(Boolean).join('\n');
   const parts: any[] = [{ inlineData: { mimeType, data: frameBase64 } }];
   if (context) parts.push({ text: context });
@@ -139,8 +142,8 @@ function frameParts(frameBase64: string, mimeType: string, sceneHeading: string,
 
 // From a network behind a VPN one call measured 12-37s (2026-09-26); from the server it is a few
 // seconds. The limit only has to stop a hung call, not a slow one.
-async function writeTemplateLines(frameBase64: string, mimeType: string, sceneHeading: string, note: string) {
-  const raw = await geminiText({ system: TEMPLATE_WRITER, parts: frameParts(frameBase64, mimeType, sceneHeading, note), json: { schema: TEMPLATE_SCHEMA }, timeoutMs: 180_000 });
+async function writeTemplateLines(frameBase64: string, mimeType: string, sceneHeading: string, note: string, castNote = '') {
+  const raw = await geminiText({ system: TEMPLATE_WRITER, parts: frameParts(frameBase64, mimeType, sceneHeading, note, castNote), json: { schema: TEMPLATE_SCHEMA }, timeoutMs: 180_000 });
   const parsed = JSON.parse(raw);
   return {
     light: String(parsed.light || '').trim(),
@@ -265,6 +268,23 @@ export interface RenderPromptInput {
   note: string;
   /** What the lens kept sharp in the frame (from the take's lens and the viewport's depth). */
   dof?: { focusM: number; nearM: number; farM: number | null } | null;
+  /** Characters whose reference sheets go along, each marked in the previs by its stand-in colour. */
+  cast?: CastEntry[];
+}
+
+export interface CastEntry {
+  name: string;
+  colorName: string;
+  sheetUrl: string;
+}
+
+/** A stored asset as a data URL for WaveSpeed, or null when the file is not on this server. */
+function assetDataUrl(url: string): string | null {
+  const file = path.join(assetsDir(), path.basename(url.replace('/api/assets/', '')));
+  if (!fs.existsSync(file)) return null;
+  const ext = path.extname(file).toLowerCase();
+  const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+  return `data:${mime};base64,${fs.readFileSync(file).toString('base64')}`;
 }
 
 /** One line naming the zone of sharp focus; the pass itself carries the blur, this says it in words. */
@@ -290,11 +310,29 @@ export async function buildRenderPrompt(input: RenderPromptInput): Promise<{ pro
   const grade = monochrome ? MONO_GRADE : look.grade || NEUTRAL_GRADE;
   const extraImages = look.imageDataUrl ? [look.imageDataUrl] : [];
 
+  // Character sheets follow the look. Seedream Edit takes 10 images in all: the layout pass, the
+  // look, and at most 8 people. Tested by hand 2026-09-29: with a sheet the same man came back in
+  // separate renders, and "only for who he is" kept the sheet's white studio light out.
+  const castLines: string[] = [];
+  const castNotes: string[] = [];
+  for (const member of (input.cast || []).slice(0, 8)) {
+    const sheet = assetDataUrl(member.sheetUrl);
+    if (!sheet) continue;
+    extraImages.push(sheet);
+    const n = extraImages.length + 1;
+    castLines.push(
+      `Image ${n} is ${member.name}: the ${member.colorName} figure in image 1 is this exact person, with the same face, hair, build and clothes. Use image ${n} only for who they are, not for its lighting, background or pose.`
+    );
+    castNotes.push(`the ${member.colorName} figure is ${member.name} (image ${n})`);
+  }
+  const castNote = castNotes.length ? `Cast with reference images: ${castNotes.join('; ')}.` : '';
+
   if (input.pass === 'full') {
     const shot = await describeShot(input.frameBase64, input.mimeType, input.sceneHeading, input.note);
     const prompt = [
       shot.keep,
-      extraImages.length ? LOOK_IMAGE_LINE : null,
+      look.imageDataUrl ? LOOK_IMAGE_LINE : null,
+      ...castLines,
       ...packagePromptSections(input.cameraPackage, input.settings),
       shot.lighting,
       grade,
@@ -304,11 +342,12 @@ export async function buildRenderPrompt(input: RenderPromptInput): Promise<{ pro
     return { prompt, lookUsed: !!look.grade, extraImages };
   }
 
-  const lines = await writeTemplateLines(input.frameBase64, input.mimeType, input.sceneHeading, input.note);
+  const lines = await writeTemplateLines(input.frameBase64, input.mimeType, input.sceneHeading, input.note, castNote);
   const prompt = [
     [
       `${IMAGE_ROLE[input.pass]}: keep its camera angle, framing, the geometry of the space, where every object stands and every person's position and pose; it has no colour, texture or light, so invent them.`,
-      extraImages.length ? LOOK_IMAGE_LINE : null,
+      look.imageDataUrl ? LOOK_IMAGE_LINE : null,
+      ...castLines,
     ].filter(Boolean).join(' '),
     `A candid film still from a feature film, shot on location, not a render. ${lines.light}`,
     lines.place,
@@ -342,6 +381,19 @@ async function runJob(job: RenderJob, input: RenderPromptInput & { layoutDataUrl
     // The generation was counted when the job started; a failed one hands the slot back.
     refundGeneration(job.owner).catch(() => {});
   }
+}
+
+/** Only sheets stored on this server, with plain names and colour words, at most 8. */
+function cleanCast(input: any): CastEntry[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((m: any) => ({
+      name: String(m?.name ?? '').replace(/[^\p{L}\p{N} .'-]/gu, '').trim().slice(0, 40) || 'the person',
+      colorName: String(m?.colorName ?? '').replace(/[^a-z]/gi, '').toLowerCase().slice(0, 12) || 'coloured',
+      sheetUrl: String(m?.sheetUrl ?? ''),
+    }))
+    .filter((m: CastEntry) => /^\/api\/assets\/[A-Za-z0-9._-]+$/.test(m.sheetUrl))
+    .slice(0, 8);
 }
 
 function cleanDof(input: any): RenderPromptInput['dof'] {
@@ -439,6 +491,7 @@ export async function handleRenderApi(req: any, res: any): Promise<boolean> {
       sceneHeading: clip(body.sceneHeading, 200),
       note: clip(body.note, 1000),
       dof: cleanDof(body.dof),
+      cast: cleanCast(body.cast),
     });
 
     sendJson(res, 200, { success: true, jobId: job.id });

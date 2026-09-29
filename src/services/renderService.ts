@@ -258,6 +258,39 @@ export async function makeClayPass(frameDataUrl: string, extra: PassDepth = { de
  * Seedream 5 Pro renders it). The server answers at once with a job; this polls until it is done.
  */
 
+/** A character whose reference sheet goes with the render, and the stand-in colour that marks them. */
+export interface CastReference {
+  name: string;
+  /** How the stand-in reads in the previs, e.g. "turquoise". */
+  colorName: string;
+  sheetUrl: string;
+}
+
+/**
+ * A plain colour word for a stand-in's hex colour, for the prompt: "the turquoise figure is image 3".
+ * Previs stand-ins are single flat colours, so the name only has to separate them from each other.
+ */
+export function standInColourName(hex: string | undefined): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return 'turquoise';
+  const n = parseInt(m[1], 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d < 0.12) return l > 0.8 ? 'white' : l < 0.2 ? 'black' : 'grey';
+  let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  h = (h * 60 + 360) % 360;
+  if (h < 15 || h >= 345) return 'red';
+  if (h < 40) return 'orange';
+  if (h < 65) return 'yellow';
+  if (h < 160) return 'green';
+  if (h < 195) return 'turquoise';
+  if (h < 250) return 'blue';
+  if (h < 290) return 'purple';
+  return 'pink';
+}
+
 export interface RenderRequest {
   projectId: string;
   /** The textured previs frame as a data URL (JPEG). Gemini reads it; Seedream sees it only in 'full'. */
@@ -274,6 +307,8 @@ export interface RenderRequest {
   note?: string;
   /** What the lens kept sharp in the frame, so the prompt can name it. */
   dof?: DepthOfFieldSummary | null;
+  /** Characters whose sheets go along as images after the layout pass and the look. */
+  cast?: CastReference[];
 }
 
 export interface RenderResult {
