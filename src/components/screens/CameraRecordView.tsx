@@ -10,7 +10,7 @@ import {
   DepthOfFieldConfig,
   TakeRender,
 } from '../../types';
-import { ThreeStage } from '../viewport/ThreeStage';
+import { ThreeStage, type DepthCaptureFn } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
 import { CameraRemoteSocket, LinkStats } from '../../services/cameraRemoteService';
 import { stabilizeKeyframes } from '../../services/cameraStabilizer';
@@ -18,7 +18,7 @@ import { DEFAULT_TENSION, insertKeyframe } from '../../services/cameraAnimation'
 import { KeyframeTimeline } from '../camera/KeyframeTimeline';
 import { KeyInspector } from '../camera/KeyInspector';
 import { CameraPackagePicker } from '../camera/CameraPackagePicker';
-import { TakeRenderPanel } from '../camera/TakeRenderPanel';
+import { TakeRenderPanel, type FirstFrameCapture } from '../camera/TakeRenderPanel';
 import { DEFAULT_PACKAGE, normalizePackage, packageLabel, cameraById, lensById, type CameraPackage } from '../../services/cameraPackage';
 import { useDialogueAudioSync } from '../../services/dialogueService';
 import qrcode from 'qrcode-generator';
@@ -220,6 +220,13 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     setTimeout(() => setToastMessage(null), 3000);
   }, []);
 
+  const depthCaptureRef = useRef<DepthCaptureFn | null>(null);
+  // Read inside the capture above, which is created once.
+  const dofRef = useRef(dofConfig);
+  dofRef.current = dofConfig;
+  const autoFocusRef = useRef(autoFocusReadout);
+  autoFocusRef.current = autoFocusReadout;
+
   /** The viewport canvas cropped to 16:9 at 1080p, the same way stills and exports are. */
   const grabViewport = (): string | null => {
     const canvas = webglCanvasRef.current;
@@ -247,7 +254,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
    * is put in playback at 0s and paused, and a few frames are let through so the camera and the
    * actors reach frame 1.
    */
-  const captureTakeFirstFrame = useCallback(async (takeId: string): Promise<string | null> => {
+  const captureTakeFirstFrame = useCallback(async (takeId: string): Promise<FirstFrameCapture | null> => {
     setActiveTakeId(takeId);
     setViewMode('playback');
     setIsPlaying(false);
@@ -255,7 +262,19 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     for (let i = 0; i < 6; i++) await nextFrame();
     await new Promise((r) => setTimeout(r, 250));
     await nextFrame();
-    return grabViewport();
+    const frame = grabViewport();
+    if (!frame) return null;
+
+    // The same moment's depth, at the size the layout passes are worked on, and the lens the
+    // viewport drew this frame with - so the passes can blur by exactly what that lens would.
+    const depth = depthCaptureRef.current?.(960) ?? null;
+    const dof = dofRef.current;
+    const lens = {
+      focalMm: dof.focalLengthMm,
+      stop: dof.enabled && dof.aperture < 100 ? dof.aperture : null,
+      focusM: dof.autoFocus ? autoFocusRef.current || dof.focusDistance : dof.focusDistance,
+    };
+    return { frame, depth, lens };
   }, []);
 
   /** Starts an empty hand-keyed move and makes it the take being edited. */
@@ -1105,6 +1124,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         incomingCameraPoseRef={incomingCameraPoseRef}
         dofConfig={dofConfig}
         onAutoFocusDistance={(dist) => setAutoFocusReadout(dist)}
+        depthCaptureRef={depthCaptureRef}
         onCanvasReady={(canvas) => {
           webglCanvasRef.current = canvas;
         }}

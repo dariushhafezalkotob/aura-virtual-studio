@@ -115,6 +115,8 @@ interface ThreeStageProps {
   onKeyCaptured?: (frame: CameraKeyframe) => void;
   showCameraTrajectory?: boolean;
   onCanvasReady?: (canvas: HTMLCanvasElement) => void;
+  /** Filled with a function that reads the distance of every pixel from the camera, in metres. */
+  depthCaptureRef?: React.MutableRefObject<DepthCaptureFn | null>;
   remoteOrientation?: DeviceOrientationData | null;
   remoteOrientationRef?: React.MutableRefObject<DeviceOrientationData | null>;
   remoteMove?: RemoteMoveData | null;
@@ -1418,6 +1420,110 @@ const CanvasPublisher: React.FC<{ onCanvasReady?: (canvas: HTMLCanvasElement) =>
   return null;
 };
 
+/** Distance from the camera per pixel, in metres, row 0 at the TOP. Infinity where nothing was drawn. */
+export interface DepthMap {
+  width: number;
+  height: number;
+  metres: Float32Array;
+}
+export type DepthCaptureFn = (width: number) => DepthMap | null;
+
+// Farthest distance the depth capture tells apart; beyond it everything reads as "far".
+const DEPTH_RANGE_M = 250;
+
+/**
+ * Renders the scene once, from the shot's camera, with a material that writes each pixel's
+ * distance from the camera instead of its colour, and reads it back. Used to put the lens's depth
+ * of field and a sense of distance back into the texture-free layout passes for rendering.
+ *
+ * The distance goes into two 8-bit channels (16 bits over 250 m, ~4 mm steps) because reading
+ * float render targets back is not supported everywhere. Skinned actors are drawn in their pose.
+ */
+const DepthCapturer: React.FC<{ captureRef: React.MutableRefObject<DepthCaptureFn | null> }> = ({ captureRef }) => {
+  const { gl, scene, camera, size } = useThree();
+
+  const material = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        uniforms: { uRange: { value: DEPTH_RANGE_M } },
+        vertexShader: `
+          #include <common>
+          #include <morphtarget_pars_vertex>
+          #include <skinning_pars_vertex>
+          varying float vDistance;
+          void main() {
+            #include <skinbase_vertex>
+            #include <begin_vertex>
+            #include <morphtarget_vertex>
+            #include <skinning_vertex>
+            #include <project_vertex>
+            vDistance = -mvPosition.z;
+          }
+        `,
+        fragmentShader: `
+          uniform float uRange;
+          varying float vDistance;
+          void main() {
+            float d = clamp(vDistance / uRange, 0.0, 0.99999) * 255.0;
+            gl_FragColor = vec4(floor(d) / 255.0, fract(d), 0.0, 1.0);
+          }
+        `,
+        side: THREE.DoubleSide,
+      }),
+    []
+  );
+
+  useEffect(() => {
+    captureRef.current = (width: number) => {
+      const w = Math.max(16, Math.round(width));
+      const h = Math.max(9, Math.round((w * size.height) / Math.max(1, size.width)));
+      const target = new THREE.WebGLRenderTarget(w, h, { type: THREE.UnsignedByteType, format: THREE.RGBAFormat });
+      const previousOverride = scene.overrideMaterial;
+      const previousBackground = scene.background;
+      const previousTarget = gl.getRenderTarget();
+      const previousClear = gl.getClearColor(new THREE.Color());
+      const previousAlpha = gl.getClearAlpha();
+      const pixels = new Uint8Array(w * h * 4);
+      try {
+        scene.overrideMaterial = material;
+        scene.background = null;
+        gl.setRenderTarget(target);
+        gl.setClearColor(0xffffff, 1);
+        gl.clear();
+        gl.render(scene, camera);
+        gl.readRenderTargetPixels(target, 0, 0, w, h, pixels);
+      } catch {
+        return null;
+      } finally {
+        scene.overrideMaterial = previousOverride;
+        scene.background = previousBackground;
+        gl.setRenderTarget(previousTarget);
+        gl.setClearColor(previousClear, previousAlpha);
+        target.dispose();
+      }
+
+      const metres = new Float32Array(w * h);
+      for (let y = 0; y < h; y++) {
+        // WebGL reads bottom-up; flip so row 0 is the top of the frame like every image.
+        const srcRow = (h - 1 - y) * w;
+        for (let x = 0; x < w; x++) {
+          const i = (srcRow + x) * 4;
+          const hi = pixels[i];
+          const lo = pixels[i + 1];
+          metres[y * w + x] = hi === 255 && lo === 255 ? Infinity : ((hi + lo / 255) / 255) * DEPTH_RANGE_M;
+        }
+      }
+      return { width: w, height: h, metres };
+    };
+    return () => {
+      captureRef.current = null;
+    };
+  }, [gl, scene, camera, size.width, size.height, material, captureRef]);
+
+  useEffect(() => () => material.dispose(), [material]);
+  return null;
+};
+
 // 60 FPS Cinematic Depth of Field & Optical Blur Shader Pass
 const CinematicDepthOfField: React.FC<{
   config?: DepthOfFieldConfig;
@@ -1779,6 +1885,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   onKeyCaptured,
   showCameraTrajectory = true,
   onCanvasReady,
+  depthCaptureRef,
   remoteOrientation = null,
   remoteOrientationRef,
   remoteMove = null,
@@ -1825,6 +1932,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
         }}
       >
         <CanvasPublisher onCanvasReady={onCanvasReady} />
+        {depthCaptureRef && <DepthCapturer captureRef={depthCaptureRef} />}
         <CameraFovUpdater fov={cameraFov} />
         {dofConfig && dofConfig.enabled && dofConfig.aperture < 100 && (
           <CinematicDepthOfField config={dofConfig} onAutoFocusDistance={onAutoFocusDistance} lensRef={keyedLensRef} />

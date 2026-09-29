@@ -20,36 +20,199 @@ const loadImage = (src: string) =>
     img.src = src;
   });
 
-/**
- * The blur pass: grey, low contrast and heavily blurred, so only the camera, the shapes and the
- * poses survive. Blurred by drawing at 1/6 size and scaling back up, which every browser does the
- * same way (canvas filters are not everywhere). Matches the hand-made pass that tested best.
- */
-export async function makeBlurPass(frameDataUrl: string): Promise<string> {
-  const img = await loadImage(frameDataUrl);
-  const small = document.createElement('canvas');
-  small.width = 320;
-  small.height = 180;
-  const sctx = small.getContext('2d', { willReadFrequently: true })!;
-  sctx.imageSmoothingQuality = 'high';
-  sctx.drawImage(img, 0, 0, small.width, small.height);
-  const data = sctx.getImageData(0, 0, small.width, small.height);
-  const px = data.data;
-  for (let i = 0; i < px.length; i += 4) {
-    const y = 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
-    const v = (y - 128) * 0.8 + 128;
-    px[i] = px[i + 1] = px[i + 2] = v;
-  }
-  sctx.putImageData(data, 0, 0);
+/** Depth per pixel in metres (row 0 at the top, Infinity for sky), as the viewport captured it. */
+export interface DepthInfo {
+  width: number;
+  height: number;
+  metres: Float32Array;
+}
 
-  const out = document.createElement('canvas');
-  out.width = 1920;
-  out.height = 1080;
-  const octx = out.getContext('2d')!;
-  octx.imageSmoothingEnabled = true;
-  octx.imageSmoothingQuality = 'high';
-  octx.drawImage(small, 0, 0, out.width, out.height);
-  return out.toDataURL('image/jpeg', 0.9);
+/** The lens the viewport drew frame 1 with. `stop` is null when depth of field was off. */
+export interface LensAtFrame {
+  focalMm: number;
+  stop: number | null;
+  focusM: number;
+}
+
+/** What the lens keeps sharp, for the prompt: focus distance and the near and far limits. */
+export interface DepthOfFieldSummary {
+  focusM: number;
+  nearM: number;
+  farM: number | null;
+  focalMm: number;
+  stop: number;
+}
+
+// Super 35 gate width and the usual circle of confusion for it.
+const SENSOR_WIDTH_MM = 24.89;
+const COC_MM = 0.025;
+const PASS_W = 960;
+const PASS_H = 540;
+
+/** Near and far limits of acceptable focus (hyperfocal method). farM is null when it reaches infinity. */
+export function depthOfField(lens: LensAtFrame): DepthOfFieldSummary | null {
+  if (!lens.stop) return null;
+  const f = lens.focalMm / 1000;
+  const c = COC_MM / 1000;
+  const s = Math.max(0.3, lens.focusM);
+  const hyper = (f * f) / (lens.stop * c) + f;
+  const near = (s * (hyper - f)) / (hyper + s - 2 * f);
+  const far = s < hyper ? (s * (hyper - f)) / (hyper - s) : null;
+  return { focusM: s, nearM: near, farM: far, focalMm: lens.focalMm, stop: lens.stop };
+}
+
+/** Blur radius in pass pixels for something `z` metres away: the thin-lens circle of confusion. */
+function blurRadiusPx(z: number, lens: LensAtFrame): number {
+  if (!lens.stop) return 0;
+  const f = lens.focalMm / 1000;
+  const s = Math.max(0.3, lens.focusM);
+  const dist = Number.isFinite(z) ? Math.max(0.05, z) : 1e6;
+  const cocM = (Math.abs(dist - s) / dist) * ((f * f) / (lens.stop * Math.max(1e-4, s - f)));
+  const diameterPx = (cocM * 1000 / SENSOR_WIDTH_MM) * PASS_W;
+  return Math.min(24, diameterPx / 2);
+}
+
+/** Crops the viewport-shaped depth to the same centred 16:9 as the frame and resizes it to the pass. */
+function depthForPass(depth: DepthInfo): Float32Array {
+  const target = 16 / 9;
+  let sx = 0, sy = 0, sw = depth.width, sh = depth.height;
+  if (sw / sh > target) {
+    sw = sh * target;
+    sx = (depth.width - sw) / 2;
+  } else {
+    sh = sw / target;
+    sy = (depth.height - sh) / 2;
+  }
+  const out = new Float32Array(PASS_W * PASS_H);
+  for (let y = 0; y < PASS_H; y++) {
+    const yy = Math.min(depth.height - 1, Math.floor(sy + ((y + 0.5) / PASS_H) * sh));
+    for (let x = 0; x < PASS_W; x++) {
+      const xx = Math.min(depth.width - 1, Math.floor(sx + ((x + 0.5) / PASS_W) * sw));
+      out[y * PASS_W + x] = depth.metres[yy * depth.width + xx];
+    }
+  }
+  return out;
+}
+
+/** Box blur with integer radius, run horizontally then vertically. */
+function boxBlur(src: Float32Array, w: number, h: number, r: number): Float32Array {
+  if (r < 1) return src.slice();
+  const tmp = new Float32Array(w * h);
+  const out = new Float32Array(w * h);
+  const span = 2 * r + 1;
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    let acc = 0;
+    for (let x = -r; x <= r; x++) acc += src[row + Math.min(w - 1, Math.max(0, x))];
+    for (let x = 0; x < w; x++) {
+      tmp[row + x] = acc / span;
+      acc += src[row + Math.min(w - 1, x + r + 1)] - src[row + Math.max(0, x - r)];
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let acc = 0;
+    for (let y = -r; y <= r; y++) acc += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
+    for (let y = 0; y < h; y++) {
+      out[y * w + x] = acc / span;
+      acc += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x];
+    }
+  }
+  return out;
+}
+
+/** Two box passes: close to a gaussian of the same size. */
+const softBlur = (src: Float32Array, w: number, h: number, r: number) =>
+  r < 1 ? src.slice() : boxBlur(boxBlur(src, w, h, Math.max(1, Math.round(r * 0.6))), w, h, Math.max(1, Math.round(r * 0.6)));
+
+/**
+ * Puts depth back into a grey pass. Every pixel is blurred by what the lens would blur it at its
+ * distance (plus `baseBlur` everywhere), by blending between a few pre-blurred copies; then
+ * distant parts are lifted toward a pale haze, so a grey picture still reads near and far.
+ */
+function applyDepth(grey: Float32Array, depth: Float32Array | null, lens: LensAtFrame | null, baseBlur: number, haze: number): Float32Array {
+  const w = PASS_W;
+  const h = PASS_H;
+  const radii = [0, 1.5, 3, 6, 12, 24];
+  const levels = radii.map((r) => softBlur(grey, w, h, r));
+  const out = new Float32Array(w * h);
+
+  let lo = 0, hi = 1;
+  if (depth) {
+    const finite = Array.from(depth).filter(Number.isFinite).sort((a, b) => a - b);
+    if (finite.length > 100) {
+      lo = finite[Math.floor(finite.length * 0.05)];
+      hi = Math.max(lo + 0.5, finite[Math.floor(finite.length * 0.95)]);
+    }
+  }
+
+  for (let p = 0; p < out.length; p++) {
+    const z = depth ? depth[p] : NaN;
+    const r = Math.min(24, baseBlur + (depth && lens ? blurRadiusPx(z, lens) : 0));
+    let i = 0;
+    while (i < radii.length - 2 && radii[i + 1] < r) i++;
+    const t = Math.min(1, Math.max(0, (r - radii[i]) / (radii[i + 1] - radii[i])));
+    let v = levels[i][p] * (1 - t) + levels[i + 1][p] * t;
+    if (depth && haze > 0) {
+      const far = Number.isFinite(z) ? Math.min(1, Math.max(0, (z - lo) / (hi - lo))) : 1;
+      v = v * (1 - haze * far) + 205 * haze * far;
+    }
+    out[p] = v;
+  }
+  return out;
+}
+
+function greyOf(img: HTMLImageElement): Float32Array {
+  const c = document.createElement('canvas');
+  c.width = PASS_W;
+  c.height = PASS_H;
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, PASS_W, PASS_H);
+  const src = ctx.getImageData(0, 0, PASS_W, PASS_H).data;
+  const grey = new Float32Array(PASS_W * PASS_H);
+  for (let i = 0, p = 0; p < grey.length; i += 4, p++) grey[p] = 0.2126 * src[i] + 0.7152 * src[i + 1] + 0.0722 * src[i + 2];
+  return grey;
+}
+
+function toJpeg(values: Float32Array, softenPx = 0): string {
+  const work = document.createElement('canvas');
+  work.width = PASS_W;
+  work.height = PASS_H;
+  const ctx = work.getContext('2d')!;
+  const img = ctx.createImageData(PASS_W, PASS_H);
+  for (let p = 0, i = 0; p < values.length; p++, i += 4) {
+    const v = Math.max(0, Math.min(255, values[p]));
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+    img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const full = document.createElement('canvas');
+  full.width = 1920;
+  full.height = 1080;
+  const fctx = full.getContext('2d')!;
+  fctx.imageSmoothingEnabled = true;
+  fctx.imageSmoothingQuality = 'high';
+  if (softenPx > 0) fctx.filter = `blur(${softenPx}px)`;
+  fctx.drawImage(work, 0, 0, full.width, full.height);
+  return full.toDataURL('image/jpeg', 0.9);
+}
+
+export interface PassDepth {
+  depth: DepthInfo | null;
+  lens: LensAtFrame | null;
+}
+
+/**
+ * The blur pass: grey, low contrast and blurred, so only the camera, the shapes and the poses
+ * survive - the hand-made pass that tested best for interiors. With depth, the blur follows the
+ * lens: things in focus get only the light base blur that strips texture, the rest blurs as far as
+ * the lens would blur it, and distance lifts toward haze.
+ */
+export async function makeBlurPass(frameDataUrl: string, extra: PassDepth = { depth: null, lens: null }): Promise<string> {
+  const grey = greyOf(await loadImage(frameDataUrl));
+  for (let p = 0; p < grey.length; p++) grey[p] = (grey[p] - 128) * 0.8 + 128;
+  const depth = extra.depth ? depthForPass(extra.depth) : null;
+  return toJpeg(applyDepth(grey, depth, extra.lens, 3, 0.25));
 }
 
 /**
@@ -59,29 +222,17 @@ export async function makeBlurPass(frameDataUrl: string): Promise<string> {
  * their detail in their textures, and a real grey-material render of them came out as flat
  * silhouettes with the cars lost against the road (tested on pantilt.app, 2026-09-28).
  *
- * Same steps as the hand-made pass that tested best for exteriors: greyscale, a median filter
- * (smooths texture noise but keeps edges), a light blur, posterize to 3 bits.
+ * Greyscale, a median filter (smooths texture noise but keeps edges), posterize to 3 bits - the
+ * hand-made pass that tested best for exteriors - then, with depth, the lens blur and haze.
  */
-export async function makeClayPass(frameDataUrl: string): Promise<string> {
-  const img = await loadImage(frameDataUrl);
-  const w = 960;
-  const h = 540;
-  const work = document.createElement('canvas');
-  work.width = w;
-  work.height = h;
-  const ctx = work.getContext('2d', { willReadFrequently: true })!;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(img, 0, 0, w, h);
-  const src = ctx.getImageData(0, 0, w, h).data;
-
-  const grey = new Uint8ClampedArray(w * h);
-  for (let i = 0, p = 0; p < grey.length; i += 4, p++) {
-    grey[p] = 0.2126 * src[i] + 0.7152 * src[i + 1] + 0.0722 * src[i + 2];
-  }
+export async function makeClayPass(frameDataUrl: string, extra: PassDepth = { depth: null, lens: null }): Promise<string> {
+  const grey = greyOf(await loadImage(frameDataUrl));
+  const w = PASS_W;
+  const h = PASS_H;
 
   // 5x5 median at half size is the 9x9 median of the full-size hand pass.
   const r = 2;
-  const med = new Uint8ClampedArray(w * h);
+  const flat = new Float32Array(w * h);
   const hist = new Uint16Array(256);
   const n = (2 * r + 1) * (2 * r + 1);
   for (let y = 0; y < h; y++) {
@@ -89,32 +240,17 @@ export async function makeClayPass(frameDataUrl: string): Promise<string> {
       hist.fill(0);
       for (let dy = -r; dy <= r; dy++) {
         const yy = Math.min(h - 1, Math.max(0, y + dy)) * w;
-        for (let dx = -r; dx <= r; dx++) hist[grey[yy + Math.min(w - 1, Math.max(0, x + dx))]]++;
+        for (let dx = -r; dx <= r; dx++) hist[grey[yy + Math.min(w - 1, Math.max(0, x + dx))] | 0]++;
       }
       let count = 0;
       let v = 0;
       while ((count += hist[v]) <= n >> 1) v++;
-      med[y * w + x] = v;
+      flat[y * w + x] = v & 0xe0; // 3 bits: eight flat tones
     }
   }
 
-  const out = ctx.createImageData(w, h);
-  for (let p = 0, i = 0; p < med.length; p++, i += 4) {
-    const v = med[p] & 0xe0; // 3 bits: eight flat tones
-    out.data[i] = out.data[i + 1] = out.data[i + 2] = v;
-    out.data[i + 3] = 255;
-  }
-  ctx.putImageData(out, 0, 0);
-
-  const full = document.createElement('canvas');
-  full.width = 1920;
-  full.height = 1080;
-  const fctx = full.getContext('2d')!;
-  fctx.imageSmoothingEnabled = true;
-  fctx.imageSmoothingQuality = 'high';
-  fctx.filter = 'blur(1px)';
-  fctx.drawImage(work, 0, 0, full.width, full.height);
-  return full.toDataURL('image/jpeg', 0.9);
+  const depth = extra.depth ? depthForPass(extra.depth) : null;
+  return toJpeg(applyDepth(flat, depth, extra.lens, 0, 0.35), 1);
 }
 
 /**
@@ -136,6 +272,8 @@ export interface RenderRequest {
   lookId?: string;
   sceneHeading?: string;
   note?: string;
+  /** What the lens kept sharp in the frame, so the prompt can name it. */
+  dof?: DepthOfFieldSummary | null;
 }
 
 export interface RenderResult {

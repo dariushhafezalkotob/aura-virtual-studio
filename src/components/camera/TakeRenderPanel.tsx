@@ -2,15 +2,32 @@ import React, { useEffect, useState } from 'react';
 import type { CameraTake, FilmLook, TakeRender } from '../../types';
 import { DEFAULT_PACKAGE, normalizePackage, packageLabel, type CameraPackage } from '../../services/cameraPackage';
 import { listLooks } from '../../services/lookService';
-import { defaultPassFor, makeBlurPass, makeClayPass, renderFrame, type RenderPass, type RenderStage } from '../../services/renderService';
+import {
+  defaultPassFor,
+  depthOfField,
+  makeBlurPass,
+  makeClayPass,
+  renderFrame,
+  type DepthInfo,
+  type LensAtFrame,
+  type RenderPass,
+  type RenderStage,
+} from '../../services/renderService';
+
+/** Frame 1 as the viewport drew it, its depth, and the lens it was drawn with. */
+export interface FirstFrameCapture {
+  frame: string;
+  depth: DepthInfo | null;
+  lens: LensAtFrame;
+}
 import { CameraPackagePicker } from './CameraPackagePicker';
 
 interface TakeRenderPanelProps {
   projectId: string;
   take: CameraTake;
   sceneHeading?: string;
-  /** Grabs the take's first frame from the viewport as a JPEG data URL. */
-  captureFirstFrame: () => Promise<string | null>;
+  /** Grabs the take's first frame from the viewport, with its depth and lens. */
+  captureFirstFrame: () => Promise<FirstFrameCapture | null>;
   /** Called when a render finishes, even if this panel was closed in the meantime. */
   onRendered: (takeId: string, render: TakeRender) => void;
   onClose: () => void;
@@ -35,7 +52,9 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   onRendered,
   onClose,
 }) => {
-  const [frame, setFrame] = useState<string | null>(null);
+  const [capture, setCapture] = useState<FirstFrameCapture | null>(null);
+  const frame = capture?.frame ?? null;
+  const dof = capture ? depthOfField(capture.lens) : null;
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [pkg, setPkg] = useState<CameraPackage>(normalizePackage(take.cameraPackage || DEFAULT_PACKAGE));
   const [looks, setLooks] = useState<FilmLook[]>([]);
@@ -53,9 +72,9 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   useEffect(() => {
     let alive = true;
     captureFirstFrame()
-      .then((url) => {
+      .then((result) => {
         if (!alive) return;
-        if (url) setFrame(url);
+        if (result) setCapture(result);
         else setCaptureError('The viewport could not be captured. Close this and try again.');
       })
       .catch(() => alive && setCaptureError('The viewport could not be captured.'));
@@ -69,10 +88,11 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   // Prepare the chosen layout pass once the frame is in, so it can be checked before paying for a
   // render. Both passes are made from the textured frame.
   useEffect(() => {
-    if (!frame || pass === 'full' || layouts[pass]) return;
+    if (!capture || pass === 'full' || layouts[pass]) return;
     let alive = true;
     setLayoutError(null);
-    const make = pass === 'blur' ? makeBlurPass(frame) : makeClayPass(frame);
+    const extra = { depth: capture.depth, lens: capture.lens };
+    const make = pass === 'blur' ? makeBlurPass(capture.frame, extra) : makeClayPass(capture.frame, extra);
     make
       .then((url) => {
         if (!alive) return;
@@ -84,7 +104,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frame, pass]);
+  }, [capture, pass]);
 
   const layout = pass === 'full' ? frame : layouts[pass] || null;
 
@@ -110,6 +130,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
           note: note.trim() || undefined,
           pass,
           layout: pass === 'full' ? undefined : layout,
+          dof,
         },
         setStage
       );
@@ -246,6 +267,14 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
                 <span className="font-label-caps text-[10px] tracking-[0.15em] uppercase text-on-surface-variant">Camera package</span>
                 <CameraPackagePicker value={pkg} onChange={setPkg} idPrefix="render" />
                 {lensLine && <span className="text-[11px] text-on-surface-variant">From the take: {lensLine}</span>}
+              {capture && (
+                <span className="text-[11px] text-on-surface-variant">
+                  {dof
+                    ? `Focus ${dof.focusM.toFixed(1)} m · sharp ${dof.nearM.toFixed(1)}–${dof.farM === null ? '∞' : `${dof.farM.toFixed(1)} m`} · ${dof.focalMm}mm T${dof.stop}`
+                    : 'Iris is OFF in the viewport: no depth of field to put in the pass.'}
+                  {!capture.depth && ' · no depth captured'}
+                </span>
+              )}
                 {!take.cameraPackage && (
                   <span className="text-[11px] text-amber-300/90">This take was recorded before packages existed; choose one here.</span>
                 )}

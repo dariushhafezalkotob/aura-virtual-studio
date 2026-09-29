@@ -263,6 +263,16 @@ export interface RenderPromptInput {
   lookId?: string;
   sceneHeading: string;
   note: string;
+  /** What the lens kept sharp in the frame (from the take's lens and the viewport's depth). */
+  dof?: { focusM: number; nearM: number; farM: number | null } | null;
+}
+
+/** One line naming the zone of sharp focus; the pass itself carries the blur, this says it in words. */
+function dofLine(dof: RenderPromptInput['dof']): string | null {
+  if (!dof || !Number.isFinite(dof.focusM) || !Number.isFinite(dof.nearM)) return null;
+  const m = (v: number) => `${v < 10 ? v.toFixed(1) : Math.round(v)} m`;
+  const zone = dof.farM === null ? `from ${m(dof.nearM)} to the horizon` : `only from ${m(dof.nearM)} to ${m(dof.farM)}`;
+  return `Depth of field: focused at ${m(dof.focusM)}, sharp ${zone}; everything nearer or farther falls out of focus as the softness in image 1 shows, and the space keeps the depth image 1 shows.`;
 }
 
 /**
@@ -304,6 +314,7 @@ export async function buildRenderPrompt(input: RenderPromptInput): Promise<{ pro
     lines.place,
     lines.people,
     packageShortLine(input.cameraPackage, input.settings),
+    dofLine(input.dof),
     grade,
     input.note && `Director's note: ${input.note}`,
     CLEAN,
@@ -331,6 +342,14 @@ async function runJob(job: RenderJob, input: RenderPromptInput & { layoutDataUrl
     // The generation was counted when the job started; a failed one hands the slot back.
     refundGeneration(job.owner).catch(() => {});
   }
+}
+
+function cleanDof(input: any): RenderPromptInput['dof'] {
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 100000 ? v : null);
+  const focusM = num(input?.focusM);
+  const nearM = num(input?.nearM);
+  if (focusM === null || nearM === null) return null;
+  return { focusM, nearM, farM: num(input?.farM) };
 }
 
 /** Handles /api/render-frame and /api/render-jobs/<id>. Returns true when it answered. */
@@ -419,6 +438,7 @@ export async function handleRenderApi(req: any, res: any): Promise<boolean> {
       lookId: body.lookId ? clip(body.lookId, 40) : undefined,
       sceneHeading: clip(body.sceneHeading, 200),
       note: clip(body.note, 1000),
+      dof: cleanDof(body.dof),
     });
 
     sendJson(res, 200, { success: true, jobId: job.id });
