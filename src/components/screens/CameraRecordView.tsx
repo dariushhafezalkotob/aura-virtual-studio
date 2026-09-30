@@ -183,6 +183,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
   // ---- Hand-keyed camera moves ------------------------------------------------------------
   const [showKeyPanel, setShowKeyPanel] = useState<boolean>(false);
+  const [showNewTakeMenu, setShowNewTakeMenu] = useState<boolean>(false);
   const [keyCaptureTrigger, setKeyCaptureTrigger] = useState<number>(0);
   /**
    * When set, the next capture is filed at THIS time rather than the playhead's.
@@ -1299,7 +1300,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                     setViewMode('live');
                     setIsPlaying(true);
                   }}
-                  className={`px-3 py-1 text-xs font-label-caps rounded-md cursor-pointer flex items-center gap-1.5 transition-all ${
+                  className={`px-3 py-1 text-xs font-label-caps rounded-md cursor-pointer flex items-center gap-1.5 transition-all whitespace-nowrap ${
                     viewMode === 'live'
                       ? 'bg-primary text-background font-semibold shadow-sm'
                       : 'text-on-surface-variant hover:text-primary'
@@ -1317,7 +1318,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                     }
                   }}
                   disabled={takes.length === 0}
-                  className={`px-3 py-1 text-xs font-label-caps rounded-md cursor-pointer flex items-center gap-1.5 transition-all ${
+                  className={`px-3 py-1 text-xs font-label-caps rounded-md cursor-pointer flex items-center gap-1.5 transition-all whitespace-nowrap ${
                     takes.length === 0 ? 'opacity-40 cursor-not-allowed text-on-surface-variant' : ''
                   } ${
                     viewMode === 'playback'
@@ -1328,6 +1329,58 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                   <span className="material-symbols-outlined text-[15px]">movie</span>
                   REVIEW TAKES {takes.length > 0 ? `(${takes.length})` : ''}
                 </button>
+              </div>
+
+              {/* New take: fly and record one, or build one from keyframes. */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowNewTakeMenu((v) => !v)}
+                  disabled={isRecording}
+                  className={`px-3 py-1.5 text-xs font-label-caps rounded-lg border flex items-center gap-1.5 cursor-pointer shadow-md transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
+                    showNewTakeMenu
+                      ? 'bg-red-600 border-red-400 text-white'
+                      : 'bg-surface-container/90 border-red-500/60 text-red-300 hover:bg-red-600 hover:text-white'
+                  }`}
+                  title="Start a new take: record it live, or build it from keyframes"
+                >
+                  <span className="material-symbols-outlined text-[15px]">add</span>
+                  NEW TAKE
+                  <span className="material-symbols-outlined text-[15px]">expand_more</span>
+                </button>
+                {showNewTakeMenu && (
+                  <div className="absolute top-full mt-1.5 left-0 w-60 bg-surface-container/95 backdrop-blur-xl border border-outline-variant/50 p-1 rounded-xl shadow-2xl flex flex-col z-40">
+                    <button
+                      onClick={() => {
+                        setShowNewTakeMenu(false);
+                        setShowKeyPanel(false);
+                        setViewMode('live');
+                        setIsPlaying(true);
+                        setToastMessage('Live camera. Frame the shot, then press REC.');
+                        setTimeout(() => setToastMessage(null), 3000);
+                      }}
+                      className="flex items-start gap-2 px-2.5 py-2 rounded-lg text-left hover:bg-red-600/20 cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[18px] text-red-400">fiber_manual_record</span>
+                      <span className="flex flex-col">
+                        <span className="text-xs font-label-caps text-on-surface">Record</span>
+                        <span className="text-[10px] text-on-surface-variant leading-snug">Fly the camera or the phone and record the move live.</span>
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowNewTakeMenu(false);
+                        handleNewKeyedTake();
+                      }}
+                      className="flex items-start gap-2 px-2.5 py-2 rounded-lg text-left hover:bg-primary/15 cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[18px] text-primary">linear_scale</span>
+                      <span className="flex flex-col">
+                        <span className="text-xs font-label-caps text-on-surface">Keyframe</span>
+                        <span className="text-[10px] text-on-surface-variant leading-snug">Place the camera key by key and let the move flow between them.</span>
+                      </span>
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Status Badge */}
@@ -1485,7 +1538,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             )}
           </div>
           {/* Right of the top row: pairing, keyframing and the lens controls, all one line. */}
-          <div className="flex items-center flex-wrap justify-end gap-2 pointer-events-auto">
+          <div className="min-w-0 flex items-center flex-wrap justify-end gap-2 pointer-events-auto">
             {/* Left: Mobile Camera Pairing Button */}
             <button
               onClick={() => setShowQRPairing(true)}
@@ -1518,8 +1571,9 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             </button>
 
 
-            {/* Right: Camera package, Focus Puller, Iris (DoF), Lens & ISO Selectors */}
-            <div className="flex items-center gap-2">
+            {/* Right: Camera package, Iris (DoF), Lens, ISO and the Focus Puller. Wraps rather
+                than running off the right edge of a narrower window. */}
+            <div className="min-w-0 flex items-center flex-wrap justify-end gap-2">
               {/* Camera package: body, lens set, film back. Stored on every take recorded. */}
               <div className="relative">
                 <button
@@ -1557,7 +1611,56 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                 )}
               </div>
 
-              {/* Focus Puller & Depth of Field Controls */}
+              {/* IRIS / Aperture (DoF) */}
+              <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
+                <span className="font-label-caps text-[9px] text-on-surface-variant px-1" title="Aperture / Depth of Field (Circle of Confusion)">IRIS</span>
+                {['f/1.4', 'f/2.0', 'f/2.8', 'f/4.0', 'f/8.0', 'OFF'].map((val) => (
+                  <button
+                    key={val}
+                    onClick={() => setAperture(val)}
+                    className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
+                      aperture === val ? 'bg-amber-400 text-black font-bold shadow' : 'text-on-surface-variant hover:text-amber-300'
+                    }`}
+                  >
+                    {val}
+                  </button>
+                ))}
+              </div>
+
+              {/* Lens Selector */}
+              <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
+                <span className="font-label-caps text-[9px] text-on-surface-variant px-1">LENS</span>
+                {['18mm', '24mm', '35mm', '50mm', '85mm', '135mm'].map((fl) => (
+                  <button
+                    key={fl}
+                    onClick={() => setFocalLength(fl)}
+                    className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
+                      focalLength === fl ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
+                    }`}
+                  >
+                    {fl}
+                  </button>
+                ))}
+              </div>
+
+              {/* ISO Selector */}
+              <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
+                <span className="font-label-caps text-[9px] text-on-surface-variant px-1">ISO</span>
+                {['400', '800', '1600'].map((val) => (
+                  <button
+                    key={val}
+                    onClick={() => setIso(val)}
+                    className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
+                      iso === val ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
+                    }`}
+                  >
+                    {val}
+                  </button>
+                ))}
+              </div>
+
+              {/* Focus Puller & Depth of Field Controls. Last in the row so it sits at the right
+                  edge of the screen and its menu opens there, beside the viewfinder, not over it. */}
               <div className="relative">
                 <button
                   onClick={() => setShowFocusPullerMenu(!showFocusPullerMenu)}
@@ -1573,8 +1676,9 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                 </button>
 
                 {/* Floating Focus Puller HUD Box */}
-                {/* Opens downward. This button used to live on the bottom bar, where upward was
-                    the only direction that fitted; on the top row that ran off the screen. */}
+                {/* Opens downward, anchored to the right edge. This button used to live on the bottom
+                    bar, where upward was the only direction that fitted; on the top row that ran off
+                    the screen. */}
                 {showFocusPullerMenu && (
                   <div className="absolute top-full mt-2 right-0 w-64 bg-surface-container/95 backdrop-blur-xl border border-outline-variant/50 p-3 rounded-2xl shadow-2xl flex flex-col gap-2.5 z-40 animate-in fade-in slide-in-from-top-2 duration-150">
                     <div className="flex justify-between items-center pb-1.5 border-b border-outline-variant/20">
@@ -1684,54 +1788,6 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                     </div>
                   </div>
                 )}
-              </div>
-
-              {/* IRIS / Aperture (DoF) */}
-              <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
-                <span className="font-label-caps text-[9px] text-on-surface-variant px-1" title="Aperture / Depth of Field (Circle of Confusion)">IRIS</span>
-                {['f/1.4', 'f/2.0', 'f/2.8', 'f/4.0', 'f/8.0', 'OFF'].map((val) => (
-                  <button
-                    key={val}
-                    onClick={() => setAperture(val)}
-                    className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
-                      aperture === val ? 'bg-amber-400 text-black font-bold shadow' : 'text-on-surface-variant hover:text-amber-300'
-                    }`}
-                  >
-                    {val}
-                  </button>
-                ))}
-              </div>
-
-              {/* Lens Selector */}
-              <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
-                <span className="font-label-caps text-[9px] text-on-surface-variant px-1">LENS</span>
-                {['18mm', '24mm', '35mm', '50mm', '85mm', '135mm'].map((fl) => (
-                  <button
-                    key={fl}
-                    onClick={() => setFocalLength(fl)}
-                    className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
-                      focalLength === fl ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
-                    }`}
-                  >
-                    {fl}
-                  </button>
-                ))}
-              </div>
-
-              {/* ISO Selector */}
-              <div className="flex items-center gap-xs bg-surface-container/90 border border-outline-variant/40 p-1 rounded-xl backdrop-blur-md shadow-md">
-                <span className="font-label-caps text-[9px] text-on-surface-variant px-1">ISO</span>
-                {['400', '800', '1600'].map((val) => (
-                  <button
-                    key={val}
-                    onClick={() => setIso(val)}
-                    className={`px-1.5 py-1 text-[11px] font-label-caps rounded cursor-pointer transition-colors ${
-                      iso === val ? 'bg-primary text-background font-medium' : 'text-on-surface-variant hover:text-primary'
-                    }`}
-                  >
-                    {val}
-                  </button>
-                ))}
               </div>
             </div>
           </div>
@@ -1956,17 +2012,6 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
               <div className="flex items-center gap-1.5">
                 <button
                   onClick={() => {
-                    setViewMode('live');
-                    handleToggleRecord();
-                  }}
-                  className="h-9 px-3 rounded-lg bg-red-600 hover:bg-red-500 text-white font-label-caps text-xs font-bold tracking-wider flex items-center gap-1.5 cursor-pointer shadow-lg transition-all whitespace-nowrap"
-                  title="Start recording a new take immediately"
-                >
-                  <span className="material-symbols-outlined text-[16px]">videocam</span>
-                  <span>NEW TAKE</span>
-                </button>
-                <button
-                  onClick={() => {
                     setTimelineSec(0);
                     setIsPlaying(true);
                   }}
@@ -2131,7 +2176,6 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             onRetakeKey={handleRetakeKey}
             onGoToKey={goToAdjacentKey}
             onTensionChange={(tension) => updateActiveTake((t) => ({ ...t, tension }))}
-            onNewTake={handleNewKeyedTake}
             lenses={KEY_LENSES}
           />
         </div>

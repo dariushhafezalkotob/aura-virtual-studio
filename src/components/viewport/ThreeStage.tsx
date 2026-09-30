@@ -1209,6 +1209,17 @@ const CameraPlaybackDriver: React.FC<{
   const { camera } = useThree();
   const appliedTimeRef = useRef<number | null>(null);
 
+  // Nothing else clears these, so leaving a keyed move (going LIVE, another take) kept its last
+  // focus clamped on and the focus puller did nothing until the page was reloaded.
+  useEffect(() => {
+    return () => {
+      if (lensRef) {
+        lensRef.current.focusDistance = null;
+        lensRef.current.aperture = null;
+      }
+    };
+  }, [lensRef]);
+
   useFrame(() => {
     if (!continuous) {
       if (appliedTimeRef.current === currentTime) return;
@@ -1241,8 +1252,11 @@ const CameraPlaybackDriver: React.FC<{
         pCam.updateProjectionMatrix();
       }
       if (lensRef) {
-        lensRef.current.focusDistance = _sampled.focusDistance;
-        lensRef.current.aperture = _sampled.aperture;
+        // Keyed focus and iris outrank the focus puller only while the move PLAYS. Paused on a
+        // keyed move you are authoring the next key, so the puller has to answer; the screen puts
+        // each key's own values on the controls as the playhead reaches it.
+        lensRef.current.focusDistance = continuous ? _sampled.focusDistance : null;
+        lensRef.current.aperture = continuous ? _sampled.aperture : null;
       }
       camera.updateMatrixWorld(true);
       onSampled?.(_sampled);

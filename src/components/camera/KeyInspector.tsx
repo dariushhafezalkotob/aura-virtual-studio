@@ -20,8 +20,6 @@ interface KeyInspectorProps {
   onRetakeKey: (time: number) => void;
   onGoToKey: (direction: 1 | -1) => void;
   onTensionChange: (tension: number) => void;
-  /** Starts a fresh keyed take, leaving this one as it is. */
-  onNewTake: () => void;
   /** The lens set, so a key's field of view reads as a lens (135mm) rather than a bare angle (15). */
   lenses: { label: string; fov: number }[];
 }
@@ -81,7 +79,6 @@ export const KeyInspector: React.FC<KeyInspectorProps> = ({
   onRetakeKey,
   onGoToKey,
   onTensionChange,
-  onNewTake,
   lenses,
 }) => {
   const ease = selectedKey?.ease || 'linear';
@@ -99,14 +96,6 @@ export const KeyInspector: React.FC<KeyInspectorProps> = ({
         <span className="text-[9px] text-on-surface-variant shrink-0">
           {take.keyframes.length}k · {take.duration.toFixed(1)}s
         </span>
-        <button
-          onClick={onNewTake}
-          className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-label-caps border border-primary/50 text-primary hover:bg-primary/15 cursor-pointer flex items-center gap-0.5"
-          title="Start a new keyed take. This one is kept as it is."
-        >
-          <span className="material-symbols-outlined text-[12px]">add</span>
-          New Take
-        </button>
       </div>
 
       <div className="px-2 py-1.5 flex flex-col gap-1.5">
