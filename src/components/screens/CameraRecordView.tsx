@@ -37,6 +37,22 @@ const LENS_FOV_MAP: Record<string, number> = {
   '135mm': 15,
 };
 
+/** The lens whose field of view is closest - a keyed fov between two lenses reads as the nearer. */
+function nearestLens(fov: number): string {
+  let best = '35mm';
+  let bestDiff = Infinity;
+  for (const [lens, lensFov] of Object.entries(LENS_FOV_MAP)) {
+    const diff = Math.abs(lensFov - fov);
+    if (diff < bestDiff) {
+      best = lens;
+      bestDiff = diff;
+    }
+  }
+  return best;
+}
+
+const KEY_LENSES = Object.entries(LENS_FOV_MAP).map(([label, fov]) => ({ label, fov }));
+
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
@@ -347,6 +363,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     setIsPlaying(false);
     setTimelineSec(0);
     setShowKeyPanel(true);
+    setSelectedKeyTime(null);
     setToastMessage('New keyed move. Fly the camera, then SET KEY.');
     setTimeout(() => setToastMessage(null), 3000);
   };
@@ -358,18 +375,29 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const handleKeyCaptured = useCallback(
     (frame: CameraKeyframe) => {
       if (!activeTake || activeTake.mode !== 'keyed') return;
+      const retake = captureAtRef.current !== null;
       const time = captureAtRef.current ?? frame.time;
       captureAtRef.current = null;
       const existing = activeTake.keyframes.find((k) => Math.abs(k.time - time) <= 1e-3);
+      // Set Key keys the lens as the controls show it, not the viewport camera's fov: scrubbing
+      // a keyed move puts an earlier key's fov on the camera, and reading that back stamped the
+      // old lens (e.g. 15 = 135mm) on every new key while focus and iris were never keyed at all.
+      // Re-take only replaces the pose, so it keeps the key's own lens.
+      const lens: Partial<CameraKeyframe> = retake
+        ? { fov: existing?.fov ?? frame.fov, focusDistance: existing?.focusDistance, aperture: existing?.aperture }
+        : {
+            fov: LENS_FOV_MAP[focalLength] ?? frame.fov,
+            focusDistance: focusMode === 'auto' ? autoFocusReadout || focusDistance : focusDistance,
+            aperture: aperture === 'OFF' ? undefined : parseFloat(aperture.replace('f/', '')) || undefined,
+          };
       const key: CameraKeyframe = {
         ...frame,
+        ...lens,
         time,
-        // Keep whatever shaping the old key at this time had; only the pose is being re-taken.
+        // Keep whatever shaping the old key at this time had.
         ease: existing?.ease ?? 'ease-in-out',
         easeHandles: existing?.easeHandles,
         roll: existing?.roll,
-        focusDistance: existing?.focusDistance,
-        aperture: existing?.aperture,
       };
       const keyframes = insertKeyframe(activeTake.keyframes, key);
       updateActiveTake((t) => ({
@@ -381,8 +409,34 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       setToastMessage(existing ? `Key at ${key.time.toFixed(2)}s re-taken` : `Key set at ${key.time.toFixed(2)}s`);
       setTimeout(() => setToastMessage(null), 2000);
     },
-    [activeTake, updateActiveTake]
+    [activeTake, updateActiveTake, focalLength, focusMode, autoFocusReadout, focusDistance, aperture]
   );
+
+  /**
+   * On a keyed move the LENS / FOCUS / IRIS controls show the key at or before the playhead, so
+   * what they say is what that key holds, and Set Key after changing one keys the change. Without
+   * this the controls kept whatever was last clicked while the camera showed the key's lens.
+   */
+  const lensKey = useMemo(() => {
+    if (!isKeyedTake || !activeTake || activeTake.keyframes.length === 0) return null;
+    const keys = activeTake.keyframes;
+    let k = keys[0];
+    for (const key of keys) {
+      if (key.time <= timelineSec + 1e-3) k = key;
+      else break;
+    }
+    return k;
+  }, [isKeyedTake, activeTake, timelineSec]);
+
+  useEffect(() => {
+    if (!lensKey) return;
+    if (lensKey.fov) setFocalLength(nearestLens(lensKey.fov));
+    if (lensKey.focusDistance && lensKey.focusDistance > 0) {
+      setFocusDistance(lensKey.focusDistance);
+      setFocusMode('manual');
+    }
+    if (lensKey.aperture && lensKey.aperture > 0) setAperture(`f/${lensKey.aperture.toFixed(1)}`);
+  }, [lensKey?.fov, lensKey?.focusDistance, lensKey?.aperture, lensKey?.time]);
 
   /**
    * Jump the playhead to the key before or after the current time, and select it.
@@ -2077,6 +2131,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             onRetakeKey={handleRetakeKey}
             onGoToKey={goToAdjacentKey}
             onTensionChange={(tension) => updateActiveTake((t) => ({ ...t, tension }))}
+            onNewTake={handleNewKeyedTake}
+            lenses={KEY_LENSES}
           />
         </div>
       )}

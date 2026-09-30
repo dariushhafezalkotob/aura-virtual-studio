@@ -20,6 +20,10 @@ interface KeyInspectorProps {
   onRetakeKey: (time: number) => void;
   onGoToKey: (direction: 1 | -1) => void;
   onTensionChange: (tension: number) => void;
+  /** Starts a fresh keyed take, leaving this one as it is. */
+  onNewTake: () => void;
+  /** The lens set, so a key's field of view reads as a lens (135mm) rather than a bare angle (15). */
+  lenses: { label: string; fov: number }[];
 }
 
 const EASE_PRESETS: { value: CameraEase; label: string; hint: string }[] = [
@@ -77,8 +81,14 @@ export const KeyInspector: React.FC<KeyInspectorProps> = ({
   onRetakeKey,
   onGoToKey,
   onTensionChange,
+  onNewTake,
+  lenses,
 }) => {
   const ease = selectedKey?.ease || 'linear';
+  const keyLens =
+    selectedKey?.fov !== undefined && lenses.length > 0
+      ? lenses.reduce((best, l) => (Math.abs(l.fov - selectedKey.fov!) < Math.abs(best.fov - selectedKey.fov!) ? l : best))
+      : null;
 
   return (
     <div className="w-[208px] bg-surface-container/95 border border-outline-variant/40 rounded-xl backdrop-blur-xl shadow-2xl overflow-hidden pointer-events-auto">
@@ -89,6 +99,14 @@ export const KeyInspector: React.FC<KeyInspectorProps> = ({
         <span className="text-[9px] text-on-surface-variant shrink-0">
           {take.keyframes.length}k · {take.duration.toFixed(1)}s
         </span>
+        <button
+          onClick={onNewTake}
+          className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-label-caps border border-primary/50 text-primary hover:bg-primary/15 cursor-pointer flex items-center gap-0.5"
+          title="Start a new keyed take. This one is kept as it is."
+        >
+          <span className="material-symbols-outlined text-[12px]">add</span>
+          New Take
+        </button>
       </div>
 
       <div className="px-2 py-1.5 flex flex-col gap-1.5">
@@ -145,8 +163,21 @@ export const KeyInspector: React.FC<KeyInspectorProps> = ({
 
             <NumberField label="Time" suffix="s" value={selectedKey.time} step={0.1} min={0}
               onChange={(v) => onMoveKey(selectedKey.time, v)} />
-            <NumberField label="Lens" suffix="°" value={selectedKey.fov ?? 50} step={1} min={5} max={120}
-              onChange={(v) => onChangeKey(selectedKey.time, { fov: v })} />
+            <label className="flex items-center gap-1 text-[9px] text-on-surface-variant" title="The lens this key is on">
+              <span className="w-8 shrink-0 font-label-caps">Lens</span>
+              <select
+                value={keyLens?.label ?? ''}
+                onChange={(e) => {
+                  const l = lenses.find((x) => x.label === e.target.value);
+                  if (l) onChangeKey(selectedKey.time, { fov: l.fov });
+                }}
+                className="flex-1 bg-surface-container-lowest border border-outline-variant/40 rounded px-1 py-0.5 text-[10px] font-mono text-on-surface outline-none focus:border-primary cursor-pointer"
+              >
+                {lenses.map((l) => (
+                  <option key={l.label} value={l.label}>{l.label}</option>
+                ))}
+              </select>
+            </label>
             <NumberField label="Roll" suffix="°" value={selectedKey.roll ?? 0} step={1}
               onChange={(v) => onChangeKey(selectedKey.time, { roll: v })} />
             <NumberField label="Focus" suffix="m" value={selectedKey.focusDistance ?? 0} step={0.1} min={0}
