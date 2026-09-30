@@ -117,6 +117,8 @@ interface ThreeStageProps {
   onCanvasReady?: (canvas: HTMLCanvasElement) => void;
   /** Filled with a function that reads the distance of every pixel from the camera, in metres. */
   depthCaptureRef?: React.MutableRefObject<DepthCaptureFn | null>;
+  /** Filled with a function that reports which actors are drawn where, for a render's cast. */
+  actorVisibilityRef?: React.MutableRefObject<ActorVisibilityFn | null>;
   remoteOrientation?: DeviceOrientationData | null;
   remoteOrientationRef?: React.MutableRefObject<DeviceOrientationData | null>;
   remoteMove?: RemoteMoveData | null;
@@ -1467,6 +1469,118 @@ export type DepthCaptureFn = (width: number) => DepthMap | null;
 const DEPTH_RANGE_M = 250;
 
 /**
+ * Which actor is drawn at each pixel: 0 for nothing, n for `actorIds[n - 1]`, row 0 at the TOP.
+ * Everything else in the scene still hides actors behind it, so an actor behind a wall reads as
+ * absent, not present.
+ */
+export interface ActorIdMap {
+  width: number;
+  height: number;
+  ids: Uint8Array;
+  actorIds: string[];
+}
+export type ActorVisibilityFn = (width: number) => ActorIdMap | null;
+
+/**
+ * Renders the scene once from the shot's camera with every actor's body in a flat id colour and
+ * everything else black, and reads it back. A render sends a character sheet only for an actor
+ * this finds in the frame: a sheet sent for someone who enters later was read as "put this person
+ * in the picture", and they were added to a frame they are not in.
+ */
+const ActorVisibilityCapturer: React.FC<{ captureRef: React.MutableRefObject<ActorVisibilityFn | null> }> = ({ captureRef }) => {
+  const { gl, scene, camera, size } = useThree();
+
+  useEffect(() => {
+    captureRef.current = (width: number) => {
+      const w = Math.max(16, Math.round(width));
+      const h = Math.max(9, Math.round((w * size.height) / Math.max(1, size.width)));
+      const actorIds: string[] = [];
+      const idMaterials: THREE.MeshBasicMaterial[] = [];
+      const black = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+      const swapped: { obj: THREE.Mesh; material: THREE.Material | THREE.Material[] }[] = [];
+      const hidden: THREE.Object3D[] = [];
+
+      const paint = (obj: THREE.Object3D, id: number) => {
+        if ((obj as THREE.Mesh).isMesh) {
+          const mesh = obj as THREE.Mesh;
+          swapped.push({ obj: mesh, material: mesh.material });
+          if (id > 0) {
+            let m = idMaterials[id - 1];
+            if (!m) {
+              m = new THREE.MeshBasicMaterial({ color: new THREE.Color(id / 255, 0, 0), side: THREE.DoubleSide });
+              idMaterials[id - 1] = m;
+            }
+            mesh.material = m;
+          } else {
+            mesh.material = black;
+          }
+        } else if ((obj as THREE.Line).isLine || (obj as THREE.Points).isPoints || (obj as THREE.Sprite).isSprite) {
+          // Paths, gizmos and markers are not in the picture the render is made from.
+          if (obj.visible) {
+            obj.visible = false;
+            hidden.push(obj);
+          }
+        }
+        const bodyId = obj.userData?.actorBodyId as string | undefined;
+        let childId = id;
+        if (bodyId && actorIds.length < 254) {
+          actorIds.push(bodyId);
+          childId = actorIds.length;
+        }
+        for (const child of obj.children) paint(child, childId);
+      };
+
+      const target = new THREE.WebGLRenderTarget(w, h, { type: THREE.UnsignedByteType, format: THREE.RGBAFormat });
+      const previousBackground = scene.background;
+      const previousTarget = gl.getRenderTarget();
+      const previousClear = gl.getClearColor(new THREE.Color());
+      const previousAlpha = gl.getClearAlpha();
+      // Exact id colours, not tone-mapped or sRGB-encoded ones.
+      const previousToneMapping = gl.toneMapping;
+      const previousColorSpace = gl.outputColorSpace;
+      const pixels = new Uint8Array(w * h * 4);
+      try {
+        paint(scene, 0);
+        scene.background = null;
+        gl.toneMapping = THREE.NoToneMapping;
+        gl.outputColorSpace = THREE.LinearSRGBColorSpace;
+        gl.setRenderTarget(target);
+        gl.setClearColor(0x000000, 1);
+        gl.clear();
+        gl.render(scene, camera);
+        gl.readRenderTargetPixels(target, 0, 0, w, h, pixels);
+      } catch {
+        return null;
+      } finally {
+        for (const { obj, material } of swapped) obj.material = material;
+        for (const obj of hidden) obj.visible = true;
+        scene.background = previousBackground;
+        gl.toneMapping = previousToneMapping;
+        gl.outputColorSpace = previousColorSpace;
+        gl.setRenderTarget(previousTarget);
+        gl.setClearColor(previousClear, previousAlpha);
+        target.dispose();
+        black.dispose();
+        idMaterials.forEach((m) => m?.dispose());
+      }
+
+      const ids = new Uint8Array(w * h);
+      for (let y = 0; y < h; y++) {
+        // WebGL reads bottom-up; flip so row 0 is the top of the frame like every image.
+        const srcRow = (h - 1 - y) * w;
+        for (let x = 0; x < w; x++) ids[y * w + x] = pixels[(srcRow + x) * 4];
+      }
+      return { width: w, height: h, ids, actorIds };
+    };
+    return () => {
+      captureRef.current = null;
+    };
+  }, [gl, scene, camera, size, captureRef]);
+
+  return null;
+};
+
+/**
  * Renders the scene once, from the shot's camera, with a material that writes each pixel's
  * distance from the camera instead of its colour, and reads it back. Used to put the lens's depth
  * of field and a sense of distance back into the texture-free layout passes for rendering.
@@ -1921,6 +2035,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   showCameraTrajectory = true,
   onCanvasReady,
   depthCaptureRef,
+  actorVisibilityRef,
   remoteOrientation = null,
   remoteOrientationRef,
   remoteMove = null,
@@ -1968,6 +2083,7 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
       >
         <CanvasPublisher onCanvasReady={onCanvasReady} />
         {depthCaptureRef && <DepthCapturer captureRef={depthCaptureRef} />}
+        {actorVisibilityRef && <ActorVisibilityCapturer captureRef={actorVisibilityRef} />}
         <CameraFovUpdater fov={cameraFov} />
         {dofConfig && dofConfig.enabled && dofConfig.aperture < 100 && (
           <CinematicDepthOfField config={dofConfig} onAutoFocusDistance={onAutoFocusDistance} lensRef={keyedLensRef} />

@@ -1126,8 +1126,9 @@ export const CharacterActorModel: React.FC<CharacterActorModelProps> = ({
           onSelect();
         }}
       >
-        {/* Animated SOMA Multi-Body Skinned Mesh */}
-        <group ref={bodyGroupRef}>
+        {/* Animated SOMA Multi-Body Skinned Mesh. Tagged so a render can tell which actors are
+            actually in the shot (ThreeStage's ActorVisibilityCapturer). */}
+        <group ref={bodyGroupRef} userData={{ actorBodyId: actor.id }}>
           {isRigReady && skinnedMeshRef.current ? (
             <primitive object={skinnedMeshRef.current} />
           ) : (

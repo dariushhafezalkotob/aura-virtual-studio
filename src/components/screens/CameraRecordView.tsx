@@ -10,7 +10,7 @@ import {
   DepthOfFieldConfig,
   TakeRender,
 } from '../../types';
-import { ThreeStage, type DepthCaptureFn, type DepthMap } from '../viewport/ThreeStage';
+import { ThreeStage, type ActorVisibilityFn, type DepthCaptureFn, type DepthMap } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
 import { CameraRemoteSocket, LinkStats } from '../../services/cameraRemoteService';
 import { stabilizeKeyframes } from '../../services/cameraStabilizer';
@@ -249,6 +249,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   }, []);
 
   const depthCaptureRef = useRef<DepthCaptureFn | null>(null);
+  const actorVisibilityRef = useRef<ActorVisibilityFn | null>(null);
   // Read inside the capture above, which is created once.
   const dofRef = useRef(dofConfig);
   dofRef.current = dofConfig;
@@ -316,6 +317,28 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   };
 
   /**
+   * Which actors show inside the camera frame right now, hidden ones (behind a wall, say) not
+   * counted. An actor needs about 0.05% of the frame, a few dozen pixels at this size, so a far
+   * figure still counts but a stray pixel of an arm at the edge does not.
+   */
+  const actorsInFrame = (): string[] | null => {
+    const canvas = webglCanvasRef.current;
+    const map = actorVisibilityRef.current?.(800);
+    if (!map || !canvas) return null;
+    const r = frameRectOnCanvas(canvas);
+    const x0 = Math.floor(r.x * map.width);
+    const y0 = Math.floor(r.y * map.height);
+    const x1 = Math.min(map.width, Math.ceil((r.x + r.w) * map.width));
+    const y1 = Math.min(map.height, Math.ceil((r.y + r.h) * map.height));
+    const counts = new Array(map.actorIds.length + 1).fill(0);
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) counts[map.ids[y * map.width + x]]++;
+    }
+    const minPixels = Math.max(12, (x1 - x0) * (y1 - y0) * 0.0005);
+    return map.actorIds.filter((_, i) => counts[i + 1] >= minPixels);
+  };
+
+  /**
    * The take's first frame exactly as the viewport draws it, depth of field included: the take
    * is put in playback at 0s and paused, and a few frames are let through so the camera and the
    * actors reach frame 1.
@@ -341,7 +364,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       stop: dof.enabled && dof.aperture < 100 ? dof.aperture : null,
       focusM: dof.autoFocus ? autoFocusRef.current || dof.focusDistance : dof.focusDistance,
     };
-    return { frame, depth, lens };
+    return { frame, depth, lens, inFrame: actorsInFrame() };
   }, []);
 
   /** Starts an empty hand-keyed move and makes it the take being edited. */
@@ -1230,6 +1253,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         dofConfig={dofConfig}
         onAutoFocusDistance={(dist) => setAutoFocusReadout(dist)}
         depthCaptureRef={depthCaptureRef}
+        actorVisibilityRef={actorVisibilityRef}
         onCanvasReady={(canvas) => {
           webglCanvasRef.current = canvas;
         }}

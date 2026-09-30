@@ -20,6 +20,11 @@ export interface FirstFrameCapture {
   frame: string;
   depth: DepthInfo | null;
   lens: LensAtFrame;
+  /**
+   * Ids of the actors actually visible inside the camera frame at frame 1, or null when that
+   * could not be worked out. Someone who only walks in later gets no sheet, or the render adds them.
+   */
+  inFrame: string[] | null;
 }
 import { CameraPackagePicker } from './CameraPackagePicker';
 
@@ -88,6 +93,11 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
     captureFirstFrame()
       .then((result) => {
         if (!alive) return;
+        if (result?.inFrame) {
+          // Out of shot at frame 1: leave their sheet out, but let it be switched back on by hand.
+          const out = characters.filter((c) => !result.inFrame!.includes(c.id)).map((c) => c.id);
+          if (out.length) setSkipped((prev) => new Set([...prev, ...out]));
+        }
         if (result) setCapture(result);
         else setCaptureError('The viewport could not be captured. Close this and try again.');
       })
@@ -369,6 +379,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
                 {cast.length === 0 && <span className="text-[10px] text-on-surface-variant/70">No characters in this scene.</span>}
                 {cast.map((c) => {
                   const on = !!c.referenceSheetUrl && !skipped.has(c.id);
+                  const outOfFrame = !!capture?.inFrame && !capture.inFrame.includes(c.id);
                   return (
                     <div key={c.id} className="flex items-center gap-xs bg-surface-container rounded-lg border border-outline-variant/30 p-[4px]">
                       <span className="w-3 h-3 rounded-full shrink-0 border border-white/20" style={{ background: c.color || '#00ffcc' }} title={`${standInColourName(c.color)} stand-in`} />
@@ -378,7 +389,17 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
                       <div className="flex flex-col min-w-0 flex-1">
                         <span className="text-[11px] text-on-surface truncate">{c.name}</span>
                         <span className="text-[10px] text-on-surface-variant/70 truncate">
-                          {uploadingFor === c.id ? 'Uploading…' : c.referenceSheetUrl ? (on ? 'Sheet goes with the render' : 'Left out of this render') : 'No sheet: Seedream invents this person'}
+                          {uploadingFor === c.id
+                            ? 'Uploading…'
+                            : outOfFrame
+                            ? on
+                              ? 'Not in the first frame, but the sheet is sent'
+                              : 'Not in the first frame: left out'
+                            : c.referenceSheetUrl
+                            ? on
+                              ? 'Sheet goes with the render'
+                              : 'Left out of this render'
+                            : 'No sheet: Seedream invents this person'}
                         </span>
                       </div>
                       {c.referenceSheetUrl && (
