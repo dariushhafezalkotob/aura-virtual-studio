@@ -19,6 +19,7 @@ import { KeyframeTimeline } from '../camera/KeyframeTimeline';
 import { KeyInspector } from '../camera/KeyInspector';
 import { CameraPackagePicker } from '../camera/CameraPackagePicker';
 import { TakeRenderPanel, type FirstFrameCapture } from '../camera/TakeRenderPanel';
+import type { PeopleMask } from '../../services/renderService';
 import { DEFAULT_PACKAGE, normalizePackage, packageLabel, cameraById, lensById, type CameraPackage } from '../../services/cameraPackage';
 import { useDialogueAudioSync } from '../../services/dialogueService';
 import qrcode from 'qrcode-generator';
@@ -317,25 +318,38 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   };
 
   /**
-   * Which actors show inside the camera frame right now, hidden ones (behind a wall, say) not
-   * counted. An actor needs about 0.05% of the frame, a few dozen pixels at this size, so a far
-   * figure still counts but a stray pixel of an arm at the edge does not.
+   * Which actor covers each pixel of the camera frame right now: what the camera sees (things in
+   * front hide an actor) and each whole figure, both cut to the blue frame like the picture.
    */
-  const actorsInFrame = (): string[] | null => {
+  const peopleInFrame = (): PeopleMask | null => {
     const canvas = webglCanvasRef.current;
-    const map = actorVisibilityRef.current?.(800);
+    const map = actorVisibilityRef.current?.(1600);
     if (!map || !canvas) return null;
     const r = frameRectOnCanvas(canvas);
     const x0 = Math.floor(r.x * map.width);
     const y0 = Math.floor(r.y * map.height);
-    const x1 = Math.min(map.width, Math.ceil((r.x + r.w) * map.width));
-    const y1 = Math.min(map.height, Math.ceil((r.y + r.h) * map.height));
-    const counts = new Array(map.actorIds.length + 1).fill(0);
-    for (let y = y0; y < y1; y++) {
-      for (let x = x0; x < x1; x++) counts[map.ids[y * map.width + x]]++;
+    const w = Math.max(1, Math.min(map.width - x0, Math.round(r.w * map.width)));
+    const h = Math.max(1, Math.min(map.height - y0, Math.round(r.h * map.height)));
+    const ids = new Uint8Array(w * h);
+    const fullIds = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      const from = (y0 + y) * map.width + x0;
+      ids.set(map.ids.subarray(from, from + w), y * w);
+      fullIds.set(map.fullIds.subarray(from, from + w), y * w);
     }
-    const minPixels = Math.max(12, (x1 - x0) * (y1 - y0) * 0.0005);
-    return map.actorIds.filter((_, i) => counts[i + 1] >= minPixels);
+    return { width: w, height: h, ids, fullIds, actorIds: map.actorIds };
+  };
+
+  /**
+   * The actors that show in the frame, hidden ones (behind a wall, say) not counted. An actor needs
+   * about 0.05% of the frame, so a far figure still counts but a stray pixel of an arm does not.
+   */
+  const actorsShowing = (people: PeopleMask | null): string[] | null => {
+    if (!people) return null;
+    const counts = new Array(people.actorIds.length + 1).fill(0);
+    for (let p = 0; p < people.ids.length; p++) counts[people.ids[p]]++;
+    const minPixels = Math.max(12, people.width * people.height * 0.0005);
+    return people.actorIds.filter((_, i) => counts[i + 1] >= minPixels);
   };
 
   /**
@@ -364,7 +378,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       stop: dof.enabled && dof.aperture < 100 ? dof.aperture : null,
       focusM: dof.autoFocus ? autoFocusRef.current || dof.focusDistance : dof.focusDistance,
     };
-    return { frame, depth, lens, inFrame: actorsInFrame() };
+    const people = peopleInFrame();
+    return { frame, depth, lens, people, inFrame: actorsShowing(people) };
   }, []);
 
   /** Starts an empty hand-keyed move and makes it the take being edited. */

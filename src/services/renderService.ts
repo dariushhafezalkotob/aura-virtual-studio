@@ -197,9 +197,173 @@ function toJpeg(values: Float32Array, softenPx = 0): string {
   return full.toDataURL('image/jpeg', 0.9);
 }
 
+/**
+ * Which actor covers each pixel of the camera frame at frame 1: 0 for none, n for `actorIds[n - 1]`,
+ * row 0 at the top. `ids` is what the camera sees (things in front hide the actor), `fullIds` is the
+ * whole figure as if nothing stood in front, cut only by the frame edge.
+ */
+export interface PeopleMask {
+  width: number;
+  height: number;
+  ids: Uint8Array;
+  fullIds: Uint8Array;
+  actorIds: string[];
+}
+
 export interface PassDepth {
   depth: DepthInfo | null;
   lens: LensAtFrame | null;
+  /** Where the actors are, so the pass can keep them readable. */
+  people?: PeopleMask | null;
+}
+
+/** The mask resampled to the pass size, nearest pixel. */
+function maskForPass(mask: Uint8Array, mw: number, mh: number): Uint8Array {
+  const out = new Uint8Array(PASS_W * PASS_H);
+  for (let y = 0; y < PASS_H; y++) {
+    const yy = Math.min(mh - 1, Math.floor(((y + 0.5) / PASS_H) * mh));
+    for (let x = 0; x < PASS_W; x++) {
+      out[y * PASS_W + x] = mask[yy * mw + Math.min(mw - 1, Math.floor(((x + 0.5) / PASS_W) * mw))];
+    }
+  }
+  return out;
+}
+
+/**
+ * Puts the actors back into a finished pass, readable. Seedream keeps "every person's position and
+ * pose" from image 1, but in grey a turquoise stand-in is about as bright as a dark shop front, and
+ * the pass's base blur plus the lens blur smeared a small, out-of-focus figure into the background:
+ * with no figure there, Seedream put the person where it liked - big, centred, in the street.
+ *
+ * So each visible figure is redrawn from the unblurred grey frame with only a little softness, and
+ * pushed at least ~55 grey levels away from what surrounds it. Only the actor's own visible pixels
+ * change: what stands in front of them still hides them, and the rest of the pass is untouched.
+ */
+function restorePeople(pass: Float32Array, grey: Float32Array, people: PeopleMask): Float32Array {
+  const w = PASS_W;
+  const h = PASS_H;
+  const ids = maskForPass(people.ids, people.width, people.height);
+  const out = pass.slice();
+  const sharp = softBlur(grey, w, h, 1.5);
+
+  for (let n = 1; n <= people.actorIds.length; n++) {
+    let x0 = w, y0 = h, x1 = -1, y1 = -1, count = 0, figSum = 0;
+    for (let p = 0; p < ids.length; p++) {
+      if (ids[p] !== n) continue;
+      const x = p % w, y = (p / w) | 0;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      count++;
+      figSum += sharp[p];
+    }
+    if (count < 12) continue;
+
+    // What surrounds the figure in the finished pass: a margin around its box, minus the figure.
+    const m = Math.max(6, Math.round((y1 - y0) * 0.15));
+    let bgSum = 0, bgCount = 0;
+    for (let y = Math.max(0, y0 - m); y <= Math.min(h - 1, y1 + m); y++) {
+      for (let x = Math.max(0, x0 - m); x <= Math.min(w - 1, x1 + m); x++) {
+        const p = y * w + x;
+        if (ids[p] === 0) { bgSum += pass[p]; bgCount++; }
+      }
+    }
+    const fig = figSum / count;
+    const bg = bgCount ? bgSum / bgCount : 128;
+    const gap = fig - bg;
+    const MIN_GAP = 55;
+    // Lighter than a dark surround, darker than a light one; left alone when it already stands out.
+    const dir = gap !== 0 ? Math.sign(gap) : bg < 128 ? 1 : -1;
+    let shift = Math.abs(gap) >= MIN_GAP ? 0 : dir * (MIN_GAP - Math.abs(gap));
+    if (fig + shift > 235) shift = 235 - fig;
+    if (fig + shift < 20) shift = 20 - fig;
+
+    // A one-pixel feather so the figure is not a cut-out.
+    for (let y = Math.max(0, y0 - 1); y <= Math.min(h - 1, y1 + 1); y++) {
+      for (let x = Math.max(0, x0 - 1); x <= Math.min(w - 1, x1 + 1); x++) {
+        const p = y * w + x;
+        let inside = 0, total = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const yy = y + dy, xx = x + dx;
+            if (yy < 0 || yy >= h || xx < 0 || xx >= w) continue;
+            total++;
+            if (ids[yy * w + xx] === n) inside++;
+          }
+        }
+        if (!inside) continue;
+        const a = ids[p] === n ? 0.5 + 0.5 * (inside / total) : 0.5 * (inside / total);
+        const v = Math.max(0, Math.min(255, sharp[p] + shift));
+        out[p] = out[p] * (1 - a) + v * a;
+      }
+    }
+  }
+  return out;
+}
+
+const withPeople = (pass: Float32Array, grey: Float32Array, people?: PeopleMask | null) =>
+  people ? restorePeople(pass, grey, people) : pass;
+
+/** Size, place and how much is hidden, per actor, measured from the frame-1 masks. */
+export interface PersonPlacement {
+  actorId: string;
+  /** Box centre, 0 at the left edge and 1 at the right. */
+  centreX: number;
+  /** Whole-figure height as a share of the frame height. */
+  heightShare: number;
+  /** Share of the whole figure that the camera actually sees (the rest is behind something). */
+  visibleShare: number;
+  /** Frame edges the figure runs off. */
+  cutBy: ('left' | 'right' | 'top' | 'bottom')[];
+  /** Bottom of the figure, 0 at the bottom edge and 1 at the top. */
+  feetUp: number;
+}
+
+export function measurePeople(people: PeopleMask): PersonPlacement[] {
+  const { width: w, height: h } = people;
+  const out: PersonPlacement[] = [];
+  for (let n = 1; n <= people.actorIds.length; n++) {
+    let seen = 0, whole = 0, x0 = w, y0 = h, x1 = -1, y1 = -1;
+    for (let p = 0; p < people.ids.length; p++) {
+      if (people.ids[p] === n) seen++;
+      if (people.fullIds[p] !== n) continue;
+      whole++;
+      const x = p % w, y = (p / w) | 0;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+    if (!seen || !whole) continue;
+    const cutBy: PersonPlacement['cutBy'] = [];
+    if (x0 <= 0) cutBy.push('left');
+    if (x1 >= w - 1) cutBy.push('right');
+    if (y0 <= 0) cutBy.push('top');
+    if (y1 >= h - 1) cutBy.push('bottom');
+    out.push({
+      actorId: people.actorIds[n - 1],
+      centreX: (x0 + x1 + 1) / 2 / w,
+      heightShare: (y1 - y0 + 1) / h,
+      visibleShare: Math.min(1, seen / whole),
+      cutBy,
+      feetUp: 1 - (y1 + 1) / h,
+    });
+  }
+  return out;
+}
+
+/**
+ * One plain sentence per person for the prompt: how big they are, where across the frame, and
+ * what hides them. Words only back the picture up; image 1 carries the exact shape.
+ */
+export function placementSentence(who: string, p: PersonPlacement): string {
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  const size =
+    p.heightShare < 0.2 ? 'small and far off' : p.heightShare < 0.45 ? 'small in the frame' : p.heightShare < 0.75 ? 'mid-sized in the frame' : 'large in the frame';
+  const across =
+    p.centreX < 0.2 ? 'at the far left' : p.centreX < 0.4 ? 'left of centre' : p.centreX <= 0.6 ? 'in the centre' : p.centreX <= 0.8 ? 'right of centre' : 'at the far right';
+  const parts = [
+    `${who} is ${size}, ${across} (about ${pct(p.centreX)} from the left edge), about ${pct(Math.min(1, p.heightShare))} of the frame's height`,
+  ];
+  if (p.visibleShare < 0.85) parts.push(`partly hidden behind what stands in front of them in image 1, with only about ${pct(p.visibleShare)} of them showing`);
+  if (p.cutBy.length) parts.push(`cut off by the ${p.cutBy.join(' and ')} edge of the frame`);
+  else if (p.feetUp > 0.03) parts.push(`feet about ${pct(p.feetUp)} up from the bottom edge`);
+  return `${parts.join(', ')}. Keep them exactly there, at exactly that size, and do not move them into the open.`;
 }
 
 /**
@@ -212,7 +376,7 @@ export async function makeBlurPass(frameDataUrl: string, extra: PassDepth = { de
   const grey = greyOf(await loadImage(frameDataUrl));
   for (let p = 0; p < grey.length; p++) grey[p] = (grey[p] - 128) * 0.8 + 128;
   const depth = extra.depth ? depthForPass(extra.depth) : null;
-  return toJpeg(applyDepth(grey, depth, extra.lens, 3, 0.25));
+  return toJpeg(withPeople(applyDepth(grey, depth, extra.lens, 3, 0.25), grey, extra.people));
 }
 
 /**
@@ -250,7 +414,7 @@ export async function makeClayPass(frameDataUrl: string, extra: PassDepth = { de
   }
 
   const depth = extra.depth ? depthForPass(extra.depth) : null;
-  return toJpeg(applyDepth(flat, depth, extra.lens, 0, 0.35), 1);
+  return toJpeg(withPeople(applyDepth(flat, depth, extra.lens, 0, 0.35), grey, extra.people), 1);
 }
 
 /**
@@ -309,6 +473,8 @@ export interface RenderRequest {
   dof?: DepthOfFieldSummary | null;
   /** Characters whose sheets go along as images after the layout pass and the look. */
   cast?: CastReference[];
+  /** One sentence per person in the frame on where they are and how big, from the frame-1 masks. */
+  placements?: string[];
 }
 
 export interface RenderResult {

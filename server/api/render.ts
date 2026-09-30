@@ -273,6 +273,8 @@ export interface RenderPromptInput {
   dof?: { focusM: number; nearM: number; farM: number | null } | null;
   /** Characters whose reference sheets go along, each marked in the previs by its stand-in colour. */
   cast?: CastEntry[];
+  /** One sentence per person in the frame on where they are and how big, measured in the browser. */
+  placements?: string[];
 }
 
 export interface CastEntry {
@@ -355,6 +357,9 @@ export async function buildRenderPrompt(input: RenderPromptInput): Promise<{ pro
     `A candid film still from a feature film, shot on location, not a render. ${lines.light}`,
     lines.place,
     lines.people && `${lines.people} ${REAL_SKIN}`,
+    // Measured from the previs, not guessed by the writer: without it a small, half-hidden figure
+    // was rendered big and centred in the open street.
+    input.placements?.length ? input.placements.join(' ') : null,
     packageShortLine(input.cameraPackage, input.settings),
     dofLine(input.dof),
     grade,
@@ -384,6 +389,15 @@ async function runJob(job: RenderJob, input: RenderPromptInput & { layoutDataUrl
     // The generation was counted when the job started; a failed one hands the slot back.
     refundGeneration(job.owner).catch(() => {});
   }
+}
+
+/** Placement sentences are built by the browser from numbers; keep them plain, short and few. */
+function cleanPlacements(input: any): string[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((v: any) => String(v ?? '').replace(/[^\p{L}\p{N} .,'()%-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 400))
+    .filter(Boolean)
+    .slice(0, 8);
 }
 
 /** Only sheets stored on this server, with plain names and colour words, at most 8. */
@@ -495,6 +509,7 @@ export async function handleRenderApi(req: any, res: any): Promise<boolean> {
       note: clip(body.note, 1000),
       dof: cleanDof(body.dof),
       cast: cleanCast(body.cast),
+      placements: cleanPlacements(body.placements),
     });
 
     sendJson(res, 200, { success: true, jobId: job.id });

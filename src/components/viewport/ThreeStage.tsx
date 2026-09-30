@@ -1477,6 +1477,8 @@ export interface ActorIdMap {
   width: number;
   height: number;
   ids: Uint8Array;
+  /** The same with nothing else drawn, so each actor's whole figure: compared with `ids` it shows how much is hidden. */
+  fullIds: Uint8Array;
   actorIds: string[];
 }
 export type ActorVisibilityFn = (width: number) => ActorIdMap | null;
@@ -1539,6 +1541,7 @@ const ActorVisibilityCapturer: React.FC<{ captureRef: React.MutableRefObject<Act
       const previousToneMapping = gl.toneMapping;
       const previousColorSpace = gl.outputColorSpace;
       const pixels = new Uint8Array(w * h * 4);
+      const fullPixels = new Uint8Array(w * h * 4);
       try {
         paint(scene, 0);
         scene.background = null;
@@ -1549,6 +1552,17 @@ const ActorVisibilityCapturer: React.FC<{ captureRef: React.MutableRefObject<Act
         gl.clear();
         gl.render(scene, camera);
         gl.readRenderTargetPixels(target, 0, 0, w, h, pixels);
+
+        // Again with only the actors, for their whole figures.
+        for (const { obj } of swapped) {
+          if (obj.material === black && obj.visible) {
+            obj.visible = false;
+            hidden.push(obj);
+          }
+        }
+        gl.clear();
+        gl.render(scene, camera);
+        gl.readRenderTargetPixels(target, 0, 0, w, h, fullPixels);
       } catch {
         return null;
       } finally {
@@ -1565,12 +1579,16 @@ const ActorVisibilityCapturer: React.FC<{ captureRef: React.MutableRefObject<Act
       }
 
       const ids = new Uint8Array(w * h);
+      const fullIds = new Uint8Array(w * h);
       for (let y = 0; y < h; y++) {
         // WebGL reads bottom-up; flip so row 0 is the top of the frame like every image.
         const srcRow = (h - 1 - y) * w;
-        for (let x = 0; x < w; x++) ids[y * w + x] = pixels[(srcRow + x) * 4];
+        for (let x = 0; x < w; x++) {
+          ids[y * w + x] = pixels[(srcRow + x) * 4];
+          fullIds[y * w + x] = fullPixels[(srcRow + x) * 4];
+        }
       }
-      return { width: w, height: h, ids, actorIds };
+      return { width: w, height: h, ids, fullIds, actorIds };
     };
     return () => {
       captureRef.current = null;

@@ -7,10 +7,13 @@ import {
   depthOfField,
   makeBlurPass,
   makeClayPass,
+  measurePeople,
+  placementSentence,
   renderFrame,
   standInColourName,
   type DepthInfo,
   type LensAtFrame,
+  type PeopleMask,
   type RenderPass,
   type RenderStage,
 } from '../../services/renderService';
@@ -25,6 +28,8 @@ export interface FirstFrameCapture {
    * could not be worked out. Someone who only walks in later gets no sheet, or the render adds them.
    */
   inFrame: string[] | null;
+  /** Which actor covers each pixel of the frame, to keep them readable in the layout pass. */
+  people: PeopleMask | null;
 }
 import { CameraPackagePicker } from './CameraPackagePicker';
 
@@ -79,6 +84,17 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   const sheetTargetRef = useRef<string | null>(null);
   const cast = characters.filter((c) => c.visible !== false);
   const castSent = cast.filter((c) => c.referenceSheetUrl && !skipped.has(c.id)).slice(0, 8);
+  /** Where each person in the frame is and how big, named the way the prompt names them. */
+  const placementsFor = (people: PeopleMask | null): string[] =>
+    people
+      ? measurePeople(people).flatMap((p) => {
+          const c = characters.find((x) => x.id === p.actorId);
+          if (!c || (capture?.inFrame && !capture.inFrame.includes(c.id))) return [];
+          const colour = standInColourName(c.color);
+          const sent = castSent.some((x) => x.id === c.id);
+          return [placementSentence(sent ? `${c.name} (the ${colour} figure)` : `The ${colour} figure`, p)];
+        })
+      : [];
   const [pass, setPass] = useState<RenderPass>(defaultPassFor(sceneHeading));
   const [layouts, setLayouts] = useState<{ blur?: string; clay?: string }>({});
   const [layoutError, setLayoutError] = useState<string | null>(null);
@@ -115,7 +131,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
     if (!capture || pass === 'full' || layouts[pass]) return;
     let alive = true;
     setLayoutError(null);
-    const extra = { depth: capture.depth, lens: capture.lens };
+    const extra = { depth: capture.depth, lens: capture.lens, people: capture.people };
     const make = pass === 'blur' ? makeBlurPass(capture.frame, extra) : makeClayPass(capture.frame, extra);
     make
       .then((url) => {
@@ -156,6 +172,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
           layout: pass === 'full' ? undefined : layout,
           dof,
           cast: castSent.map((c) => ({ name: c.name, colorName: standInColourName(c.color), sheetUrl: c.referenceSheetUrl! })),
+          placements: placementsFor(capture?.people ?? null),
         },
         setStage
       );
