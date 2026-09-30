@@ -60,21 +60,21 @@ export interface CameraPackage {
 export const CAMERA_BODIES: CameraBody[] = [
   {
     id: 'alexa35',
-    short: 'gentle highlight roll-off, soft natural skin',
+    short: 'gentle highlight roll-off, natural skin detail',
     name: 'ARRI Alexa 35',
     kind: 'digital',
     format: 'Super 35 digital',
     prompt:
-      'ARRI Alexa 35, Super 35 digital sensor. Very gentle highlight roll-off: bright lamps and windows fade smoothly into white with no hard clipped edge. Natural, slightly warm, film-like colour with soft, creamy skin that keeps its colour in strong light. A fine organic texture in the shadows rather than electronic noise.',
+      'ARRI Alexa 35, Super 35 digital sensor. Very gentle highlight roll-off: bright lamps and windows fade smoothly into white with no hard clipped edge. Natural, slightly warm, film-like colour with natural skin that keeps its colour and texture in strong light. A fine organic texture in the shadows rather than electronic noise.',
   },
   {
     id: 'alexaminilf',
-    short: 'gentle highlight roll-off, soft skin, shallow large-format focus',
+    short: 'gentle highlight roll-off, natural skin detail, shallow large-format focus',
     name: 'ARRI Alexa Mini LF',
     kind: 'digital',
     format: 'Large format digital',
     prompt:
-      'ARRI Alexa Mini LF, large-format digital sensor. The ARRI look on a bigger sensor: gentle highlight roll-off, natural warm colour and soft, creamy skin, with a shallower, smoother depth of field and a wider, more immersive view for the same lens.',
+      'ARRI Alexa Mini LF, large-format digital sensor. The ARRI look on a bigger sensor: gentle highlight roll-off, natural warm colour and natural skin, with a shallower, smoother depth of field and a wider, more immersive view for the same lens.',
   },
   {
     id: 'vraptor',
@@ -92,7 +92,7 @@ export const CAMERA_BODIES: CameraBody[] = [
     kind: 'digital',
     format: 'Full frame digital',
     prompt:
-      'Sony Venice 2, full-frame digital sensor. Clean, neutral, accurate colour with no colour cast, a little cooler and more literal than ARRI. Smooth skin and smooth gradients, very low noise, and exceptional shadow detail: dark areas keep visible texture and colour instead of going black.',
+      'Sony Venice 2, full-frame digital sensor. Clean, neutral, accurate colour with no colour cast, a little cooler and more literal than ARRI. Smooth gradients, very low noise, and exceptional shadow detail: dark areas keep visible texture and colour instead of going black.',
   },
   {
     id: 'dxl2',
@@ -270,7 +270,7 @@ export const FILM_BACKS: FilmBack[] = [
     name: 'Fujifilm Eterna 250D',
     kind: 'film',
     prompt:
-      'Fujifilm Eterna 250D film. Low-contrast, muted, pastel colour with slightly green-leaning shadows and soft magenta-leaning skin; fine grain; gentle, flat highlight roll-off.',
+      'Fujifilm Eterna 250D film. Low-contrast, muted, pastel colour with slightly green-leaning shadows and magenta-leaning skin tones; fine grain; gentle, flat highlight roll-off.',
   },
   {
     id: 'doublex',

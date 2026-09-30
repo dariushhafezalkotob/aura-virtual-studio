@@ -196,6 +196,9 @@ async function lookParts(projectId: string, lookId: string): Promise<{ grade: st
 
 const NEUTRAL_GRADE = 'Grade: natural, muted film colour; rich blacks that are not crushed; natural skin.';
 const MONO_GRADE = 'Grade: black and white only, every object a shade of grey; rich blacks, bright glowing highlights.';
+// Seedream 5 Pro smooths skin into plastic unless it is asked for flaws (tested 2026-09-30:
+// with this line pores and lines came back; without it the face was waxy). Only when there are people.
+const REAL_SKIN = 'Real, unretouched skin: visible pores, fine lines, faint redness and uneven tone; no smoothing, no beauty filter, no airbrushing, no waxy sheen.';
 const CLEAN = 'One clean photograph filling the frame, no text, no borders, no watermark.';
 const LOOK_IMAGE_LINE = 'Image 2 is the look: match its light, darkness, colour grade, haze and grain, but take none of its content or layout.';
 const IMAGE_ROLE: Record<Exclude<RenderPass, 'full'>, string> = {
@@ -351,7 +354,7 @@ export async function buildRenderPrompt(input: RenderPromptInput): Promise<{ pro
     ].filter(Boolean).join(' '),
     `A candid film still from a feature film, shot on location, not a render. ${lines.light}`,
     lines.place,
-    lines.people,
+    lines.people && `${lines.people} ${REAL_SKIN}`,
     packageShortLine(input.cameraPackage, input.settings),
     dofLine(input.dof),
     grade,
