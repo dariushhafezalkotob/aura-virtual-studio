@@ -33,8 +33,6 @@ export interface SampledCamera {
 /** Reused across frames: this runs inside useFrame and must not allocate. */
 const _p0 = new THREE.Vector3();
 const _p1 = new THREE.Vector3();
-const _pPrev = new THREE.Vector3();
-const _pNext = new THREE.Vector3();
 const _m0 = new THREE.Vector3();
 const _m1 = new THREE.Vector3();
 const _tmp = new THREE.Vector3();
@@ -259,6 +257,160 @@ function lerpChannel(a: number | undefined, b: number | undefined, t: number): n
   return a + (b - a) * t;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Smoothness through keys
+// ---------------------------------------------------------------------------------------------
+//
+// Every channel's speed AT a key is worked out from its neighbours and the TIME between them, then
+// each segment is a cubic that leaves and arrives at those speeds. Done in seconds rather than per
+// segment, a key between a short stretch and a long one no longer makes the speed jump (measured
+// before: 2.0 m/s in, 0.67 m/s out across a smooth key with keys 1 s then 3 s apart).
+//
+// The timing curve multiplies in on top: at a key, real speed = channel speed x the handle's slope,
+// so a 'smooth' key (equal slopes) is smooth in metres, degrees and millimetres, not just on the graph.
+
+const _q2 = new THREE.Quaternion();
+const _q3 = new THREE.Quaternion();
+const _qa = new THREE.Quaternion();
+const _qb = new THREE.Quaternion();
+const _qc = new THREE.Quaternion();
+const _qd = new THREE.Quaternion();
+const _qe = new THREE.Quaternion();
+const _w0 = new THREE.Vector3();
+const _w1 = new THREE.Vector3();
+const _wa = new THREE.Vector3();
+const _wb = new THREE.Vector3();
+
+function keyQuat(target: THREE.Quaternion, k: CameraKeyframe): THREE.Quaternion {
+  return target.set(k.quaternion[0], k.quaternion[1], k.quaternion[2], k.quaternion[3]);
+}
+
+/** Rotation vector (axis x angle, radians) of a unit quaternion, taking the short way round. */
+function quatLog(out: THREE.Vector3, q: THREE.Quaternion): THREE.Vector3 {
+  const sign = q.w < 0 ? -1 : 1;
+  const x = q.x * sign, y = q.y * sign, z = q.z * sign, w = q.w * sign;
+  const sinHalf = Math.sqrt(x * x + y * y + z * z);
+  if (sinHalf < 1e-9) return out.set(0, 0, 0);
+  const angle = 2 * Math.atan2(sinHalf, w);
+  return out.set(x, y, z).multiplyScalar(angle / sinHalf);
+}
+
+function quatExp(out: THREE.Quaternion, v: THREE.Vector3): THREE.Quaternion {
+  const angle = v.length();
+  if (angle < 1e-9) return out.set(0, 0, 0, 1);
+  const s = Math.sin(angle / 2) / angle;
+  return out.set(v.x * s, v.y * s, v.z * s, Math.cos(angle / 2));
+}
+
+/** Body-frame rotation from key a to key b, per second. */
+function segmentSpin(out: THREE.Vector3, ka: CameraKeyframe, kb: CameraKeyframe): THREE.Vector3 {
+  keyQuat(_qa, ka).invert().multiply(keyQuat(_qb, kb));
+  return quatLog(out, _qa).multiplyScalar(1 / Math.max(1e-6, kb.time - ka.time));
+}
+
+/**
+ * Turning rate at key i (radians per second, in the camera's own frame): the time-weighted blend
+ * of the stretch before and the stretch after, as a non-uniform Catmull-Rom does for position.
+ * The rotation from key i to either neighbour has the same axis in both cameras' frames, which is
+ * why the two can be averaged as they are.
+ */
+function keySpin(out: THREE.Vector3, keys: CameraKeyframe[], i: number): THREE.Vector3 {
+  const last = keys.length - 1;
+  if (last < 1) return out.set(0, 0, 0);
+  // Ends match the path's default: half the speed of their one stretch.
+  if (i === 0) return segmentSpin(out, keys[0], keys[1]).multiplyScalar(0.5);
+  if (i === last) return segmentSpin(out, keys[last - 1], keys[last]).multiplyScalar(0.5);
+  const dtIn = keys[i].time - keys[i - 1].time;
+  const dtOut = keys[i + 1].time - keys[i].time;
+  segmentSpin(_wa, keys[i - 1], keys[i]).multiplyScalar(dtIn);
+  segmentSpin(_wb, keys[i], keys[i + 1]).multiplyScalar(dtOut);
+  return out.copy(_wa).add(_wb).multiplyScalar(1 / Math.max(1e-6, dtIn + dtOut));
+}
+
+/**
+ * Orientation along segment i0 -> i0+1 at eased progress u: a cubic bezier on the sphere
+ * (de Casteljau with slerps) whose inner controls are set by each key's turning rate, so the
+ * camera turns through a key instead of snapping to a new direction there.
+ */
+function rotationAt(out: THREE.Quaternion, keys: CameraKeyframe[], i0: number, u: number) {
+  const k0 = keys[i0];
+  const k1 = keys[i0 + 1];
+  const dt = Math.max(1e-6, k1.time - k0.time);
+  keySpin(_w0, keys, i0).multiplyScalar(dt / 3);
+  keySpin(_w1, keys, i0 + 1).multiplyScalar(-dt / 3);
+  keyQuat(_q0, k0);
+  keyQuat(_q1, k1);
+  if (_q0.dot(_q1) < 0) _q1.set(-_q1.x, -_q1.y, -_q1.z, -_q1.w);
+  _q2.copy(_q0).multiply(quatExp(_qe, _w0));
+  _q3.copy(_q1).multiply(quatExp(_qe, _w1));
+  _qa.copy(_q0).slerp(_q2, u);
+  _qb.copy(_q2).slerp(_q3, u);
+  _qc.copy(_q3).slerp(_q1, u);
+  _qd.copy(_qa).slerp(_qb, u);
+  _qa.copy(_qb).slerp(_qc, u);
+  out.copy(_qd).slerp(_qa, u);
+}
+
+/** Path velocity at key i in world units per second, from its neighbours and the time between them. */
+function keyVelocity(out: THREE.Vector3, keys: CameraKeyframe[], i: number, tension: number): THREE.Vector3 {
+  const last = keys.length - 1;
+  if (i === 0 || i === last) {
+    // An end has one neighbour: tension x that stretch's average speed (as before).
+    const a = i === 0 ? keys[0] : keys[last - 1];
+    const b = i === 0 ? keys[1] : keys[last];
+    keyPosition(out, b).sub(keyPosition(_tmp, a));
+    return out.multiplyScalar(tension / Math.max(1e-6, b.time - a.time));
+  }
+  keyPosition(out, keys[i + 1]).sub(keyPosition(_tmp, keys[i - 1]));
+  return out.multiplyScalar((2 * tension) / Math.max(1e-6, keys[i + 1].time - keys[i - 1].time));
+}
+
+type ScalarChannel = 'fov' | 'roll' | 'focusDistance' | 'aperture';
+
+/** A channel's value at key i, treating focus/iris 0 as "this key does not set it". */
+function channelValue(k: CameraKeyframe, ch: ScalarChannel): number | undefined {
+  const v = k[ch];
+  if (v === undefined) return undefined;
+  if ((ch === 'focusDistance' || ch === 'aperture') && v <= 0) return undefined;
+  return v;
+}
+
+/**
+ * Rate of change of a channel at key i, per second: the non-uniform Catmull-Rom slope, flattened
+ * at a turning point and capped (Fritsch-Carlson) so a lens or focus pull never swings past the
+ * value it is heading for.
+ */
+function channelSlope(keys: CameraKeyframe[], i: number, ch: ScalarChannel): number {
+  const v = channelValue(keys[i], ch);
+  if (v === undefined) return 0;
+  const prev = i > 0 ? channelValue(keys[i - 1], ch) : undefined;
+  const next = i < keys.length - 1 ? channelValue(keys[i + 1], ch) : undefined;
+  const dIn = prev === undefined ? undefined : (v - prev) / Math.max(1e-6, keys[i].time - keys[i - 1].time);
+  const dOut = next === undefined ? undefined : (next - v) / Math.max(1e-6, keys[i + 1].time - keys[i].time);
+  if (dIn === undefined && dOut === undefined) return 0;
+  if (dIn === undefined) return dOut!;
+  if (dOut === undefined) return dIn;
+  if (dIn * dOut <= 0) return 0;
+  const m = (next! - prev!) / Math.max(1e-6, keys[i + 1].time - keys[i - 1].time);
+  const cap = 3 * Math.min(Math.abs(dIn), Math.abs(dOut));
+  return Math.sign(m) * Math.min(Math.abs(m), cap);
+}
+
+function channelAt(keys: CameraKeyframe[], i0: number, u: number, ch: ScalarChannel): number | null {
+  const k0 = keys[i0];
+  const k1 = keys[i0 + 1];
+  const a = k0[ch];
+  const b = k1[ch];
+  // A key that does not set the channel keeps the old behaviour: hold whichever side has it.
+  if (channelValue(k0, ch) === undefined || channelValue(k1, ch) === undefined) return lerpChannel(a, b, u);
+  const dt = k1.time - k0.time;
+  const m0 = channelSlope(keys, i0, ch) * dt;
+  const m1 = channelSlope(keys, i0 + 1, ch) * dt;
+  const u2 = u * u;
+  const u3 = u2 * u;
+  return (2 * u3 - 3 * u2 + 1) * a! + (u3 - 2 * u2 + u) * m0 + (-2 * u3 + 3 * u2) * b! + (u3 - u2) * m1;
+}
+
 /**
  * Where the camera is at `time` on a hand-keyed take.
  *
@@ -304,34 +456,25 @@ export function sampleCameraTake(
     // Straight line, which is a legitimate choice and worth not paying for a spline.
     out.position.copy(_p0).lerp(_p1, t);
   } else {
-    // Catmull-Rom tangents from the neighbouring keys, so the path flows through this key rather
-    // than cornering at it. The ends have no neighbour, so they borrow the segment itself.
-    if (k0.tangentOut) {
-      _m0.set(k0.tangentOut[0], k0.tangentOut[1], k0.tangentOut[2]);
-    } else {
-      keyPosition(_pPrev, keys[Math.max(0, i0 - 1)]);
-      _m0.copy(_p1).sub(_pPrev).multiplyScalar(tension);
-    }
-
-    if (k1.tangentIn) {
-      _m1.set(k1.tangentIn[0], k1.tangentIn[1], k1.tangentIn[2]);
-    } else {
-      keyPosition(_pNext, keys[Math.min(last, i1 + 1)]);
-      _m1.copy(_pNext).sub(_p0).multiplyScalar(tension);
-    }
+    // Tangents from each key's velocity in metres per second, scaled to this segment's length in
+    // time, so the speed carries through a key however unevenly the keys are spaced. With evenly
+    // spaced keys this is exactly the uniform Catmull-Rom it replaces. Tangents the user dragged
+    // in the viewport are used as they are.
+    if (k0.tangentOut) _m0.set(k0.tangentOut[0], k0.tangentOut[1], k0.tangentOut[2]);
+    else keyVelocity(_m0, keys, i0, tension).multiplyScalar(span);
+    if (k1.tangentIn) _m1.set(k1.tangentIn[0], k1.tangentIn[1], k1.tangentIn[2]);
+    else keyVelocity(_m1, keys, i1, tension).multiplyScalar(span);
 
     hermite(_tmp, _p0, _p1, _m0, _m1, t);
     out.position.copy(_tmp);
   }
 
-  _q0.set(k0.quaternion[0], k0.quaternion[1], k0.quaternion[2], k0.quaternion[3]);
-  _q1.set(k1.quaternion[0], k1.quaternion[1], k1.quaternion[2], k1.quaternion[3]);
-  out.quaternion.copy(_q0).slerp(_q1, t);
+  rotationAt(out.quaternion, keys, i0, t);
 
-  out.fov = lerpChannel(k0.fov, k1.fov, t);
-  out.roll = lerpChannel(k0.roll, k1.roll, t);
-  out.focusDistance = lerpChannel(k0.focusDistance, k1.focusDistance, t);
-  out.aperture = lerpChannel(k0.aperture, k1.aperture, t);
+  out.fov = channelAt(keys, i0, t, 'fov');
+  out.roll = channelAt(keys, i0, t, 'roll');
+  out.focusDistance = channelAt(keys, i0, t, 'focusDistance');
+  out.aperture = channelAt(keys, i0, t, 'aperture');
 
   return out;
 }
