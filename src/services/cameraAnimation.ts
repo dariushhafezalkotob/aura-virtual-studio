@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CameraEase, CameraKeyframe, CameraTake } from '../types';
+import { CameraEase, CameraKeyframe, CameraKeyHandle, CameraTake } from '../types';
 
 /**
  * Playing back a hand-keyed camera move.
@@ -94,6 +94,105 @@ export function applyEase(alpha: number, ease: CameraEase | undefined, handles?:
     default:
       return a;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Per-key timing handles
+// ---------------------------------------------------------------------------------------------
+//
+// The graph editor plots progress through the move against time, with every key at its own time
+// fraction of the move, so a constant pace is a straight diagonal. In one segment's local 0..1
+// box the average pace is therefore a slope of 1 for EVERY segment, which is what lets a handle be
+// stored on its key alone (slope relative to that pace, influence as a fraction of the segment)
+// and still mean the same thing whichever neighbour it reaches toward.
+//
+// Segment i -> i+1 is the cubic bezier (0,0), P1, P2, (1,1) with
+//   P1 = (out.influence, out.influence * out.slope)          from key i's handleOut
+//   P2 = (1 - in.influence, 1 - in.influence * in.slope)     from key i+1's handleIn
+
+export const LINEAR_HANDLE: CameraKeyHandle = { slope: 1, influence: 1 / 3 };
+export const EASY_EASE_HANDLE: CameraKeyHandle = { slope: 0, influence: 1 / 3 };
+
+const MIN_INFLUENCE = 0.02;
+export const MAX_HANDLE_SLOPE = 12;
+
+/** Scratch for the segment being sampled: the playback path runs every frame and must not allocate. */
+const _seg = { outSlope: 1, outInfluence: 1 / 3, inSlope: 1, inInfluence: 1 / 3 };
+
+/**
+ * The handles an older take's segment ease amounts to. Linear, ease-in and ease-out are exact
+ * cubics; the old two-piece ease-in-out is not a single cubic, so it becomes the nearest one.
+ */
+function legacySegmentInto(target: typeof _seg, k0: CameraKeyframe) {
+  const set = (oS: number, oI: number, iS: number, iI: number) => {
+    target.outSlope = oS; target.outInfluence = oI; target.inSlope = iS; target.inInfluence = iI;
+  };
+  switch (k0.ease) {
+    case 'ease-in': return set(0, 1 / 3, 2, 1 / 3);
+    case 'ease-out': return set(2, 1 / 3, 0, 1 / 3);
+    case 'ease-in-out': return set(0, 0.5, 0, 0.5);
+    case 'bezier': {
+      const h = k0.easeHandles || [0.42, 0, 0.58, 1];
+      const oI = Math.max(MIN_INFLUENCE, h[0]);
+      const iI = Math.max(MIN_INFLUENCE, 1 - h[2]);
+      return set(h[1] / oI, oI, (1 - h[3]) / iI, iI);
+    }
+    default: return set(1, 1 / 3, 1, 1 / 3);
+  }
+}
+
+/** True once either key of a segment carries per-key handles; older segments keep their own ease. */
+function usesKeyHandles(k0: CameraKeyframe, k1: CameraKeyframe): boolean {
+  return !!(k0.handleOut || k1.handleIn);
+}
+
+/**
+ * Eased progress (0 at k0, 1 at k1; past either end when a handle overshoots) through the
+ * segment k0 -> k1 at linear time fraction `alpha`. Playback and the graph editor both call
+ * this, so the curve on screen is exactly the move the camera makes.
+ */
+export function segmentProgress(k0: CameraKeyframe, k1: CameraKeyframe, alpha: number): number {
+  if (k0.ease === 'hold') return 0;
+  if (!usesKeyHandles(k0, k1)) return applyEase(alpha, k0.ease, k0.easeHandles);
+  // A key without its own handle on this side falls back to what the old segment ease meant.
+  legacySegmentInto(_seg, k0);
+  const out = k0.handleOut;
+  const into = k1.handleIn;
+  const oI = Math.max(MIN_INFLUENCE, Math.min(1, out ? out.influence : _seg.outInfluence));
+  const oS = out ? out.slope : _seg.outSlope;
+  const iI = Math.max(MIN_INFLUENCE, Math.min(1, into ? into.influence : _seg.inInfluence));
+  const iS = into ? into.slope : _seg.inSlope;
+  return cubicBezierEase(alpha, oI, oI * oS, 1 - iI, 1 - iI * iS);
+}
+
+/** The handles key `index` effectively has right now, whether stored on it or implied by an older ease. */
+export function effectiveKeyHandles(keys: CameraKeyframe[], index: number): { handleIn: CameraKeyHandle; handleOut: CameraKeyHandle } {
+  const k = keys[index];
+  const scratch = { ..._seg };
+  let handleIn = k.handleIn;
+  if (!handleIn) {
+    if (index > 0) { legacySegmentInto(scratch, keys[index - 1]); handleIn = { slope: scratch.inSlope, influence: scratch.inInfluence }; }
+    else handleIn = { ...LINEAR_HANDLE };
+  }
+  let handleOut = k.handleOut;
+  if (!handleOut) {
+    legacySegmentInto(scratch, k);
+    handleOut = { slope: scratch.outSlope, influence: scratch.outInfluence };
+  }
+  return { handleIn, handleOut };
+}
+
+/**
+ * Converts a take to per-key handles without changing how it plays (bar the old ease-in-out,
+ * which becomes its nearest cubic). Done once, on the first handle edit, so the curve does not
+ * jump the moment the user grabs it. 'hold' survives; the old segment handles are dropped.
+ */
+export function withKeyHandles(keys: CameraKeyframe[]): CameraKeyframe[] {
+  if (keys.every((k) => k.handleIn && k.handleOut)) return keys;
+  return keys.map((k, i) => {
+    const { handleIn, handleOut } = effectiveKeyHandles(keys, i);
+    return { ...k, handleIn, handleOut, handleMode: k.handleMode, ease: k.ease === 'hold' ? 'hold' : undefined, easeHandles: undefined };
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -194,7 +293,7 @@ export function sampleCameraTake(
 
   const span = k1.time - k0.time;
   const linear = span > 1e-6 ? (time - k0.time) / span : 0;
-  const t = applyEase(linear, k0.ease, k0.easeHandles);
+  const t = segmentProgress(k0, k1, linear);
 
   keyPosition(_p0, k0);
   keyPosition(_p1, k1);

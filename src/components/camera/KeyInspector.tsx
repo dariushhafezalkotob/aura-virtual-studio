@@ -1,5 +1,6 @@
 import React from 'react';
-import { CameraEase, CameraKeyframe, CameraTake } from '../../types';
+import { CameraKeyframe, CameraKeyHandle, CameraTake } from '../../types';
+import { EASY_EASE_HANDLE, LINEAR_HANDLE, effectiveKeyHandles } from '../../services/cameraAnimation';
 
 /**
  * The selected key's values, as a panel of its own in the corner of the screen.
@@ -24,16 +25,43 @@ interface KeyInspectorProps {
   lenses: { label: string; fov: number }[];
 }
 
-const EASE_PRESETS: { value: CameraEase; label: string; hint: string }[] = [
-  { value: 'linear', label: 'Linear', hint: 'Constant speed the whole way' },
-  { value: 'ease-in', label: 'Ease In', hint: 'Starts slow, arrives at speed' },
-  { value: 'ease-out', label: 'Ease Out', hint: 'Leaves at speed, arrives slow' },
-  { value: 'ease-in-out', label: 'Smooth', hint: 'Eases out of the start and into the end' },
-  { value: 'bezier', label: 'Custom', hint: 'Drag the handles on the curve to shape the timing' },
-  { value: 'hold', label: 'Hold', hint: 'Waits here, then cuts to the next key' },
+/**
+ * Easing presets for THIS key only, as in After Effects' keyframe assistant: each one sets the
+ * key's own in and/or out handle and never touches a neighbour. Fine shaping is done by dragging
+ * the handles on the graph.
+ */
+type KeyPreset = 'linear' | 'easy' | 'in' | 'out' | 'hold';
+
+const KEY_PRESETS: { value: KeyPreset; label: string; hint: string }[] = [
+  { value: 'linear', label: 'Linear', hint: 'Passes through this key at a constant pace' },
+  { value: 'easy', label: 'Easy Ease', hint: 'Eases into and out of this key, coming gently to a stop here' },
+  { value: 'in', label: 'Ease In', hint: 'Arrives at this key slowly; leaving is unchanged' },
+  { value: 'out', label: 'Ease Out', hint: 'Leaves this key slowly; arriving is unchanged' },
+  { value: 'hold', label: 'Hold', hint: 'Waits at this key, then cuts to the next' },
 ];
 
-export const DEFAULT_HANDLES: [number, number, number, number] = [0.42, 0, 0.58, 1];
+const near = (a: number, b: number) => Math.abs(a - b) < 0.02;
+
+function presetChange(preset: KeyPreset, handleIn: CameraKeyHandle, handleOut: CameraKeyHandle): Partial<CameraKeyframe> {
+  switch (preset) {
+    case 'linear': return { handleIn: { ...LINEAR_HANDLE }, handleOut: { ...LINEAR_HANDLE }, handleMode: 'smooth', ease: undefined };
+    case 'easy': return { handleIn: { ...EASY_EASE_HANDLE }, handleOut: { ...EASY_EASE_HANDLE }, handleMode: 'smooth', ease: undefined };
+    case 'in': return { handleIn: { ...EASY_EASE_HANDLE }, handleOut, handleMode: near(handleOut.slope, 0) ? 'smooth' : 'broken', ease: undefined };
+    case 'out': return { handleIn, handleOut: { ...EASY_EASE_HANDLE }, handleMode: near(handleIn.slope, 0) ? 'smooth' : 'broken', ease: undefined };
+    case 'hold': return { handleIn, handleOut, ease: 'hold' };
+  }
+}
+
+function activePreset(key: CameraKeyframe, handleIn: CameraKeyHandle, handleOut: CameraKeyHandle): KeyPreset | null {
+  if (key.ease === 'hold') return 'hold';
+  const inEased = near(handleIn.slope, 0);
+  const outEased = near(handleOut.slope, 0);
+  if (inEased && outEased) return 'easy';
+  if (near(handleIn.slope, 1) && near(handleOut.slope, 1)) return 'linear';
+  if (inEased) return 'in';
+  if (outEased) return 'out';
+  return null;
+}
 
 /** One compact labelled number, so five channels fit in a small panel. */
 const NumberField: React.FC<{
@@ -81,7 +109,9 @@ export const KeyInspector: React.FC<KeyInspectorProps> = ({
   onTensionChange,
   lenses,
 }) => {
-  const ease = selectedKey?.ease || 'linear';
+  const keyHandles = selectedKey && keyIndex >= 0 ? effectiveKeyHandles(take.keyframes, keyIndex) : null;
+  const currentPreset = selectedKey && keyHandles ? activePreset(selectedKey, keyHandles.handleIn, keyHandles.handleOut) : null;
+  const handleMode = selectedKey?.handleMode || 'smooth';
   const keyLens =
     selectedKey?.fov !== undefined && lenses.length > 0
       ? lenses.reduce((best, l) => (Math.abs(l.fov - selectedKey.fov!) < Math.abs(best.fov - selectedKey.fov!) ? l : best))
@@ -177,18 +207,13 @@ export const KeyInspector: React.FC<KeyInspectorProps> = ({
               onChange={(v) => onChangeKey(selectedKey.time, { aperture: v })} />
 
             <div className="grid grid-cols-3 gap-1 pt-0.5">
-              {EASE_PRESETS.map((p) => (
+              {KEY_PRESETS.map((p) => (
                 <button
                   key={p.value}
-                  onClick={() =>
-                    onChangeKey(selectedKey.time, {
-                      ease: p.value,
-                      easeHandles: p.value === 'bezier' ? (selectedKey.easeHandles || DEFAULT_HANDLES) : undefined,
-                    })
-                  }
+                  onClick={() => keyHandles && onChangeKey(selectedKey.time, presetChange(p.value, keyHandles.handleIn, keyHandles.handleOut))}
                   title={p.hint}
                   className={`px-1 py-0.5 rounded text-[9px] font-label-caps tracking-wide border transition-colors cursor-pointer truncate ${
-                    ease === p.value
+                    currentPreset === p.value
                       ? 'bg-primary/20 border-primary text-primary'
                       : 'bg-transparent border-outline-variant/40 text-on-surface-variant hover:text-on-surface'
                   }`}
@@ -196,6 +221,20 @@ export const KeyInspector: React.FC<KeyInspectorProps> = ({
                   {p.label}
                 </button>
               ))}
+              {/* In After Effects terms: continuous vs broken handles. */}
+              <button
+                onClick={() => keyHandles && onChangeKey(selectedKey.time, handleMode === 'smooth'
+                  ? { handleMode: 'broken', handleIn: keyHandles.handleIn, handleOut: keyHandles.handleOut }
+                  // Re-joining lines the incoming handle up with the outgoing one.
+                  : { handleMode: 'smooth', handleIn: { ...keyHandles.handleIn, slope: keyHandles.handleOut.slope }, handleOut: keyHandles.handleOut })}
+                title={handleMode === 'smooth'
+                  ? 'Handles move together, so the speed has no corner here. Click to break them (or Alt-drag a handle).'
+                  : 'Handles move on their own. Click to join them again.'}
+                className="px-1 py-0.5 rounded text-[9px] font-label-caps tracking-wide border transition-colors cursor-pointer truncate bg-transparent border-outline-variant/40 text-on-surface-variant hover:text-on-surface flex items-center justify-center gap-0.5"
+              >
+                <span className="material-symbols-outlined text-[11px]">{handleMode === 'smooth' ? 'link' : 'link_off'}</span>
+                {handleMode === 'smooth' ? 'Smooth' : 'Broken'}
+              </button>
             </div>
           </>
         )}

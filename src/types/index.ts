@@ -13,6 +13,14 @@ export type AssetCategory = 'environment' | 'prop';
  */
 export type CameraEase = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'hold' | 'bezier';
 
+/** One side of a key's timing handle. */
+export interface CameraKeyHandle {
+  /** Speed at the key relative to the move's average pace: 1 = average, 0 = eases to a stop, < 0 swings back. */
+  slope: number;
+  /** How far the handle reaches toward the neighbouring key, as a fraction of the time between them (0..1). */
+  influence: number;
+}
+
 export interface CameraKeyframe {
   time: number; // in seconds relative to timeline start
   position: [number, number, number];
@@ -29,13 +37,26 @@ export interface CameraKeyframe {
   /** f-number. Lower is shallower, so this opens and closes the depth of field over time. */
   aperture?: number;
 
-  /** Timing out of this key and into the next. Defaults to 'linear'. */
+  /**
+   * Timing out of this key and into the next. Defaults to 'linear'. Once a take uses per-key
+   * handles (`handleIn`/`handleOut`) only 'hold' still matters here: the move waits at this key.
+   */
   ease?: CameraEase;
   /**
    * Timing handles when `ease` is 'bezier', as [outX, outY, inX, inY] in 0..1 - the same shape a
    * graph editor draws. outX/outY leave this key; inX/inY arrive at the next one.
    */
   easeHandles?: [number, number, number, number];
+
+  /**
+   * Per-key timing handles, the way After Effects draws them: this key owns how the move arrives
+   * (`handleIn`) and how it leaves (`handleOut`), so shaping the curve at one key never means
+   * touching its neighbours. Absent on older takes, which keep playing from `ease`/`easeHandles`.
+   */
+  handleIn?: CameraKeyHandle;
+  handleOut?: CameraKeyHandle;
+  /** 'smooth' (default) keeps in and out on one line, so the speed has no corner here; 'broken' frees them. */
+  handleMode?: 'smooth' | 'broken';
 
   /**
    * Path shape at this key, in world units. Set by dragging the handles on the path in the

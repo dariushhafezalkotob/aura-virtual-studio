@@ -14,7 +14,7 @@ import { ThreeStage, type ActorVisibilityFn, type DepthCaptureFn, type DepthMap 
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
 import { CameraRemoteSocket, LinkStats } from '../../services/cameraRemoteService';
 import { stabilizeKeyframes } from '../../services/cameraStabilizer';
-import { DEFAULT_TENSION, insertKeyframe } from '../../services/cameraAnimation';
+import { DEFAULT_TENSION, insertKeyframe, withKeyHandles, EASY_EASE_HANDLE } from '../../services/cameraAnimation';
 import { KeyframeTimeline } from '../camera/KeyframeTimeline';
 import { KeyInspector } from '../camera/KeyInspector';
 import { CameraPackagePicker } from '../camera/CameraPackagePicker';
@@ -436,6 +436,17 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         // Keep whatever shaping the old key at this time had.
         ease: existing?.ease ?? 'ease-in-out',
         easeHandles: existing?.easeHandles,
+        // A take already on per-key handles gives a new key its own, easing to a stop like the
+        // old default; otherwise the segments around it would fall back to the old ease.
+        ...(activeTake.keyframes.some((k) => k.handleIn || k.handleOut)
+          ? {
+              ease: existing?.ease === 'hold' ? 'hold' : undefined,
+              easeHandles: undefined,
+              handleIn: existing?.handleIn ?? { ...EASY_EASE_HANDLE },
+              handleOut: existing?.handleOut ?? { ...EASY_EASE_HANDLE },
+              handleMode: existing?.handleMode,
+            }
+          : {}),
         roll: existing?.roll,
       };
       const keyframes = insertKeyframe(activeTake.keyframes, key);
@@ -512,9 +523,12 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   };
 
   const handleKeyChange = (time: number, change: Partial<CameraKeyframe>) => {
+    // The first handle edit on an older take converts its segment eases into per-key handles,
+    // so the rest of the curve keeps its shape instead of jumping when the user grabs one key.
+    const touchesHandles = 'handleIn' in change || 'handleOut' in change || 'handleMode' in change;
     updateActiveTake((t) => ({
       ...t,
-      keyframes: t.keyframes.map((k) => (k.time === time ? { ...k, ...change } : k)),
+      keyframes: (touchesHandles ? withKeyHandles(t.keyframes) : t.keyframes).map((k) => (k.time === time ? { ...k, ...change } : k)),
     }));
   };
 
