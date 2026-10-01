@@ -720,8 +720,11 @@ const UnrealCameraNavigation: React.FC<{
   incomingCameraPose?: CameraPoseData | null;
   incomingCameraPoseRef?: React.MutableRefObject<CameraPoseData | null>;
   onCameraPose?: (pose: CameraPoseData) => void;
+  /** Crane mode: where the keyed path holds the camera; null when crane mode is off. */
+  cranePositionRef?: React.MutableRefObject<THREE.Vector3 | null>;
 }> = ({
   enabled,
+  cranePositionRef,
   remoteOrientation,
   remoteOrientationRef,
   remoteMove,
@@ -981,7 +984,14 @@ const UnrealCameraNavigation: React.FC<{
     // so you can scrub to a moment, see it, and fly from there to fix the key. The gyro path is
     // left alone: while a phone is driving, the phone owns the orientation.
     const lastWritten = lastWrittenRef.current;
-    if (lastWritten && !targetCamQuatRef.current) {
+    // Crane mode moves the camera along its path every frame. That is not "somebody else posed
+    // the camera": adopting it re-read the old view direction each frame and threw away every
+    // mouse or touch look in between, so the head could not be operated at all on a moving path.
+    // Instead the rig simply rides the path, and the look stays the operator's. Keeping the rig
+    // on the path also means disarming leaves the camera where it is rather than jumping back.
+    const cranePos = cranePositionRef?.current;
+    if (cranePos) orbit.target.copy(cranePos);
+    if (lastWritten && !targetCamQuatRef.current && !cranePos) {
       const movedElsewhere =
         camera.position.distanceToSquared(lastWritten.position) > 1e-10 ||
         Math.abs(camera.quaternion.dot(lastWritten.quaternion)) < 0.9999995;
@@ -1384,12 +1394,17 @@ const CameraKeyCapturer: React.FC<{
 const CranePositionLock: React.FC<{
   take: Pick<CameraTake, 'mode' | 'keyframes' | 'tension' | 'duration'>;
   currentTime: number;
-}> = ({ take, currentTime }) => {
+  /** Shared with the flight controller, so it rides the path instead of fighting it. */
+  positionRef: React.MutableRefObject<THREE.Vector3 | null>;
+}> = ({ take, currentTime, positionRef }) => {
   const { camera } = useThree();
   const sampled = useMemo(() => createSampledCamera(), []);
+  useEffect(() => () => { positionRef.current = null; }, [positionRef]);
   useFrame(() => {
     const s = sampleCameraTake(take as CameraTake, currentTime, sampled);
     if (!s) return;
+    if (!positionRef.current) positionRef.current = new THREE.Vector3();
+    positionRef.current.copy(s.position);
     camera.position.copy(s.position);
     const pCam = camera as THREE.PerspectiveCamera;
     // The keys own the lens too, so the operator frames on the focal length the move will play at.
@@ -2128,6 +2143,8 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   onAutoFocusDistance,
 }) => {
   const [isTransformDragging, setIsTransformDragging] = useState(false);
+  /** Crane mode's path position this frame, shared by the lock and the flight controller. */
+  const cranePositionRef = useRef<THREE.Vector3 | null>(null);
   /**
    * The lens values a keyed move is asking for this frame. A ref rather than state: focus moves
    * every frame during a rack, and re-rendering the whole stage 60 times a second to carry one
@@ -2424,12 +2441,13 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           incomingCameraPose={incomingCameraPose}
           incomingCameraPoseRef={incomingCameraPoseRef}
           onCameraPose={onCameraPose}
+          cranePositionRef={cranePositionRef}
         />
 
         {/* Crane mode. Mounted AFTER the flight controller so each frame runs after it: the
             controller sets the orientation, then the path takes over the position, then the
             operated head is recorded from the finished pose. */}
-        {craneTake && <CranePositionLock take={craneTake} currentTime={currentTimelineTime} />}
+        {craneTake && <CranePositionLock take={craneTake} currentTime={currentTimelineTime} positionRef={cranePositionRef} />}
         <HeadPassRecorder isRecording={isRecordingHead} currentTime={currentTimelineTime} onSample={onRecordHeadSample} />
       </Canvas>
     </div>
