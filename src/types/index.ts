@@ -464,6 +464,10 @@ export interface TrellisGenerateParams {
   slatSteps?: number;
   simplify?: number;
   textureSize?: number;
+  /** Which TRELLIS Space to run ('trellis' when absent). */
+  trellisModel?: 'trellis' | 'trellis2';
+  resolution?: number;
+  faceTarget?: number;
 }
 
 export interface DeviceOrientationData {

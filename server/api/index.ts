@@ -16,6 +16,7 @@ import { handleCrewApi } from './crew';
 import { handleLooksApi } from './looks';
 import { handleRenderApi } from './render';
 import { userForSession } from '../lib/users';
+import { generateWithTrellis2 } from '../lib/trellis2';
 import { consumeGeneration, dailyLimitFor, isMeteredRoute, refundGeneration, usageToday } from '../lib/quota';
 import {
   KIMODO_SPACE,
@@ -1142,6 +1143,30 @@ export function createApiMiddleware(ctx: ApiContext) {
             throw new Error('Please upload an image to generate a 3D model with TRELLIS.');
           }
 
+          // HIGH and MAX run TRELLIS.2. If its Space is down or out of GPU time, the same request
+          // falls through to the original TRELLIS below (the presets carry its settings too) and
+          // the user is told, rather than losing the generation.
+          let notice: string | undefined;
+          if (params.trellisModel === 'trellis2') {
+            try {
+              console.log('[API /api/generate-3d] TRELLIS.2...');
+              const rawGlbUrl = await generateWithTrellis2(fileToPass, {
+                resolution: params.resolution,
+                faceTarget: params.faceTarget,
+                textureSize: params.textureSize,
+                seed: params.seed,
+              }, userToken);
+              const glbUrl = await persistMediaLocally(rawGlbUrl, 'trellis2', userToken);
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ success: true, glbUrl, engine: 'trellis2' }));
+              return;
+            } catch (t2Err) {
+              const reason = extractErrorMessage(t2Err);
+              console.warn('[API /api/generate-3d] TRELLIS.2 failed, falling back to TRELLIS:', reason);
+              notice = `TRELLIS.2 was unavailable (${reason}), so this one was made with TRELLIS.`;
+            }
+          }
+
           let client = await getTrellisClient(false, userToken);
 
           // Step 1: Preprocess image (rembg, center, uniform aspect ratio pad to square)
@@ -1215,7 +1240,7 @@ export function createApiMiddleware(ctx: ApiContext) {
           const persistentVideoUrl = await persistMediaLocally(rawVideoUrl, 'trellis_preview', userToken);
 
           res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ success: true, glbUrl: persistentGlbUrl, videoUrl: persistentVideoUrl, engine: engine }));
+          res.end(JSON.stringify({ success: true, glbUrl: persistentGlbUrl, videoUrl: persistentVideoUrl, engine: engine, notice }));
         } catch (err: any) {
           const errMsg = extractErrorMessage(err);
           console.error('[API /api/generate-3d] Error:', errMsg);

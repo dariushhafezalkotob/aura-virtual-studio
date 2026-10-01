@@ -1,20 +1,33 @@
 /**
- * Quality presets for the TRELLIS Space (dariushh-trellis-3d-engine).
+ * Quality presets. FAST runs the original TRELLIS Space (dariushh-trellis-3d-engine); HIGH and MAX
+ * run TRELLIS.2 (dariushh-trellis2-3d-engine), which keeps far more detail.
  *
- * Ranges come from the Space's own sliders, so nothing here can be out of bounds:
+ * TRELLIS ranges come from that Space's own sliders:
  *   seed 0-2147483647 · guidance 0-10 · sampling steps 1-50
  *   mesh_simplify 0.9-0.98 step 0.01 (LOWER keeps more faces) · texture_size 512-2048 step 512
+ * Its MAX (simplify 0.9) was measured at ~46k triangles: that is the model's ceiling, not a setting.
  *
- * Guidance is left at the Space's defaults (7.5 / 3.0): it steers how closely the result
- * follows the image, not how much detail survives.
+ * TRELLIS.2, measured 2026-10-01 on one prop: resolution 1024 + 300k faces -> 292k triangles, 13 MB,
+ * ~80 s; 1536 + 500k -> 480k triangles, 20 MB, ~130 s. Its export decimates to the face target, so
+ * 1536 only pays off with a higher target.
+ *
+ * Guidance is left at each Space's defaults: it steers how closely the result follows the image,
+ * not how much detail survives.
  */
 export type TrellisQuality = 'fast' | 'high' | 'max';
 
+export type TrellisModel = 'trellis' | 'trellis2';
+
 export interface TrellisQualitySettings {
+  model: TrellisModel;
+  /** TRELLIS only. */
   ssSteps: number;
   slatSteps: number;
   simplify: number;
   textureSize: number;
+  /** TRELLIS.2 only: voxel grid resolution and the triangle budget of the exported mesh. */
+  resolution?: 512 | 1024 | 1536;
+  faceTarget?: number;
 }
 
 export interface TrellisQualityPreset extends TrellisQualitySettings {
@@ -29,6 +42,7 @@ export const TRELLIS_QUALITY_PRESETS: TrellisQualityPreset[] = [
   {
     id: 'fast',
     label: 'FAST',
+    model: 'trellis',
     ssSteps: 12,
     slatSteps: 12,
     simplify: 0.98,
@@ -39,22 +53,28 @@ export const TRELLIS_QUALITY_PRESETS: TrellisQualityPreset[] = [
   {
     id: 'high',
     label: 'HIGH',
+    model: 'trellis2',
     ssSteps: 20,
     slatSteps: 20,
     simplify: 0.95,
     textureSize: 2048,
-    costHint: '~2× slower',
-    description: 'More faces kept and a 2K texture. Best all-round setting.',
+    resolution: 1024,
+    faceTarget: 300000,
+    costHint: '~1.5 min',
+    description: 'TRELLIS.2: fine detail (~300k triangles), 2K texture with metal/roughness. Best all-round setting.',
   },
   {
     id: 'max',
     label: 'MAX',
+    model: 'trellis2',
     ssSteps: 32,
     slatSteps: 32,
     simplify: 0.9,
     textureSize: 2048,
-    costHint: '~3× slower',
-    description: 'Densest mesh the engine allows, 2K texture. Slow, and can hit the GPU time limit.',
+    resolution: 1536,
+    faceTarget: 500000,
+    costHint: '~2.5 min',
+    description: 'TRELLIS.2 at its finest grid (~500k triangles), 2K texture. Bigger files (~20 MB).',
   },
 ];
 

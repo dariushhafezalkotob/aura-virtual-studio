@@ -25,7 +25,7 @@ export class TrellisService {
   static async generate3D(
     params: TrellisGenerateParams,
     onProgress?: (progress: GenerationProgress) => void
-  ): Promise<{ glbUrl: string; videoUrl?: string; engine?: string }> {
+  ): Promise<{ glbUrl: string; videoUrl?: string; engine?: string; notice?: string }> {
     try {
       let engineName = 'TRELLIS';
       if (params.engine === 'hunyuan_world') {
@@ -96,6 +96,9 @@ export class TrellisService {
           slatSteps: params.slatSteps,
           simplify: params.simplify,
           textureSize: params.textureSize,
+          trellisModel: params.trellisModel,
+          resolution: params.resolution,
+          faceTarget: params.faceTarget,
         }),
       });
 
@@ -114,13 +117,14 @@ export class TrellisService {
       }
 
       if (onProgress) {
-        onProgress({ status: 'completed', stageMessage: `Asset Ready (${engineName})` });
+        onProgress({ status: 'completed', stageMessage: result.notice || `Asset Ready (${engineName})` });
       }
 
       return {
         glbUrl: result.glbUrl,
         videoUrl: result.videoUrl,
         engine: result.engine,
+        notice: result.notice,
       };
     } catch (error: any) {
       if (onProgress) {

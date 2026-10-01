@@ -601,6 +601,9 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                 slatSteps: quality.slatSteps,
                 simplify: quality.simplify,
                 textureSize: quality.textureSize,
+                trellisModel: quality.model,
+                resolution: quality.resolution,
+                faceTarget: quality.faceTarget,
               }
             : {}),
         },
@@ -2100,7 +2103,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                       ? 'bg-primary text-background font-bold shadow'
                       : 'text-on-surface-variant hover:text-on-surface'
                   }`}
-                  title={`${preset.description} (${preset.costHint}) — mesh simplify ${preset.simplify}, ${preset.textureSize}px texture, ${preset.ssSteps} sampling steps`}
+                  title={`${preset.description} (${preset.costHint})`}
                 >
                   {preset.label}
                 </button>
