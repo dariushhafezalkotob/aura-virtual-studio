@@ -7,9 +7,11 @@
  *   mesh_simplify 0.9-0.98 step 0.01 (LOWER keeps more faces) · texture_size 512-2048 step 512
  * Its MAX (simplify 0.9) was measured at ~46k triangles: that is the model's ceiling, not a setting.
  *
- * TRELLIS.2, measured 2026-10-01 on one prop: resolution 1024 + 300k faces -> 292k triangles, 13 MB,
- * ~80 s; 1536 + 500k -> 480k triangles, 20 MB, ~130 s. Its export decimates to the face target, so
- * 1536 only pays off with a higher target.
+ * TRELLIS.2, measured 2026-10-01 on one prop: 1024 + 300k faces -> 292k triangles, 13 MB, ~80 s;
+ * 1024 + 500k -> 477k triangles, 20 MB, ~75 s; 1536 + 500k -> 480k triangles, 20 MB, ~130 s.
+ * The detail comes from the face target, not the grid: the export decimates to the target either way.
+ * Do NOT use 1536 for MAX: on pantilt.app a more complex prop ran the GPU out of memory while
+ * decimating the 1536 mesh, and it bought nothing over 1024.
  *
  * Guidance is left at each Space's defaults: it steers how closely the result follows the image,
  * not how much detail survives.
@@ -71,10 +73,10 @@ export const TRELLIS_QUALITY_PRESETS: TrellisQualityPreset[] = [
     slatSteps: 32,
     simplify: 0.9,
     textureSize: 2048,
-    resolution: 1536,
+    resolution: 1024,
     faceTarget: 500000,
-    costHint: '~2.5 min',
-    description: 'TRELLIS.2 at its finest grid (~500k triangles), 2K texture. Bigger files (~20 MB).',
+    costHint: '~1.5 min',
+    description: 'TRELLIS.2 keeping the most detail (~500k triangles), 2K texture. Bigger files (~20 MB).',
   },
 ];
 
