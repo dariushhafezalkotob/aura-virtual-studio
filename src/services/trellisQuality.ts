@@ -63,7 +63,7 @@ export const TRELLIS_QUALITY_PRESETS: TrellisQualityPreset[] = [
     resolution: 1024,
     faceTarget: 300000,
     costHint: '~1.5 min',
-    description: 'TRELLIS.2: fine detail (~300k triangles), 2K texture with metal/roughness. Best all-round setting.',
+    description: 'Fine detail (~300k triangles), 2K texture with metal and roughness. Best all-round setting.',
   },
   {
     id: 'max',
@@ -76,7 +76,7 @@ export const TRELLIS_QUALITY_PRESETS: TrellisQualityPreset[] = [
     resolution: 1024,
     faceTarget: 500000,
     costHint: '~1.5 min',
-    description: 'TRELLIS.2 keeping the most detail (~500k triangles), 2K texture. Bigger files (~20 MB).',
+    description: 'The most detail (~500k triangles), 2K texture. Bigger files (~20 MB).',
   },
 ];
 

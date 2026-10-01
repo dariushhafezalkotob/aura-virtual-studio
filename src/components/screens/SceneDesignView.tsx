@@ -415,7 +415,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     try {
       setIsReconstructingWorld(true);
       setProgress({
-        stageMessage: 'HunyuanWorld 2.0: Predicting 3D Gaussian Splats & World Depth on ZeroGPU...',
+        stageMessage: 'Reconstructing the 3D world from your photos',
         status: 'sampling',
       });
 
@@ -495,7 +495,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     try {
       setIsGenerating360(true);
       setProgress({
-        stageMessage: 'Step 1: AI Outpainting 360° Equirectangular Sphere on ZeroGPU...',
+        stageMessage: 'Painting the 360° panorama',
         status: 'sampling',
       });
 
@@ -582,8 +582,9 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
 
     try {
       setProgress({
-        stageMessage: `Initializing ${engineToUse === 'hunyuan3d' ? 'Hunyuan3D-2' : 'TRELLIS'} AI Generation...`,
+        stageMessage: 'Starting',
         status: 'connecting',
+        progressPercent: 0,
       });
 
       // Mesh detail / texture size only apply to TRELLIS; Hunyuan3D has its own fixed pipeline.
@@ -612,7 +613,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
 
       const newAsset: SceneAsset = {
         id: `asset_${Date.now()}`,
-        name: promptToUse.trim() || (engineToUse === 'hunyuan3d' ? 'Hunyuan 3D (Textured)' : 'TRELLIS 3D Object'),
+        name: promptToUse.trim() || '3D Object',
         glbUrl: result.glbUrl,
         previewUrl: result.videoUrl,
         position: [0, 0, 0],
@@ -2063,19 +2064,30 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
       <div className="absolute bottom-md left-1/2 -translate-x-1/2 w-full max-w-4xl px-md z-30 flex flex-col items-center">
         {/* Progress HUD */}
         {progress && (
-          <div className="w-full mb-xs bg-surface-container/90 backdrop-blur-md border border-primary/40 px-md py-xs rounded-lg flex items-center justify-between shadow-xl">
-            <div className="flex items-center gap-xs">
-              <span className="material-symbols-outlined text-primary text-[16px] animate-spin">
-                progress_activity
-              </span>
-              <span className="font-label-caps text-[11px] text-primary tracking-widest uppercase">
-                {progress.stageMessage}
-              </span>
+          <div className="w-full mb-xs bg-surface-container/90 backdrop-blur-md border border-primary/40 px-md py-xs rounded-lg shadow-xl flex flex-col gap-[6px]">
+            <div className="flex items-center justify-between gap-sm">
+              <div className="flex items-center gap-xs min-w-0">
+                <span className={`material-symbols-outlined text-primary text-[16px] ${progress.status === 'completed' || progress.status === 'error' ? '' : 'animate-spin'}`}>
+                  {progress.status === 'completed' ? 'check_circle' : progress.status === 'error' ? 'error' : 'progress_activity'}
+                </span>
+                <span className="font-label-caps text-[11px] text-primary tracking-widest uppercase truncate">
+                  {progress.stageMessage}
+                </span>
+              </div>
+              {progress.progressPercent !== undefined && (
+                <span className="font-label-caps text-[11px] text-on-surface tabular-nums shrink-0">
+                  {Math.round(progress.progressPercent)}%
+                </span>
+              )}
             </div>
             {progress.progressPercent !== undefined && (
-              <span className="font-label-caps text-[10px] text-on-surface-variant">
-                {progress.progressPercent}%
-              </span>
+              <div className="h-[4px] w-full rounded-full bg-outline-variant/30 overflow-hidden">
+                {/* Polled every 1.5 s; the transition makes each step glide instead of jump. */}
+                <div
+                  className="h-full rounded-full bg-primary transition-[width] duration-[1400ms] ease-linear"
+                  style={{ width: `${Math.max(0, Math.min(100, progress.progressPercent))}%` }}
+                />
+              </div>
             )}
           </div>
         )}
@@ -2086,7 +2098,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           {selectedEngine === 'trellis' && (
             <div
               className="flex items-center bg-surface-container/80 p-[2px] rounded-lg border border-outline-variant/30 shrink-0"
-              title="How much mesh detail and texture resolution TRELLIS keeps. Higher settings take longer on the GPU."
+              title="How much detail the 3D model keeps. Higher settings take longer."
             >
               <span className="px-xs text-[9px] font-label-caps text-on-surface-variant/70 tracking-wider">
                 QUALITY
@@ -2476,7 +2488,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                       <button
                         onClick={handleAcceptAndSendToTrellis}
                         className="bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-label-caps text-xs font-bold py-2.5 px-sm rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow-lg hover:scale-[1.01]"
-                        title="TRELLIS extracts full-color PBR materials and textures into the 3D model"
+                        title="Builds the 3D model with full-colour materials and textures"
                       >
                         <span className="material-symbols-outlined text-[18px]">palette</span>
                         ✓ WITH TEXTURE
@@ -2484,7 +2496,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                       <button
                         onClick={handleAcceptAndSendToHunyuan}
                         className="bg-surface-container-highest hover:bg-surface-container-high border border-outline-variant/60 text-on-surface font-label-caps text-xs font-semibold py-2.5 px-sm rounded-xl transition-all flex items-center justify-center gap-xs cursor-pointer shadow hover:scale-[1.01]"
-                        title="Hunyuan3D-2 outputs clean high-poly geometry"
+                        title="Builds clean, detailed geometry without textures"
                       >
                         <span className="material-symbols-outlined text-[18px]">view_in_ar</span>
                         ✓ WITHOUT TEXTURE

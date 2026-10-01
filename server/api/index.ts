@@ -17,6 +17,7 @@ import { handleLooksApi } from './looks';
 import { handleRenderApi } from './render';
 import { userForSession } from '../lib/users';
 import { generateWithTrellis2 } from '../lib/trellis2';
+import { modelJobSnapshot, startModelJob, type ModelJobResult, type ReportProgress } from '../lib/modelJobs';
 import { consumeGeneration, dailyLimitFor, isMeteredRoute, refundGeneration, usageToday } from '../lib/quota';
 import {
   KIMODO_SPACE,
@@ -1018,236 +1019,265 @@ export function createApiMiddleware(ctx: ApiContext) {
       return;
     }
 
-    // 4. 3D Model & Prop Generation (TRELLIS & Hunyuan3D-2.0)
+    // 4. 3D Model & Prop Generation (TRELLIS.2, TRELLIS & Hunyuan3D-2.0)
+    // A generation runs as a background job so the browser can show its progress
+    // (server/lib/modelJobs.ts). The poll route must NOT start with /api/generate-3d: the quota
+    // counts routes by prefix, and every poll would use up a generation.
+    const modelJobMatch = /^\/api\/model-jobs\/([A-Za-z0-9_]+)$/.exec((req.url || '').split('?')[0]);
+    if (modelJobMatch && req.method === 'GET') {
+      const snapshot = modelJobSnapshot(modelJobMatch[1], req.auraUser._id.toHexString());
+      res.statusCode = snapshot ? 200 : 404;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify(snapshot ? { success: true, ...snapshot } : { success: false, error: 'That generation is not known to the server any more.' }));
+      return;
+    }
+
     if (req.url?.startsWith('/api/generate-3d') && req.method === 'POST') {
-      let body = '';
-      req.on('data', (chunk) => { body += chunk; });
-      req.on('end', async () => {
-        try {
-          const params = JSON.parse(body);
-          const engine = params.engine || 'trellis';
-          const userToken = (req.headers['x-hf-token'] as string) || params.hfToken;
-          console.log(`[API /api/generate-3d] Generating 3D with engine: ${engine}... (Auth: ${userToken ? 'Custom HF Token' : 'Default'})`);
+      const generate3d = async (params: any, userToken: string | undefined, report: ReportProgress): Promise<ModelJobResult> => {
+        const engine = params.engine || 'trellis';
+        console.log(`[API /api/generate-3d] Generating 3D with engine: ${engine}... (Auth: ${userToken ? 'Custom HF Token' : 'Default'})`);
 
-          let fileToPass: any = null;
-          const tmpDir = os.tmpdir();
+        let fileToPass: any = null;
+        const tmpDir = os.tmpdir();
 
-          if (params.imageBase64 || (params.imageUrl && params.imageUrl.startsWith('data:'))) {
-            const rawBase64 = params.imageBase64 || params.imageUrl;
-            const base64Data = rawBase64.includes(',')
-              ? rawBase64.split(',')[1]
-              : rawBase64;
-            const buf = Buffer.from(base64Data, 'base64');
-            const tmpPath = path.join(tmpDir, `3d_upload_${Date.now()}.png`);
-            fs.writeFileSync(tmpPath, buf);
-            fileToPass = handle_file(tmpPath);
-          } else if (params.imageUrl && (params.imageUrl.startsWith('http://') || params.imageUrl.startsWith('https://'))) {
-            const fetchRes = await fetch(params.imageUrl);
-            const arrayBuf = await fetchRes.arrayBuffer();
-            const buf = Buffer.from(arrayBuf);
-            const tmpPath = path.join(tmpDir, `3d_remote_${Date.now()}.png`);
-            fs.writeFileSync(tmpPath, buf);
-            fileToPass = handle_file(tmpPath);
-          }
+        if (params.imageBase64 || (params.imageUrl && params.imageUrl.startsWith('data:'))) {
+          const rawBase64 = params.imageBase64 || params.imageUrl;
+          const base64Data = rawBase64.includes(',')
+            ? rawBase64.split(',')[1]
+            : rawBase64;
+          const buf = Buffer.from(base64Data, 'base64');
+          const tmpPath = path.join(tmpDir, `3d_upload_${Date.now()}.png`);
+          fs.writeFileSync(tmpPath, buf);
+          fileToPass = handle_file(tmpPath);
+        } else if (params.imageUrl && (params.imageUrl.startsWith('http://') || params.imageUrl.startsWith('https://'))) {
+          const fetchRes = await fetch(params.imageUrl);
+          const arrayBuf = await fetchRes.arrayBuffer();
+          const buf = Buffer.from(arrayBuf);
+          const tmpPath = path.join(tmpDir, `3d_remote_${Date.now()}.png`);
+          fs.writeFileSync(tmpPath, buf);
+          fileToPass = handle_file(tmpPath);
+        }
 
-          if (engine === 'hunyuan3d') {
-            if (!fileToPass) throw new Error('Hunyuan3D requires a reference image.');
-            let client = await getHunyuan3DClient(false, userToken);
-            let result: any;
-            try {
-              result = await client.predict('/generation_all', [
-                params.prompt || null,
-                fileToPass,
-                null,
-                null,
-                null,
-                null,
-                params.steps || 20,
-                7.5,
-                params.seed || 1234,
-                256,
-                true,
-                200000,
-                true
-              ]);
-            } catch (predErr: any) {
-              console.warn('[Hunyuan3D] Reconnecting and retrying prediction...', extractErrorMessage(predErr));
-              client = await getHunyuan3DClient(true, userToken);
-              result = await client.predict('/generation_all', [
-                params.prompt || null,
-                fileToPass,
-                null,
-                null,
-                null,
-                null,
-                params.steps || 20,
-                7.5,
-                params.seed || 1234,
-                256,
-                true,
-                200000,
-                true
-              ]);
-            }
-
-            const data = result.data as any[];
-            let glbUrl = '';
-
-            // Step 2 for Hunyuan3D: Call /on_export_click with export_texture: true to bake textures into GLB
-            try {
-              console.log('[Hunyuan3D] Calling /on_export_click with normalized FileData & export_texture: true to generate fully textured GLB...');
-              const file1 = normalizeGradioFileData(data[0]);
-              const file2 = normalizeGradioFileData(data[1]);
-              const exportRes = await client.predict('/on_export_click', [
-                file1, // file_out (geometry FileData)
-                file2, // file_out2 (texture data FileData)
-                'glb', // file_type
-                false, // reduce_face
-                true,  // export_texture: TRUE
-                50000  // target_face_num
-              ]);
-              const exportData = exportRes.data as any[];
-              console.log('[Hunyuan3D] Export result data:', exportData);
-              for (let i = exportData.length - 1; i >= 0; i--) {
-                const resolved = resolveMediaUrl(exportData[i]);
-                if (resolved && (resolved.endsWith('.glb') || resolved.includes('.glb'))) {
-                  glbUrl = resolved;
-                  break;
-                }
-              }
-              if (!glbUrl) glbUrl = resolveMediaUrl(exportData[1]) || resolveMediaUrl(exportData[0]);
-            } catch (exportErr) {
-              console.warn('[Hunyuan3D] on_export_click texture baking error, falling back:', exportErr);
-            }
-
-            if (!glbUrl) {
-              for (let i = data.length - 1; i >= 0; i--) {
-                const resolved = resolveMediaUrl(data[i]);
-                if (resolved && !resolved.endsWith('.mp4') && (resolved.endsWith('.glb') || resolved.includes('.glb'))) {
-                  glbUrl = resolved;
-                  break;
-                }
-              }
-              if (!glbUrl) glbUrl = resolveMediaUrl(data[1]) || resolveMediaUrl(data[0]);
-            }
-
-            const persistentGlbUrl = await persistMediaLocally(glbUrl, 'hunyuan3d', userToken);
-            console.log('[Hunyuan3D] Final Textured Model URL:', persistentGlbUrl);
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ success: true, glbUrl: persistentGlbUrl, engine: 'hunyuan3d' }));
-            return;
-          }
-
-          // Route 2: TRELLIS Neural Engine
-          if (!fileToPass) {
-            throw new Error('Please upload an image to generate a 3D model with TRELLIS.');
-          }
-
-          // HIGH and MAX run TRELLIS.2. If its Space is down or out of GPU time, the same request
-          // falls through to the original TRELLIS below (the presets carry its settings too) and
-          // the user is told, rather than losing the generation.
-          let notice: string | undefined;
-          if (params.trellisModel === 'trellis2') {
-            try {
-              console.log('[API /api/generate-3d] TRELLIS.2...');
-              const rawGlbUrl = await generateWithTrellis2(fileToPass, {
-                resolution: params.resolution,
-                faceTarget: params.faceTarget,
-                textureSize: params.textureSize,
-                seed: params.seed,
-              }, userToken);
-              const glbUrl = await persistMediaLocally(rawGlbUrl, 'trellis2', userToken);
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ success: true, glbUrl, engine: 'trellis2' }));
-              return;
-            } catch (t2Err) {
-              const reason = extractErrorMessage(t2Err);
-              console.warn('[API /api/generate-3d] TRELLIS.2 failed, falling back to TRELLIS:', reason);
-              notice = `TRELLIS.2 was unavailable (${reason}), so this one was made with TRELLIS.`;
-            }
-          }
-
-          let client = await getTrellisClient(false, userToken);
-
-          // Step 1: Preprocess image (rembg, center, uniform aspect ratio pad to square)
-          // This is identical to the official Trellis demo UI and prevents non-square distortion (e.g. circle becoming ellipse)
-          let fileForGeneration = fileToPass;
-          try {
-            console.log('[TRELLIS] Running /preprocess_image for aspect ratio preservation & background isolation...');
-            const prepRes = await client.predict('/preprocess_image', [fileToPass]);
-            if (prepRes && prepRes.data && prepRes.data[0]) {
-              const norm = normalizeGradioFileData(prepRes.data[0]);
-              if (norm) {
-                fileForGeneration = norm;
-                console.log('[TRELLIS] ✓ Image successfully preprocessed with preserved 1:1 aspect ratio!');
-              }
-            }
-          } catch (prepErr) {
-            console.warn('[TRELLIS] Preprocessing call warning (proceeding with raw image):', extractErrorMessage(prepErr));
-          }
-
+        if (engine === 'hunyuan3d') {
+          if (!fileToPass) throw new Error('Please choose an image first.');
+          report(5, 'Building the 3D model', { to: 92, expectedMs: 60000 });
+          let client = await getHunyuan3DClient(false, userToken);
           let result: any;
           try {
-            result = await client.predict('/generate_and_extract_glb', [
-              fileForGeneration,
-              [],
+            result = await client.predict('/generation_all', [
+              params.prompt || null,
+              fileToPass,
               null,
-              params.seed ?? Math.floor(Math.random() * 2147483647),
-              params.ssGuidance ?? 7.5,
-              params.ssSteps ?? 12,
-              params.slatGuidance ?? 3.0,
-              params.slatSteps ?? 12,
-              'stochastic',
-              params.simplify ?? 0.95,
-              params.textureSize ?? 1024,
+              null,
+              null,
+              null,
+              params.steps || 20,
+              7.5,
+              params.seed || 1234,
+              256,
+              true,
+              200000,
+              true
             ]);
           } catch (predErr: any) {
-            console.warn('[TRELLIS] Reconnecting and retrying prediction...', extractErrorMessage(predErr));
-            client = await getTrellisClient(true, userToken);
-            result = await client.predict('/generate_and_extract_glb', [
-              fileForGeneration,
-              [],
+            console.warn('[Hunyuan3D] Reconnecting and retrying prediction...', extractErrorMessage(predErr));
+            client = await getHunyuan3DClient(true, userToken);
+            result = await client.predict('/generation_all', [
+              params.prompt || null,
+              fileToPass,
               null,
-              params.seed ?? Math.floor(Math.random() * 2147483647),
-              params.ssGuidance ?? 7.5,
-              params.ssSteps ?? 12,
-              params.slatGuidance ?? 3.0,
-              params.slatSteps ?? 12,
-              'stochastic',
-              params.simplify ?? 0.95,
-              params.textureSize ?? 1024,
+              null,
+              null,
+              null,
+              params.steps || 20,
+              7.5,
+              params.seed || 1234,
+              256,
+              true,
+              200000,
+              true
             ]);
           }
 
           const data = result.data as any[];
-          let videoData: any = null;
-          let glbData: any = null;
+          let glbUrl = '';
 
-          for (const item of data) {
-            if (!item) continue;
-            const resolved = resolveMediaUrl(item);
-            if (resolved.endsWith('.mp4')) {
-              videoData = resolved;
-            } else if (resolved.endsWith('.glb') || resolved.endsWith('.gltf') || resolved.includes('.glb')) {
-              glbData = resolved;
+          // Step 2 for Hunyuan3D: Call /on_export_click with export_texture: true to bake textures into GLB
+          try {
+            console.log('[Hunyuan3D] Calling /on_export_click with normalized FileData & export_texture: true to generate fully textured GLB...');
+            const file1 = normalizeGradioFileData(data[0]);
+            const file2 = normalizeGradioFileData(data[1]);
+            const exportRes = await client.predict('/on_export_click', [
+              file1, // file_out (geometry FileData)
+              file2, // file_out2 (texture data FileData)
+              'glb', // file_type
+              false, // reduce_face
+              true,  // export_texture: TRUE
+              50000  // target_face_num
+            ]);
+            const exportData = exportRes.data as any[];
+            console.log('[Hunyuan3D] Export result data:', exportData);
+            for (let i = exportData.length - 1; i >= 0; i--) {
+              const resolved = resolveMediaUrl(exportData[i]);
+              if (resolved && (resolved.endsWith('.glb') || resolved.includes('.glb'))) {
+                glbUrl = resolved;
+                break;
+              }
             }
+            if (!glbUrl) glbUrl = resolveMediaUrl(exportData[1]) || resolveMediaUrl(exportData[0]);
+          } catch (exportErr) {
+            console.warn('[Hunyuan3D] on_export_click texture baking error, falling back:', exportErr);
           }
 
-          const rawGlbUrl = typeof glbData === 'string' ? glbData : resolveMediaUrl(glbData);
-          const rawVideoUrl = typeof videoData === 'string' ? videoData : resolveMediaUrl(videoData);
+          if (!glbUrl) {
+            for (let i = data.length - 1; i >= 0; i--) {
+              const resolved = resolveMediaUrl(data[i]);
+              if (resolved && !resolved.endsWith('.mp4') && (resolved.endsWith('.glb') || resolved.includes('.glb'))) {
+                glbUrl = resolved;
+                break;
+              }
+            }
+            if (!glbUrl) glbUrl = resolveMediaUrl(data[1]) || resolveMediaUrl(data[0]);
+          }
 
-          const persistentGlbUrl = await persistMediaLocally(rawGlbUrl, 'trellis', userToken);
-          const persistentVideoUrl = await persistMediaLocally(rawVideoUrl, 'trellis_preview', userToken);
+          report(95, 'Saving to your scene', { to: 99, expectedMs: 3000 });
+          const persistentGlbUrl = await persistMediaLocally(glbUrl, 'hunyuan3d', userToken);
+          console.log('[Hunyuan3D] Final Textured Model URL:', persistentGlbUrl);
+          return { glbUrl: persistentGlbUrl, engine: 'hunyuan3d' };
+        }
 
+        // Route 2: TRELLIS Neural Engine
+        if (!fileToPass) {
+          throw new Error('Please choose an image first.');
+        }
+
+        // HIGH and MAX run TRELLIS.2. If its Space is down or out of GPU time, the same request
+        // falls through to the original TRELLIS below (the presets carry its settings too) and
+        // the user is told, rather than losing the generation.
+        let notice: string | undefined;
+        if (params.trellisModel === 'trellis2') {
+          try {
+            console.log('[API /api/generate-3d] TRELLIS.2...');
+            const rawGlbUrl = await generateWithTrellis2(fileToPass, {
+              resolution: params.resolution,
+              faceTarget: params.faceTarget,
+              textureSize: params.textureSize,
+              seed: params.seed,
+            }, report, userToken);
+            report(95, 'Saving to your scene', { to: 99, expectedMs: 4000 });
+            const glbUrl = await persistMediaLocally(rawGlbUrl, 'trellis2', userToken);
+            return { glbUrl, engine: 'trellis2' };
+          } catch (t2Err) {
+            const reason = extractErrorMessage(t2Err);
+            console.warn('[API /api/generate-3d] TRELLIS.2 failed, falling back to TRELLIS:', reason);
+            // Users see neither model's name; the reason stays in the server log.
+            notice = 'High detail was not available just now, so this model was made in standard detail.';
+            report(0, 'High detail unavailable, switching to standard detail');
+          }
+        }
+
+        // This Space reports no progress of its own, so the bar runs on time estimates.
+        report(2, 'Preparing your image', { to: 8, expectedMs: 4000 });
+        let client = await getTrellisClient(false, userToken);
+
+        // Step 1: Preprocess image (rembg, center, uniform aspect ratio pad to square)
+        // This is identical to the official Trellis demo UI and prevents non-square distortion (e.g. circle becoming ellipse)
+        let fileForGeneration = fileToPass;
+        try {
+          console.log('[TRELLIS] Running /preprocess_image for aspect ratio preservation & background isolation...');
+          const prepRes = await client.predict('/preprocess_image', [fileToPass]);
+          if (prepRes && prepRes.data && prepRes.data[0]) {
+            const norm = normalizeGradioFileData(prepRes.data[0]);
+            if (norm) {
+              fileForGeneration = norm;
+              console.log('[TRELLIS] ✓ Image successfully preprocessed with preserved 1:1 aspect ratio!');
+            }
+          }
+        } catch (prepErr) {
+          console.warn('[TRELLIS] Preprocessing call warning (proceeding with raw image):', extractErrorMessage(prepErr));
+        }
+
+        // Measured on the old Space: 12+12 steps ~22 s, 32+32 ~46 s, so ~8 s + 0.6 s per step.
+        // Half of that as the time constant puts the bar at ~80% when the estimate runs out.
+        const estimateMs = (8 + 0.6 * ((params.ssSteps ?? 12) + (params.slatSteps ?? 12))) * 1000;
+        report(8, 'Building the 3D model', { to: 93, expectedMs: estimateMs / 2 });
+        let result: any;
+        try {
+          result = await client.predict('/generate_and_extract_glb', [
+            fileForGeneration,
+            [],
+            null,
+            params.seed ?? Math.floor(Math.random() * 2147483647),
+            params.ssGuidance ?? 7.5,
+            params.ssSteps ?? 12,
+            params.slatGuidance ?? 3.0,
+            params.slatSteps ?? 12,
+            'stochastic',
+            params.simplify ?? 0.95,
+            params.textureSize ?? 1024,
+          ]);
+        } catch (predErr: any) {
+          console.warn('[TRELLIS] Reconnecting and retrying prediction...', extractErrorMessage(predErr));
+          client = await getTrellisClient(true, userToken);
+          result = await client.predict('/generate_and_extract_glb', [
+            fileForGeneration,
+            [],
+            null,
+            params.seed ?? Math.floor(Math.random() * 2147483647),
+            params.ssGuidance ?? 7.5,
+            params.ssSteps ?? 12,
+            params.slatGuidance ?? 3.0,
+            params.slatSteps ?? 12,
+            'stochastic',
+            params.simplify ?? 0.95,
+            params.textureSize ?? 1024,
+          ]);
+        }
+
+        const data = result.data as any[];
+        let videoData: any = null;
+        let glbData: any = null;
+
+        for (const item of data) {
+          if (!item) continue;
+          const resolved = resolveMediaUrl(item);
+          if (resolved.endsWith('.mp4')) {
+            videoData = resolved;
+          } else if (resolved.endsWith('.glb') || resolved.endsWith('.gltf') || resolved.includes('.glb')) {
+            glbData = resolved;
+          }
+        }
+
+        const rawGlbUrl = typeof glbData === 'string' ? glbData : resolveMediaUrl(glbData);
+        const rawVideoUrl = typeof videoData === 'string' ? videoData : resolveMediaUrl(videoData);
+
+        report(95, 'Saving to your scene', { to: 99, expectedMs: 3000 });
+        const persistentGlbUrl = await persistMediaLocally(rawGlbUrl, 'trellis', userToken);
+        const persistentVideoUrl = await persistMediaLocally(rawVideoUrl, 'trellis_preview', userToken);
+
+        return { glbUrl: persistentGlbUrl, videoUrl: persistentVideoUrl, engine, notice };
+      };
+
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        let params: any;
+        try {
+          params = JSON.parse(body);
+        } catch {
+          res.statusCode = 400;
           res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ success: true, glbUrl: persistentGlbUrl, videoUrl: persistentVideoUrl, engine: engine, notice }));
-        } catch (err: any) {
+          res.end(JSON.stringify({ success: false, error: 'The request did not arrive as JSON.' }));
+          return;
+        }
+        const userToken = (req.headers['x-hf-token'] as string) || params.hfToken;
+        const jobId = startModelJob(req.auraUser, (report) => generate3d(params, userToken, report).catch((err) => {
           const errMsg = extractErrorMessage(err);
           console.error('[API /api/generate-3d] Error:', errMsg);
-          res.statusCode = 500;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ success: false, error: errMsg }));
-        }
+          throw new Error(errMsg);
+        }));
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ success: true, jobId }));
       });
       return;
     }

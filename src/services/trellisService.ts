@@ -19,6 +19,40 @@ export class TrellisService {
     });
   }
 
+  /** Polls a model job until it finishes, reporting its percentage and step along the way. */
+  private static async waitForJob(
+    jobId: string,
+    onProgress?: (progress: GenerationProgress) => void
+  ): Promise<{ glbUrl: string; videoUrl?: string; engine?: string; notice?: string }> {
+    let failures = 0;
+    while (true) {
+      await new Promise((r) => setTimeout(r, 1500));
+      let job: any;
+      try {
+        const res = await fetch(`/api/model-jobs/${encodeURIComponent(jobId)}`);
+        job = await res.json();
+        if (res.status === 404) throw new Error(job.error || 'The server lost track of this generation.');
+        if (!res.ok) throw new Error(job.error || `Server returned error ${res.status}`);
+        failures = 0;
+      } catch (err) {
+        // A dropped poll (phone sleeping, VPN hiccup) is not a failed generation; give up only
+        // when the server keeps failing to answer.
+        if (err instanceof Error && /lost track|not known/.test(err.message)) throw err;
+        if (++failures >= 20) throw err;
+        continue;
+      }
+      if (job.status === 'error') throw new Error(job.error || 'Generation failed');
+      if (job.status === 'done') return job.result;
+      if (onProgress) {
+        onProgress({
+          status: job.percent >= 62 ? 'extracting' : 'sampling',
+          stageMessage: job.label || 'Working',
+          progressPercent: job.percent,
+        });
+      }
+    }
+  }
+
   /**
    * Generates a 3D model/environment using selected AI engine (TRELLIS, Hunyuan3D-2.1, or HunyuanWorld Mirror)
    */
@@ -26,16 +60,10 @@ export class TrellisService {
     params: TrellisGenerateParams,
     onProgress?: (progress: GenerationProgress) => void
   ): Promise<{ glbUrl: string; videoUrl?: string; engine?: string; notice?: string }> {
+    // Messages never name the model doing the work; the server's step labels don't either.
     try {
-      let engineName = 'TRELLIS';
-      if (params.engine === 'hunyuan_world') {
-        engineName = 'HunyuanWorld Mirror (HY-World 2.0)';
-      } else if (params.engine === 'hunyuan3d') {
-        engineName = 'Hunyuan3D-2.1 (PBR Textures)';
-      }
-
       if (onProgress) {
-        onProgress({ status: 'connecting', stageMessage: `Connecting to ${engineName} ZeroGPU Neural Engine...` });
+        onProgress({ status: 'connecting', stageMessage: 'Starting', progressPercent: 0 });
       }
 
       let imageBase64: string | undefined;
@@ -60,15 +88,6 @@ export class TrellisService {
         } else {
           imageBase64 = params.imageUrl.includes('base64,') ? params.imageUrl : `data:image/png;base64,${params.imageUrl}`;
         }
-      }
-
-      if (onProgress) {
-        onProgress({
-          status: 'sampling',
-          stageMessage: params.engine === 'hunyuan_world'
-            ? 'Reconstructing 3D World Environment & Volumetric Geometry with HY-World 2.0...'
-            : `Synthesizing 3D Geometry & Materials with ${engineName}...`
-        });
       }
 
       const hfToken = localStorage.getItem('hf_token') || localStorage.getItem('roombake_hf_token') || '';
@@ -107,17 +126,16 @@ export class TrellisService {
         throw new Error(errJson.error || `Server returned error ${response.status}`);
       }
 
-      if (onProgress) {
-        onProgress({ status: 'extracting', stageMessage: 'Extracting 3D Scene Assets & Shader Maps...' });
+      const started = await response.json();
+      if (!started.success || !started.jobId) {
+        throw new Error(started.error || 'Generation failed');
       }
 
-      const result = await response.json();
-      if (!result.success) {
-        throw new Error(result.error || 'Generation failed');
-      }
+      // The server runs the generation as a job (a minute or more); ask how it is doing.
+      const result = await this.waitForJob(started.jobId, onProgress);
 
       if (onProgress) {
-        onProgress({ status: 'completed', stageMessage: result.notice || `Asset Ready (${engineName})` });
+        onProgress({ status: 'completed', stageMessage: result.notice || 'Model ready', progressPercent: 100 });
       }
 
       return {
