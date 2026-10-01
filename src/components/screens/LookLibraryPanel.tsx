@@ -268,7 +268,7 @@ export const LookLibraryPanel: React.FC<LookLibraryPanelProps> = ({ projectId, p
                 <h3 className="text-on-surface font-medium">No looks yet</h3>
                 <p className="text-[13px] text-on-surface-variant leading-relaxed">
                   A look is a camera, lens, film stock and colour grade you want your shots to have. Add a reference
-                  picture and Pantilt takes its colour palette; paste the shot details and it fills in the gear.
+                  picture and PanTilt takes its colour palette; paste the shot details and it fills in the gear.
                 </p>
                 <button
                   onClick={() => openEditor(null)}

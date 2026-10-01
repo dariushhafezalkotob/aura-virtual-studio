@@ -778,7 +778,7 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           Rotate Device to Landscape
         </h2>
         <p className="text-xs text-on-surface-variant max-w-xs leading-relaxed mb-6">
-          AURA Virtual Director controller operates exclusively in 16:9 widescreen orientation for accurate camera framing.
+          PanTilt Virtual Director controller operates exclusively in 16:9 widescreen orientation for accurate camera framing.
         </p>
         <div className="text-[11px] font-mono text-outline uppercase tracking-wider">
           Turn your phone sideways to unlock the 3D director HUD
@@ -1109,7 +1109,7 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           {/* Right: Scene / Take Info */}
           <div className="flex items-center gap-2 text-right">
             <div className="text-[10px] text-white/80">
-              <span className="font-bold">{project?.name || 'AURA STAGE'}</span>
+              <span className="font-bold">{project?.name || 'PANTILT STAGE'}</span>
               <div className="text-white/50 text-[9px]">16:9 LIVE MONITOR</div>
             </div>
           </div>

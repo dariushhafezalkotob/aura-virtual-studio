@@ -43,7 +43,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSignedIn }) => {
       >
         <div className="flex flex-col gap-xs">
           <span className="font-label-caps text-[11px] tracking-[0.2em] text-on-surface-variant uppercase">
-            Aura Virtual Stage
+            PanTilt Virtual Stage
           </span>
           <h1 className="font-headline-lg text-2xl text-on-surface">Sign in</h1>
         </div>

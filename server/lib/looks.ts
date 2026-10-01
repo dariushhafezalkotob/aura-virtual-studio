@@ -54,7 +54,7 @@ export function cleanLookFields(input: any): LookFields {
 
   // A reference picture must be one of our own stored assets, never an arbitrary URL.
   if (out.referenceUrl && !/^\/api\/assets\/[A-Za-z0-9._-]+$/.test(out.referenceUrl)) {
-    throw new Error('The reference picture must be uploaded to Pantilt.');
+    throw new Error('The reference picture must be uploaded to PanTilt.');
   }
 
   const palette = Array.isArray(input?.palette) ? input.palette : [];

@@ -64,7 +64,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               </span>
             </button>
             <span className="font-label-caps text-label-caps tracking-widest text-primary font-semibold">
-              AURA
+              PANTILT
             </span>
             <span className="text-outline-variant mx-xs">/</span>
             <h1 className="font-headline-sm text-headline-sm text-primary font-bold">
