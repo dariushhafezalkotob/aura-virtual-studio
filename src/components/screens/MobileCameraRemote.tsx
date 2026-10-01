@@ -815,6 +815,9 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
           cameraFov={currentFov}
           isRecordingCamera={false}
           isPlaybackTake={false}
+          // Crane mode on the host: ride its keyed path so the framing here is the framing there;
+          // the gyro still owns pan, tilt and roll.
+          craneTake={hostState.craneTake ?? null}
           showGrid={true}
           remoteOrientation={gyroActive ? currentAngles : null}
           remoteOrientationRef={gyroActive ? orientationRef : undefined}
@@ -1015,11 +1018,19 @@ export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialP
                 </button>
               </div>
             </div>
+            {hostState.craneTake && !hostState.isRecording && (
+              <div className="mt-1.5 flex items-center gap-1.5 px-3 py-1 bg-amber-400/85 border border-amber-300 rounded-full backdrop-blur-sm">
+                <span className="material-symbols-outlined text-[13px] text-black">videocam</span>
+                <span className="text-[10px] font-bold text-black tracking-wider">
+                  CRANE: THE MOVE IS PROGRAMMED, YOU OPERATE THE HEAD
+                </span>
+              </div>
+            )}
             {hostState.isRecording && (
               <div className="mt-1.5 flex items-center gap-1.5 px-3 py-1 bg-red-600/70 border border-red-500 rounded-full animate-pulse backdrop-blur-sm">
                 <span className="w-2 h-2 rounded-full bg-white" />
                 <span className="text-[10px] font-bold text-white tracking-wider">
-                  RECORDING TAKE LIVE
+                  {hostState.craneTake ? 'RECORDING HEAD PASS' : 'RECORDING TAKE LIVE'}
                 </span>
               </div>
             )}

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CameraEase, CameraKeyframe, CameraKeyHandle, CameraTake } from '../types';
+import { CameraEase, CameraHeadPass, CameraKeyframe, CameraKeyHandle, CameraTake } from '../types';
 
 /**
  * Playing back a hand-keyed camera move.
@@ -430,11 +430,13 @@ export function sampleCameraTake(
 
   if (keys.length === 1 || time <= keys[0].time) {
     readKey(keys[0], out);
+    applyHeadPass(take, time, out);
     return out;
   }
   const last = keys.length - 1;
   if (time >= keys[last].time) {
     readKey(keys[last], out);
+    applyHeadPass(take, time, out);
     return out;
   }
 
@@ -473,10 +475,51 @@ export function sampleCameraTake(
 
   out.fov = channelAt(keys, i0, t, 'fov');
   out.roll = channelAt(keys, i0, t, 'roll');
+  applyHeadPass(take, time, out);
   out.focusDistance = channelAt(keys, i0, t, 'focusDistance');
   out.aperture = channelAt(keys, i0, t, 'aperture');
 
   return out;
+}
+
+/** The take's chosen head pass, if it has one with anything in it. */
+export function activeHeadPass(take: CameraTake): CameraHeadPass | null {
+  if (!take.activeHeadPassId || !take.headPasses) return null;
+  const pass = take.headPasses.find((p) => p.id === take.activeHeadPassId);
+  return pass && pass.samples.length > 0 ? pass : null;
+}
+
+/**
+ * A crane take: the keys keep position, lens and focus, and the operated pass supplies the
+ * orientation. The pass already carries the operator's roll, so the keyed roll is dropped.
+ */
+function applyHeadPass(take: CameraTake, time: number, out: SampledCamera) {
+  const pass = activeHeadPass(take);
+  if (!pass) return;
+  const s = pass.samples;
+  if (time <= s[0].time) {
+    const q = s[0].quaternion;
+    out.quaternion.set(q[0], q[1], q[2], q[3]);
+  } else if (time >= s[s.length - 1].time) {
+    const q = s[s.length - 1].quaternion;
+    out.quaternion.set(q[0], q[1], q[2], q[3]);
+  } else {
+    let low = 0;
+    let high = s.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (s[mid].time <= time) low = mid + 1;
+      else high = mid - 1;
+    }
+    const a = s[Math.max(0, high)];
+    const b = s[Math.min(s.length - 1, high + 1)];
+    const span = b.time - a.time;
+    const f = span > 1e-6 ? (time - a.time) / span : 0;
+    _qa.set(a.quaternion[0], a.quaternion[1], a.quaternion[2], a.quaternion[3]);
+    _qb.set(b.quaternion[0], b.quaternion[1], b.quaternion[2], b.quaternion[3]);
+    out.quaternion.copy(_qa).slerp(_qb, f);
+  }
+  out.roll = null;
 }
 
 export function createSampledCamera(): SampledCamera {

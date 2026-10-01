@@ -23,6 +23,14 @@ interface KeyInspectorProps {
   onTensionChange: (tension: number) => void;
   /** The lens set, so a key's field of view reads as a lens (135mm) rather than a bare angle (15). */
   lenses: { label: string; fov: number }[];
+  /** Crane mode: the move holds the position, the head is operated live, REC records a pass. */
+  craneArmed: boolean;
+  isRecording: boolean;
+  onToggleCrane: () => void;
+  /** null plays the keys' own rotation. */
+  onSelectHeadPass: (id: string | null) => void;
+  onDeleteHeadPass: (id: string) => void;
+  onStabilizerChange: (value: number) => void;
 }
 
 /**
@@ -108,7 +116,15 @@ export const KeyInspector: React.FC<KeyInspectorProps> = ({
   onGoToKey,
   onTensionChange,
   lenses,
+  craneArmed,
+  isRecording,
+  onToggleCrane,
+  onSelectHeadPass,
+  onDeleteHeadPass,
+  onStabilizerChange,
 }) => {
+  const passes = take.headPasses || [];
+  const canCrane = take.keyframes.length >= 2;
   const keyHandles = selectedKey && keyIndex >= 0 ? effectiveKeyHandles(take.keyframes, keyIndex) : null;
   const currentPreset = selectedKey && keyHandles ? activePreset(selectedKey, keyHandles.handleIn, keyHandles.handleOut) : null;
   const handleMode = selectedKey?.handleMode || 'smooth';
@@ -236,6 +252,77 @@ export const KeyInspector: React.FC<KeyInspectorProps> = ({
                 {handleMode === 'smooth' ? 'Smooth' : 'Broken'}
               </button>
             </div>
+          </>
+        )}
+      </div>
+
+      {/* ---- Crane: programmed move, operated head ---- */}
+      <div className="px-2 py-1.5 border-t border-outline-variant/25 flex flex-col gap-1">
+        <button
+          onClick={onToggleCrane}
+          disabled={!canCrane || isRecording}
+          title={!canCrane
+            ? 'Set at least two keys to have a move to operate over'
+            : craneArmed
+              ? 'Crane armed: the camera rides the keyed path and you operate pan, tilt and roll. Press REC (here or on the phone) to record a head pass. Click to disarm.'
+              : 'Like a crane with a remote head: the keyed move holds the position, you operate the head live with the phone (or the mouse), and REC records it as a pass.'}
+          className={`h-6 rounded text-[10px] font-label-caps font-bold tracking-wider flex items-center justify-center gap-1 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+            craneArmed
+              ? 'bg-amber-400 text-black hover:bg-amber-300'
+              : 'border border-amber-400/60 text-amber-300 hover:bg-amber-400/10'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[13px]">videocam</span>
+          {craneArmed ? (isRecording ? 'Recording head…' : 'Crane armed: press REC') : 'Crane: operate head'}
+        </button>
+
+        {passes.length > 0 && (
+          <>
+            <div className="flex flex-col gap-0.5 max-h-24 overflow-y-auto">
+              <label className="flex items-center gap-1 text-[9px] text-on-surface-variant cursor-pointer">
+                <input
+                  type="radio"
+                  checked={!take.activeHeadPassId}
+                  onChange={() => onSelectHeadPass(null)}
+                  className="accent-amber-400"
+                />
+                Keyed rotation
+              </label>
+              {passes.map((p) => (
+                <div key={p.id} className="flex items-center gap-1 text-[9px] text-on-surface">
+                  <label className="flex-1 flex items-center gap-1 cursor-pointer truncate">
+                    <input
+                      type="radio"
+                      checked={take.activeHeadPassId === p.id}
+                      onChange={() => onSelectHeadPass(p.id)}
+                      className="accent-amber-400"
+                    />
+                    {p.name}
+                    <span className="text-on-surface-variant">{p.samples.length ? `${p.samples[p.samples.length - 1].time.toFixed(1)}s` : ''}</span>
+                  </label>
+                  <button
+                    onClick={() => onDeleteHeadPass(p.id)}
+                    className="p-0.5 rounded hover:bg-red-500/20 text-on-surface-variant hover:text-red-400 cursor-pointer"
+                    title={`Delete ${p.name}`}
+                  >
+                    <span className="material-symbols-outlined text-[12px]">delete</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+            <label className="flex items-center gap-1.5 text-[9px] text-on-surface-variant" title="Steadies the operated head. The recorded pass itself is kept as it was.">
+              <span className="font-label-caps">Steady</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={take.stabilizer ?? 0}
+                onChange={(e) => onStabilizerChange(Number(e.target.value))}
+                className="flex-1 min-w-0 accent-amber-400 cursor-pointer"
+              />
+              <span className="font-mono text-on-surface w-7 text-right">{take.stabilizer ? `${take.stabilizer}%` : 'Off'}</span>
+            </label>
           </>
         )}
       </div>

@@ -110,6 +110,14 @@ interface ThreeStageProps {
    * For editing a keyed move: scrub and the camera follows, then fly it wherever you like.
    */
   followTake?: boolean;
+  /**
+   * Crane mode: the keyed move whose path holds the camera's position (and lens) at the playhead,
+   * while the orientation stays with whoever operates it - phone gyro, the phone's pose, or the mouse.
+   */
+  craneTake?: Pick<CameraTake, 'mode' | 'keyframes' | 'tension' | 'duration'> | null;
+  /** Crane mode: record the operated head (orientation only) every frame. */
+  isRecordingHead?: boolean;
+  onRecordHeadSample?: (sample: { time: number; quaternion: [number, number, number, number] }) => void;
   /** Bump to capture the camera as a keyframe on the next frame. */
   keyCaptureTrigger?: number;
   onKeyCaptured?: (frame: CameraKeyframe) => void;
@@ -1368,6 +1376,55 @@ const CameraKeyCapturer: React.FC<{
   return null;
 };
 
+/**
+ * Crane mode: puts the camera on the keyed move's path at the playhead, every frame, and leaves
+ * its orientation alone. Like a crane or dolly with a remote head: the move is programmed, the
+ * operator only frames.
+ */
+const CranePositionLock: React.FC<{
+  take: Pick<CameraTake, 'mode' | 'keyframes' | 'tension' | 'duration'>;
+  currentTime: number;
+}> = ({ take, currentTime }) => {
+  const { camera } = useThree();
+  const sampled = useMemo(() => createSampledCamera(), []);
+  useFrame(() => {
+    const s = sampleCameraTake(take as CameraTake, currentTime, sampled);
+    if (!s) return;
+    camera.position.copy(s.position);
+    const pCam = camera as THREE.PerspectiveCamera;
+    // The keys own the lens too, so the operator frames on the focal length the move will play at.
+    if (s.fov !== null && pCam.isPerspectiveCamera && Math.abs(pCam.fov - s.fov) > 0.01) {
+      pCam.fov = s.fov;
+      pCam.updateProjectionMatrix();
+    }
+    camera.updateMatrixWorld(true);
+  });
+  return null;
+};
+
+/** Crane mode: records the camera's orientation at ~60 per second while a head pass runs. */
+const HeadPassRecorder: React.FC<{
+  isRecording: boolean;
+  currentTime: number;
+  onSample?: (sample: { time: number; quaternion: [number, number, number, number] }) => void;
+}> = ({ isRecording, currentTime, onSample }) => {
+  const { camera } = useThree();
+  const lastRef = useRef(-1);
+  useFrame(() => {
+    if (!isRecording || !onSample) return;
+    if (lastRef.current >= 0 && Math.abs(currentTime - lastRef.current) < 0.012) return;
+    lastRef.current = currentTime;
+    const q = camera.quaternion;
+    // Five decimals is far finer than anything visible and keeps a pass about half the size.
+    const r = (v: number) => Math.round(v * 1e5) / 1e5;
+    onSample({ time: Math.max(0, Number(currentTime.toFixed(4))), quaternion: [r(q.x), r(q.y), r(q.z), r(q.w)] });
+  });
+  useEffect(() => {
+    if (!isRecording) lastRef.current = -1;
+  }, [isRecording]);
+  return null;
+};
+
 // Continuous Camera Keyframe Recorder (Samples at ~60 FPS)
 const CameraRecorder: React.FC<{
   isRecording: boolean;
@@ -2048,6 +2105,9 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   isPlaybackTake = false,
   playbackTake = null,
   followTake = false,
+  craneTake = null,
+  isRecordingHead = false,
+  onRecordHeadSample,
   keyCaptureTrigger = 0,
   onKeyCaptured,
   showCameraTrajectory = true,
@@ -2365,6 +2425,12 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
           incomingCameraPoseRef={incomingCameraPoseRef}
           onCameraPose={onCameraPose}
         />
+
+        {/* Crane mode. Mounted AFTER the flight controller so each frame runs after it: the
+            controller sets the orientation, then the path takes over the position, then the
+            operated head is recorded from the finished pose. */}
+        {craneTake && <CranePositionLock take={craneTake} currentTime={currentTimelineTime} />}
+        <HeadPassRecorder isRecording={isRecordingHead} currentTime={currentTimelineTime} onSample={onRecordHeadSample} />
       </Canvas>
     </div>
   );

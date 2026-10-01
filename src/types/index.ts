@@ -66,6 +66,20 @@ export interface CameraKeyframe {
   tangentOut?: [number, number, number];
 }
 
+/**
+ * One recorded pass of the camera head over a keyed move, the way a crane shot is operated: the
+ * move (position) is programmed as keys, and the operator pans, tilts and rolls live while it
+ * plays. Only the orientation is stored; position, lens and focus keep coming from the keys, so
+ * those can still be edited after the pass.
+ */
+export interface CameraHeadPass {
+  id: string;
+  name: string;
+  createdAt: string;
+  /** The camera's orientation over the move, ~60 per second, exactly as operated (unsmoothed). */
+  samples: { time: number; quaternion: [number, number, number, number] }[];
+}
+
 export interface CameraTake {
   id: string;
   name: string; // e.g., "Take 1"
@@ -77,6 +91,10 @@ export interface CameraTake {
   thumbnail?: string; // Captured first frame / poster frame data URL
   /** Handheld shake smoothing, 0-100, applied on playback/export. `keyframes` stay as recorded. */
   stabilizer?: number;
+  /** Keyed takes only: operated head passes over the move (crane mode). */
+  headPasses?: CameraHeadPass[];
+  /** The pass whose rotation plays; absent means the keys' own rotation. */
+  activeHeadPassId?: string;
 
   /**
    * How this take was made, which decides how it is played back.
@@ -514,6 +532,11 @@ export interface CameraRemoteState {
   activeTakeName?: string;
   /** Host playback rate, so the phone's local clock runs at the same speed between syncs. */
   playbackSpeed?: number;
+  /**
+   * Set while crane mode is armed: the keyed move, so the phone rides the same programmed path
+   * while its gyro operates the head. Keyed takes carry a handful of keys, so this stays small.
+   */
+  craneTake?: Pick<CameraTake, 'mode' | 'keyframes' | 'tension' | 'duration'>;
 }
 
 export interface CameraPoseData {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
+  CameraHeadPass,
   Project,
   CharacterActor,
   CameraTake,
@@ -14,7 +15,7 @@ import { ThreeStage, type ActorVisibilityFn, type DepthCaptureFn, type DepthMap 
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
 import { CameraRemoteSocket, LinkStats } from '../../services/cameraRemoteService';
 import { stabilizeKeyframes } from '../../services/cameraStabilizer';
-import { DEFAULT_TENSION, insertKeyframe, withKeyHandles, EASY_EASE_HANDLE } from '../../services/cameraAnimation';
+import { DEFAULT_TENSION, insertKeyframe, withKeyHandles, EASY_EASE_HANDLE, activeHeadPass } from '../../services/cameraAnimation';
 import { KeyframeTimeline } from '../camera/KeyframeTimeline';
 import { KeyInspector } from '../camera/KeyInspector';
 import { CameraPackagePicker } from '../camera/CameraPackagePicker';
@@ -144,11 +145,46 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   // A keyed move is never stabilized - there is no handheld shake in it to smooth, and running a
   // hand-placed key through a smoothing filter would drag it off the position it was placed at.
   const stabilizedTake = useMemo<CameraTake | null>(() => {
-    if (!activeTake || activeTake.mode === 'keyed' || !activeTake.stabilizer) return activeTake;
+    if (!activeTake || !activeTake.stabilizer) return activeTake;
+    if (activeTake.mode === 'keyed') {
+      // A crane take: steady the operated head pass the same way a handheld take is steadied.
+      // The keys (position, lens, focus) are programmed and need no steadying.
+      const pass = activeHeadPass(activeTake);
+      if (!pass) return activeTake;
+      const smoothed = stabilizeKeyframes(
+        pass.samples.map((p) => ({ time: p.time, position: [0, 0, 0] as [number, number, number], quaternion: p.quaternion })),
+        activeTake.stabilizer
+      );
+      return {
+        ...activeTake,
+        headPasses: activeTake.headPasses!.map((p) =>
+          p.id === pass.id ? { ...p, samples: smoothed.map((k) => ({ time: k.time, quaternion: k.quaternion })) } : p
+        ),
+      };
+    }
     return { ...activeTake, keyframes: stabilizeKeyframes(activeTake.keyframes, activeTake.stabilizer) };
   }, [activeTake]);
 
   const isKeyedTake = activeTake?.mode === 'keyed';
+
+  /**
+   * Crane mode: the keyed move holds the camera's position while the head is operated live, and
+   * REC records the head (orientation) as a pass over the move instead of a new take. Armed per
+   * move, and only once there is a move (two keys).
+   */
+  const [craneArmed, setCraneArmed] = useState(false);
+  const craneActive = craneArmed && isKeyedTake && (activeTake?.keyframes.length ?? 0) >= 2;
+  useEffect(() => { setCraneArmed(false); }, [activeTakeId]);
+  const craneTake = useMemo(
+    () => (craneActive && activeTake
+      ? { mode: 'keyed' as const, keyframes: activeTake.keyframes, tension: activeTake.tension, duration: activeTake.duration }
+      : null),
+    [craneActive, activeTake]
+  );
+  const headSamplesRef = useRef<CameraHeadPass['samples']>([]);
+  const handleRecordHeadSample = useCallback((sample: CameraHeadPass['samples'][number]) => {
+    headSamplesRef.current.push(sample);
+  }, []);
 
   /** Does the move being edited actually key the lens? If so the shader has to be running. */
   const keyedLens = useMemo(() => {
@@ -588,6 +624,40 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     setIsRecording(false);
     setIsPlaying(false);
 
+    if (craneActive && activeTake) {
+      // A head pass over the keyed move, not a new take.
+      //
+      // Do NOT clear headSamplesRef here: this runs inside the timeline's state updater, which
+      // React may call twice (it does in development), and the second call must find the same
+      // samples or its "too short" outcome replaces the real pass. The take path below is
+      // idempotent the same way. The buffer is emptied when the next pass starts.
+      const samples = [...headSamplesRef.current];
+      if (samples.length < 6) {
+        setToastMessage('Pass too short - nothing recorded.');
+        setTimeout(() => setToastMessage(null), 3000);
+        return;
+      }
+      const passNumber = (activeTake.headPasses?.length ?? 0) + 1;
+      const pass: CameraHeadPass = {
+        id: `pass_${Date.now()}`,
+        name: `Pass ${passNumber}`,
+        createdAt: new Date().toISOString(),
+        samples,
+      };
+      updateActiveTake((t) => ({
+        ...t,
+        headPasses: [...(t.headPasses || []), pass],
+        activeHeadPassId: pass.id,
+        stabilizer: t.stabilizer ?? DEFAULT_STABILIZER,
+      }));
+      // Disarm so pressing play shows the pass just recorded; arm again for another one.
+      setCraneArmed(false);
+      setTimelineSec(0);
+      setToastMessage(`${pass.name} recorded - press play to watch it. Arm CRANE again for another pass.`);
+      setTimeout(() => setToastMessage(null), 4500);
+      return;
+    }
+
     const frames = [...recordedFramesRef.current];
     if (frames.length > 5) {
       const recordedDuration = Number(Math.max(0.5, timelineSec).toFixed(2));
@@ -625,7 +695,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       setToastMessage('Take too short — recorded frames discarded.');
       setTimeout(() => setToastMessage(null), 3000);
     }
-  }, [takes, timelineSec, focalLength, aperture, iso, cameraPackage, currentProject, onUpdateProject]);
+  }, [takes, timelineSec, focalLength, aperture, iso, cameraPackage, currentProject, onUpdateProject, craneActive, activeTake, updateActiveTake]);
 
   // 60 FPS Master Timeline Animation Loop
   const lastTimeRef = useRef<number>(performance.now());
@@ -635,7 +705,10 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       const dt = (now - lastTimeRef.current) / 1000;
       lastTimeRef.current = now;
 
-      const dur = (viewMode === 'playback' && activeTake) ? activeTake.duration : maxDuration;
+      // A head pass runs exactly the length of the move it is operated over.
+      const dur = isRecording && craneActive && activeTake
+        ? activeTake.duration
+        : (viewMode === 'playback' && activeTake) ? activeTake.duration : maxDuration;
 
       if (isPlaying) {
         setTimelineSec((prev) => {
@@ -663,7 +736,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     };
     animFrame = requestAnimationFrame(updateTimeline);
     return () => cancelAnimationFrame(animFrame);
-  }, [isPlaying, playbackSpeed, maxDuration, viewMode, activeTake, isRecording, isExportingVideo, stopRecording]);
+  }, [isPlaying, playbackSpeed, maxDuration, viewMode, activeTake, isRecording, isExportingVideo, stopRecording, craneActive]);
 
   // Recording Duration Counter
   useEffect(() => {
@@ -678,7 +751,14 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
   // Toggle Record Button Handler
   const handleToggleRecord = () => {
-    if (!isRecording) {
+    if (!isRecording && craneActive) {
+      // Operate the head over the keyed move from its start.
+      headSamplesRef.current = [];
+      setTimelineSec(0);
+      setIsRecording(true);
+      setRecSeconds(0);
+      setIsPlaying(true);
+    } else if (!isRecording) {
       // Start recording
       recordedFramesRef.current = [];
       setTimelineSec(0);
@@ -904,8 +984,10 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       focalLength,
       activeTakeName: activeTake?.name,
       playbackSpeed,
+      // The phone rides the same path while its gyro operates the head.
+      craneTake: craneTake ?? undefined,
     });
-  }, [isRecording, isPlaying, effectiveDuration, focalLength, activeTake, playbackSpeed]);
+  }, [isRecording, isPlaying, effectiveDuration, focalLength, activeTake, playbackSpeed, craneTake]);
 
   useEffect(() => {
     if (isPhoneConnected) sendHostStateNow();
@@ -1251,21 +1333,27 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         showPanorama={currentProject.showPanorama !== false}
         splatUrl={currentProject.splatUrl}
         cameraFov={currentFov}
-        isRecordingCamera={isRecording}
+        isRecordingCamera={isRecording && !craneActive}
         onRecordCameraFrame={handleRecordFrame}
+        craneTake={craneTake}
+        isRecordingHead={isRecording && craneActive}
+        onRecordHeadSample={handleRecordHeadSample}
         // A keyed move ignores the live/playback switch entirely: playing means watch it, paused
         // means fly the camera and set the next key. Tying it to playback mode meant pressing play
         // while flying in live mode animated nothing, which is exactly backwards.
         //
         // Under two keys there is no move to watch, and handing the camera to a take that cannot
         // drive it would just freeze it - so it stays flyable until there is something to play.
+        //
+        // Crane mode hands the orientation to the operator, so the take drives nothing then; the
+        // crane lock holds the position instead.
         isPlaybackTake={
-          isKeyedTake ? isPlaying && (activeTake?.keyframes.length ?? 0) >= 2 : viewMode === 'playback'
+          isKeyedTake ? !craneActive && isPlaying && (activeTake?.keyframes.length ?? 0) >= 2 : viewMode === 'playback'
         }
         // Paused on a keyed move: scrubbing shows the move, but the camera is still yours to fly
         // to the next position and key. Without this, dragging the playhead moved the actors and
         // left the camera behind.
-        followTake={isKeyedTake && !isPlaying && (activeTake?.keyframes.length ?? 0) >= 2}
+        followTake={isKeyedTake && !craneActive && !isPlaying && (activeTake?.keyframes.length ?? 0) >= 2}
         playbackTake={stabilizedTake}
         keyCaptureTrigger={keyCaptureTrigger}
         onKeyCaptured={handleKeyCaptured}
@@ -1441,7 +1529,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-xs bg-background/85 backdrop-blur-md px-md py-xs rounded border border-outline-variant/30 font-label-caps text-xs shadow-md">
                     <span className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-red-500 animate-ping' : 'bg-green-500'}`} />
-                    <span className="text-primary tracking-widest font-semibold">{isRecording ? 'RECORDING TAKE' : 'STANDBY'}</span>
+                    <span className="text-primary tracking-widest font-semibold">{isRecording ? (craneActive ? 'RECORDING HEAD PASS' : 'RECORDING TAKE') : craneActive ? 'CRANE ARMED' : 'STANDBY'}</span>
                   </div>
                   {isRecording && (
                     <span className="font-mono text-xs text-red-400 font-bold tracking-widest bg-background/85 backdrop-blur-md px-sm py-xs border border-red-500/50 rounded shadow-md">
@@ -2230,6 +2318,20 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
             onGoToKey={goToAdjacentKey}
             onTensionChange={(tension) => updateActiveTake((t) => ({ ...t, tension }))}
             lenses={KEY_LENSES}
+            craneArmed={craneActive}
+            isRecording={isRecording}
+            onToggleCrane={() => {
+              if (isRecording) return;
+              setIsPlaying(false);
+              setCraneArmed((v) => !v);
+            }}
+            onSelectHeadPass={(id) => updateActiveTake((t) => ({ ...t, activeHeadPassId: id ?? undefined }))}
+            onDeleteHeadPass={(id) => updateActiveTake((t) => ({
+              ...t,
+              headPasses: (t.headPasses || []).filter((p) => p.id !== id),
+              activeHeadPassId: t.activeHeadPassId === id ? undefined : t.activeHeadPassId,
+            }))}
+            onStabilizerChange={(v) => activeTake && handleStabilizerChange(activeTake.id, v)}
           />
         </div>
       )}
