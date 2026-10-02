@@ -286,6 +286,8 @@ export interface SceneAsset {
   category?: AssetCategory;
   specularity?: number;
   emissiveBoost?: number;
+  /** 0-1. Texture Glow only lights parts of the texture brighter than this (a lamp, not its pole). 0 = everything glows. */
+  emissiveThreshold?: number;
   createdAt: string;
 }
 

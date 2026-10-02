@@ -409,7 +409,7 @@ class ModelErrorBoundary extends Component<
 }
 
 // Utility function to apply specularity / roughness / reflectivity / metalness and texture illumination dynamically to materials
-function applySpecularityToMaterial(mat: THREE.Material, spec: number, emissiveBoost: number = 0.35) {
+function applySpecularityToMaterial(mat: THREE.Material, spec: number, emissiveBoost: number = 0.35, glowThreshold: number = 0) {
   const m = mat as THREE.MeshStandardMaterial;
   // spec in [0, 1]:
   // 0.0 is completely matte (roughness 1.0, metalness 0.0, zero specular/env reflections)
@@ -440,6 +440,38 @@ function applySpecularityToMaterial(mat: THREE.Material, spec: number, emissiveB
     m.emissiveIntensity = clampedEmissive;
   } else if (m.emissive) {
     m.emissiveIntensity = clampedEmissive;
+  }
+
+  // "Glow only bright areas": a generated model is one mesh with one texture, so Texture Glow lit
+  // the whole thing - a street light's pole as much as its lamp. With a threshold, only texels
+  // brighter than it glow. The slider is perceptual (0-1); the texture is sampled in linear light,
+  // so it is converted. 0 leaves the glow exactly as it was.
+  const threshold = Math.pow(THREE.MathUtils.clamp(glowThreshold, 0, 1), 2.2);
+  if (!m.userData.glowThresholdUniform) {
+    if (threshold > 0 && m.map) {
+      const uniform = { value: threshold };
+      m.userData.glowThresholdUniform = uniform;
+      m.onBeforeCompile = (shader) => {
+        shader.uniforms.uGlowThreshold = uniform;
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', '#include <common>\nuniform float uGlowThreshold;')
+          .replace(
+            '#include <emissivemap_fragment>',
+            `#include <emissivemap_fragment>
+            #ifdef USE_EMISSIVEMAP
+              if (uGlowThreshold > 0.0) {
+                float glowLum = dot(emissiveColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+                float glowEdge = max(0.02, uGlowThreshold * 0.25);
+                totalEmissiveRadiance *= smoothstep(uGlowThreshold - glowEdge, uGlowThreshold + glowEdge, glowLum);
+              }
+            #endif`
+          );
+      };
+      // Its own program: without this three would hand it the unpatched shader it already built.
+      m.customProgramCacheKey = () => 'glow-threshold';
+    }
+  } else {
+    m.userData.glowThresholdUniform.value = threshold;
   }
 
   m.needsUpdate = true;
@@ -473,6 +505,7 @@ const GLTFModel: React.FC<{
   const { glbUrl, position, rotation, scale } = asset;
   const effectiveSpecularity = asset.specularity !== undefined ? asset.specularity : stageSpecularity;
   const effectiveEmissiveBoost = asset.emissiveBoost !== undefined ? asset.emissiveBoost : 0.35;
+  const effectiveGlowThreshold = asset.emissiveThreshold ?? 0;
 
   // Live Rotation Angle HUD State (displays live degrees during rotation, disappears on release)
   const [isRotating, setIsRotating] = useState(false);
@@ -537,7 +570,7 @@ const GLTFModel: React.FC<{
               if (mesh.geometry?.attributes?.color) {
                 mat.vertexColors = true;
               }
-              applySpecularityToMaterial(mat, effectiveSpecularity, effectiveEmissiveBoost);
+              applySpecularityToMaterial(mat, effectiveSpecularity, effectiveEmissiveBoost, effectiveGlowThreshold);
               mat.side = THREE.DoubleSide;
             }
           }
@@ -569,13 +602,13 @@ const GLTFModel: React.FC<{
             if (mesh.material) {
               const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
               for (const m of mats) {
-                applySpecularityToMaterial(m, effectiveSpecularity, effectiveEmissiveBoost);
+                applySpecularityToMaterial(m, effectiveSpecularity, effectiveEmissiveBoost, effectiveGlowThreshold);
               }
             }
           }
         });
       }
-    }, [cloned, effectiveSpecularity, effectiveEmissiveBoost]);
+    }, [cloned, effectiveSpecularity, effectiveEmissiveBoost, effectiveGlowThreshold]);
 
     content = asset.category === 'environment' ? (
       <primitive object={cloned} />

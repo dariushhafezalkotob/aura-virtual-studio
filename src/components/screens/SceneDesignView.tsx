@@ -2011,6 +2011,35 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               </div>
             </div>
 
+            {/* Glow only the bright parts of the texture: the lamp of a street light, not its pole. */}
+            <div
+              className="flex items-center justify-between text-[10px] font-mono"
+              title="Only parts of the texture brighter than this glow. Raise it until just the lamp, window or sign lights up. 0% makes the whole object glow."
+            >
+              <span className="text-on-surface-variant flex items-center gap-1">
+                <span className="material-symbols-outlined text-[13px] text-amber-400">wb_incandescent</span>
+                Only Bright Areas
+              </span>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="range"
+                  min={0.0}
+                  max={0.95}
+                  step={0.05}
+                  value={selectedAsset.emissiveThreshold ?? 0}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    const updated = assets.map((a) => (a.id === selectedAsset.id ? { ...a, emissiveThreshold: val } : a));
+                    onUpdateProject({ ...currentProject, scenes: updated });
+                  }}
+                  className="w-16 accent-amber-400 cursor-pointer h-1"
+                />
+                <span className="text-amber-300 font-bold w-7 text-right">
+                  {(selectedAsset.emissiveThreshold ?? 0) > 0 ? `${Math.round((selectedAsset.emissiveThreshold ?? 0) * 100)}%` : 'Off'}
+                </span>
+              </div>
+            </div>
+
             <button
               onClick={() =>
                 handleUpdateAssetTransform(
