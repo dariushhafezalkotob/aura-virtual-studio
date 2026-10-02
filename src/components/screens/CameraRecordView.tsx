@@ -22,6 +22,7 @@ import { CameraPackagePicker } from '../camera/CameraPackagePicker';
 import { TakeRenderPanel, type FirstFrameCapture } from '../camera/TakeRenderPanel';
 import type { PeopleMask } from '../../services/renderService';
 import { objectAnimationEnd } from '../../services/objectAnimation';
+import { EXPORT_FRAME_RATES, createFrameExporter } from '../../services/videoExport';
 import { DEFAULT_PACKAGE, normalizePackage, packageLabel, cameraById, lensById, type CameraPackage } from '../../services/cameraPackage';
 import { useDialogueAudioSync } from '../../services/dialogueService';
 import qrcode from 'qrcode-generator';
@@ -113,6 +114,27 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   // Video Export State
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isExportingVideo, setIsExportingVideo] = useState(false);
+  // Frame rate of the exported MP4. 24/25/30 are rendered frame by frame at exact times; 60 is the
+  // older live recording of the viewport, whose real rate depends on how fast the scene draws.
+  const [exportFps, setExportFpsState] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem('pantilt.exportFps'));
+      if ([...EXPORT_FRAME_RATES, 60].includes(saved as any)) return saved;
+    } catch {
+      // Private windows can refuse storage.
+    }
+    return 24;
+  });
+  const setExportFps = (fps: number) => {
+    setExportFpsState(fps);
+    try {
+      localStorage.setItem('pantilt.exportFps', String(fps));
+    } catch {
+      // The choice still holds for this visit.
+    }
+  };
+  /** True while an export steps the clock itself, one frame at a time, instead of letting it run. */
+  const [frameStepping, setFrameStepping] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const abortExportRef = useRef(false);
 
@@ -219,7 +241,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const [timelineSec, setTimelineSec] = useState<number>(0);
   const [playbackSpeed] = useState<number>(1.0);
   // Hear the scene's dialogue while recording or reviewing camera takes.
-  useDialogueAudioSync(currentProject.dialogue?.audioUrl, isPlaying, timelineSec, playbackSpeed);
+  useDialogueAudioSync(currentProject.dialogue?.audioUrl, isPlaying && !frameStepping, timelineSec, playbackSpeed);
 
   // ---- Hand-keyed camera moves ------------------------------------------------------------
   const [showKeyPanel, setShowKeyPanel] = useState<boolean>(false);
@@ -713,7 +735,8 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         ? activeTake.duration
         : (viewMode === 'playback' && activeTake) ? activeTake.duration : maxDuration;
 
-      if (isPlaying) {
+      // A frame-by-frame export sets the time itself; the clock must not run under it.
+      if (isPlaying && !frameStepping) {
         setTimelineSec((prev) => {
           const next = prev + dt * playbackSpeed;
           if (next >= dur) {
@@ -739,7 +762,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     };
     animFrame = requestAnimationFrame(updateTimeline);
     return () => cancelAnimationFrame(animFrame);
-  }, [isPlaying, playbackSpeed, maxDuration, viewMode, activeTake, isRecording, isExportingVideo, stopRecording, craneActive]);
+  }, [isPlaying, frameStepping, playbackSpeed, maxDuration, viewMode, activeTake, isRecording, isExportingVideo, stopRecording, craneActive]);
 
   // Recording Duration Counter
   useEffect(() => {
@@ -1081,6 +1104,127 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   };
 
   // High-Quality 16:9 Viewfinder MP4 Video Export Engine
+  /** The widest centred 16:9 of the viewport, as the export has always framed it. */
+  const drawViewport16x9 = (ctx: CanvasRenderingContext2D, webglCanvas: HTMLCanvasElement) => {
+    const srcW = webglCanvas.width;
+    const srcH = webglCanvas.height;
+    const targetAspect = 16 / 9;
+    let sx = 0, sy = 0, sw = srcW, sh = srcH;
+    if (srcW / srcH > targetAspect) {
+      sw = srcH * targetAspect;
+      sx = (srcW - sw) / 2;
+    } else {
+      sh = srcW / targetAspect;
+      sy = (srcH - sh) / 2;
+    }
+    ctx.drawImage(webglCanvas, sx, sy, sw, sh, 0, 0, 1920, 1080);
+  };
+
+  /** Downloads the video and its first frame, and keeps that frame as the take's thumbnail. */
+  const deliverExport = (targetTake: CameraTake, video: Blob, fileName: string, firstFrame: string | null, doneMessage: string) => {
+    const safeName = targetTake.name.toLowerCase().replace(/\s+/g, '_');
+    const downloadUrl = URL.createObjectURL(video);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 15000);
+
+    if (firstFrame) {
+      const imgAnchor = document.createElement('a');
+      imgAnchor.href = firstFrame;
+      imgAnchor.download = `${safeName}_frame0_poster.png`;
+      document.body.appendChild(imgAnchor);
+      imgAnchor.click();
+      imgAnchor.remove();
+
+      const { takes: latestTakes, currentProject: project, onUpdateProject: update } = latestRef.current;
+      const updatedTakes = latestTakes.map((t) => (t.id === targetTake.id ? { ...t, thumbnail: firstFrame } : t));
+      setTakes(updatedTakes);
+      update?.({ ...project, cameraTakes: updatedTakes });
+    }
+    setToastMessage(doneMessage);
+    setTimeout(() => setToastMessage(null), 5000);
+  };
+
+  /**
+   * Exports at an exact frame rate: the clock is stepped to frame/fps, the viewport is given time
+   * to draw that moment, and the frame is encoded with that timestamp. How long a frame takes to
+   * draw no longer matters, so a heavy scene exports as smoothly as a light one - just slower.
+   * Returns false when this browser has no H.264 encoder, so the caller can record live instead.
+   */
+  const exportTakeFrameByFrame = async (targetTake: CameraTake, webglCanvas: HTMLCanvasElement, fps: number): Promise<boolean> => {
+    const exporter = await createFrameExporter({ width: 1920, height: 1080, fps });
+    if (!exporter) return false;
+
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = 1920;
+    exportCanvas.height = 1080;
+    const ctx = exportCanvas.getContext('2d', { alpha: false });
+    if (!ctx) {
+      exporter.cancel();
+      return false;
+    }
+
+    abortExportRef.current = false;
+    setIsExportingVideo(true);
+    setExportProgress(0);
+    setActiveTakeId(targetTake.id);
+    setViewMode('playback');
+    setFrameStepping(true);
+    setIsPlaying(true);
+    setTimelineSec(0);
+
+    const restore = () => {
+      setFrameStepping(false);
+      setIsExportingVideo(false);
+      setIsPlaying(false);
+      setTimelineSec(0);
+    };
+
+    try {
+      // Let the take, the camera and the actors reach their first frame.
+      for (let i = 0; i < 6; i++) await nextFrame();
+      await new Promise((r) => setTimeout(r, 250));
+
+      // Both ends of the take are frames: 2 s at 24 fps is frames 0..48.
+      const total = Math.max(1, Math.round(targetTake.duration * fps) + 1);
+      let firstFrame: string | null = null;
+      for (let i = 0; i < total; i++) {
+        if (abortExportRef.current) {
+          exporter.cancel();
+          restore();
+          setToastMessage('Export cancelled.');
+          setTimeout(() => setToastMessage(null), 3000);
+          return true;
+        }
+        setTimelineSec(Math.min(targetTake.duration, i / fps));
+        // One frame for the screen to take the new time, two for the viewport to have drawn it.
+        await nextFrame();
+        await nextFrame();
+        await nextFrame();
+        drawViewport16x9(ctx, webglCanvas);
+        if (i === 0) firstFrame = exportCanvas.toDataURL('image/png');
+        await exporter.addFrame(exportCanvas, i);
+        setExportProgress(Math.round(((i + 1) / total) * 100));
+      }
+
+      const video = await exporter.finish();
+      restore();
+      const safeName = targetTake.name.toLowerCase().replace(/\s+/g, '_');
+      deliverExport(targetTake, video, `${safeName}_16x9_${fps}fps.mp4`, firstFrame, `✅ ${targetTake.name} exported: MP4 at ${fps} fps (${total} frames) + first frame PNG.`);
+    } catch (err: any) {
+      console.error('Frame-by-frame export failed:', err);
+      exporter.cancel();
+      restore();
+      setToastMessage(`Export failed: ${err?.message || 'the video could not be encoded'}.`);
+      setTimeout(() => setToastMessage(null), 5000);
+    }
+    return true;
+  };
+
   const exportTakeToVideo = async (takeToExport?: CameraTake | null) => {
     const targetTake = takeToExport || activeTake;
     if (!targetTake || !targetTake.keyframes || targetTake.keyframes.length === 0) {
@@ -1094,6 +1238,14 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       setToastMessage('3D Viewport canvas not ready for video capture.');
       setTimeout(() => setToastMessage(null), 3000);
       return;
+    }
+
+    if (exportFps !== 60) {
+      const done = await exportTakeFrameByFrame(targetTake, webglCanvas, exportFps);
+      if (done) return;
+      // This browser cannot encode H.264 itself: fall through to the live recording.
+      setToastMessage('This browser cannot export at an exact frame rate. Recording live instead.');
+      setTimeout(() => setToastMessage(null), 4000);
     }
 
     // Determine best supported MIME type (prefer MP4, fallback to WebM)
@@ -1400,7 +1552,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                 Capturing 16:9 Video
               </h3>
               <p className="text-xs text-on-surface-variant font-mono">
-                Rendering {activeTake?.name} ({activeTake?.duration}s) at 1080p 60 FPS...
+                Rendering {activeTake?.name} ({activeTake?.duration}s) at 1080p, {exportFps} fps{exportFps === 60 ? ' (live)' : ', frame by frame'}...
               </p>
             </div>
 
@@ -2068,6 +2220,18 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                   <span className="material-symbols-outlined text-[22px]">download</span>
                   EXPORT 16:9 MP4
                 </button>
+                <select
+                  value={exportFps}
+                  onChange={(e) => setExportFps(Number(e.target.value))}
+                  disabled={isExportingVideo}
+                  title="Frame rate of the exported video. 24, 25 and 30 are rendered frame by frame at an exact rate; 60 records the viewport live."
+                  className="px-2 py-3.5 rounded-2xl bg-emerald-950/90 text-emerald-200 font-label-caps text-sm font-bold shadow-2xl border border-emerald-400/60 cursor-pointer outline-none"
+                >
+                  {EXPORT_FRAME_RATES.map((f) => (
+                    <option key={f} value={f}>{f} fps</option>
+                  ))}
+                  <option value={60}>60 fps (live)</option>
+                </select>
 
                 <button
                   onClick={() => {
@@ -2175,6 +2339,18 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
                   <span className="material-symbols-outlined text-[16px]">download</span>
                   <span>EXPORT MP4</span>
                 </button>
+                <select
+                  value={exportFps}
+                  onChange={(e) => setExportFps(Number(e.target.value))}
+                  disabled={isExportingVideo}
+                  title="Frame rate of the exported video. 24, 25 and 30 are rendered frame by frame at an exact rate; 60 records the viewport live."
+                  className="h-9 px-1 rounded-lg bg-emerald-950/80 text-emerald-200 font-label-caps text-xs font-bold border border-emerald-500/40 cursor-pointer outline-none"
+                >
+                  {EXPORT_FRAME_RATES.map((f) => (
+                    <option key={f} value={f}>{f} fps</option>
+                  ))}
+                  <option value={60}>60 fps (live)</option>
+                </select>
                 <button
                   onClick={() => captureFrameImage(activeTake)}
                   disabled={isExportingVideo}
