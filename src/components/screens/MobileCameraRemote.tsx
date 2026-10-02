@@ -68,7 +68,7 @@ const LocalClockStage: React.FC<Omit<StageProps, 'currentTimelineTime' | 'isPlay
     return () => cancelAnimationFrame(frame);
   }, [hostState.isPlaying, hostState.playbackSpeed, hostState.effectiveDuration]);
 
-  return <ThreeStage {...stageProps} currentTimelineTime={localTime} isPlaying={hostState.isPlaying} />;
+  return <ThreeStage {...stageProps} currentTimelineTime={localTime} isPlaying={hostState.isPlaying} animateObjects />;
 };
 
 export const MobileCameraRemote: React.FC<MobileCameraRemoteProps> = ({ initialProject }) => {

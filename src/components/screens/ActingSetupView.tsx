@@ -1,10 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Project, CharacterActor, WorkflowStage, ActorConstraint, MotionSegment, DialogueScene } from '../../types';
+import * as THREE from 'three';
+import { Project, CharacterActor, WorkflowStage, ActorConstraint, MotionSegment, DialogueScene, SceneAsset } from '../../types';
 import { ThreeStage, TransformMode } from '../viewport/ThreeStage';
 import { KimodoService } from '../../services/kimodoService';
 import { ActorConstraintsPanel } from '../acting/ActorConstraintsPanel';
 import { ActorRigPosingPanel } from '../acting/ActorRigPosingPanel';
 import { MultiActorTimeline } from '../acting/MultiActorTimeline';
+import { ObjectAnimationPanel } from '../acting/ObjectAnimationPanel';
+import {
+  createSampledObject,
+  keyAt,
+  objectAnimationEnd,
+  sampleObjectAnimation,
+  withObjectKey,
+  withObjectKeyMoved,
+  withoutObjectKey,
+} from '../../services/objectAnimation';
 import { loadOfficialSOMARig, sampleActorPose, sampleActorRootMotion } from '../../services/somaSkeleton';
 import { DialoguePanel } from '../acting/DialoguePanel';
 import { buildActorSegments } from '../../services/dialogueScript';
@@ -66,6 +77,8 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
 
   const [selectedActorId, setSelectedActorId] = useState<string>(characters[0]?.id || 'actor_soma_alpha');
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
+  // A set object picked to be moved or animated (actors keep their own selection).
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [rotationSnapAngle, setRotationSnapAngle] = useState<'10deg' | 'free'>('10deg');
   const [motionPrompt, setMotionPrompt] = useState<string>('walks forward 4 steps, stops and waves to camera');
   const [durationSec, setDurationSec] = useState<number>(4.0);
@@ -107,7 +120,8 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
       (c.motionSegments || []).reduce((n, sg) => n + (sg.duration || 0), 0),
       ...(c.keyframePoses || []).map((k) => k.endTime ?? k.time)
     );
-  const maxDuration = Math.max(5.0, dialogue?.duration || 0, ...characters.map(actorSpan));
+  // A car still driving after the actors finish is part of the scene's length too.
+  const maxDuration = Math.max(5.0, dialogue?.duration || 0, ...characters.map(actorSpan), objectAnimationEnd(currentProject.scenes));
 
   // Async work (dialogue voice/motion generation) must build on the latest project, not the one
   // captured when it started, or its saves would undo edits made while it ran.
@@ -668,6 +682,74 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
 
   const assets = currentProject.scenes || [];
 
+  // ---- Moving set objects (a car that drives through the shot) ----------------------------------
+  const selectedAsset = assets.find((a) => a.id === selectedAssetId) || null;
+
+  /** Edits one object on the LATEST project, so a key set right after another is not lost. */
+  const updateAsset = (id: string, change: (a: SceneAsset) => SceneAsset) => {
+    const latest = projectRef.current;
+    const next = { ...latest, scenes: (latest.scenes || []).map((a) => (a.id === id ? change(a) : a)) };
+    projectRef.current = next;
+    onUpdateProject(next);
+  };
+
+  const keyTime = () => Number(Math.max(0, timelineSec).toFixed(3));
+
+  /**
+   * The gizmo moved an object. Once it has a key, that keys it at the playhead; before that it
+   * changes where the object stands in the set, exactly as on Scene Design.
+   */
+  const handleUpdateAssetTransform = (
+    id: string,
+    position: [number, number, number],
+    rotation: [number, number, number],
+    scale: [number, number, number]
+  ) => {
+    updateAsset(id, (a) =>
+      a.animation?.keys.length
+        ? { ...a, animation: withObjectKey(a.animation, { time: keyTime(), position, rotation, scale }) }
+        : { ...a, position, rotation, scale }
+    );
+  };
+
+  /** Keys the object where it is right now: on its route if it has one, else where it stands. */
+  const handleSetObjectKey = () => {
+    if (!selectedAsset) return;
+    updateAsset(selectedAsset.id, (a) => {
+      const pose = createSampledObject();
+      let position = a.position;
+      let rotation = a.rotation;
+      let scale = a.scale;
+      if (sampleObjectAnimation(a.animation, timelineSec, pose)) {
+        const e = new THREE.Euler().setFromQuaternion(pose.quaternion);
+        position = [pose.position.x, pose.position.y, pose.position.z];
+        rotation = [e.x, e.y, e.z];
+        scale = [pose.scale.x, pose.scale.y, pose.scale.z];
+      }
+      return { ...a, animation: withObjectKey(a.animation, { time: keyTime(), position, rotation, scale }) };
+    });
+  };
+
+  const goToObjectKey = (direction: 1 | -1) => {
+    const keys = selectedAsset?.animation?.keys || [];
+    const target =
+      direction > 0 ? keys.find((k) => k.time > timelineSec + 0.05) : [...keys].reverse().find((k) => k.time < timelineSec - 0.05);
+    if (!target) return;
+    setIsPlaying(false);
+    setTimelineSec(target.time);
+  };
+
+  const moveObjectKey = (assetId: string, time: number, newTime: number) => {
+    const wasAtPlayhead = Math.abs(timelineSec - time) <= 0.05;
+    updateAsset(assetId, (a) => (a.animation ? { ...a, animation: withObjectKeyMoved(a.animation, time, newTime) } : a));
+    // Keep the playhead on the key being retimed, or the panel would lose it mid-edit.
+    if (wasAtPlayhead) setTimelineSec(Math.max(0, Number(newTime.toFixed(3))));
+  };
+
+  const objectTracks = assets
+    .filter((a) => (a.animation?.keys.length ?? 0) > 0 || a.id === selectedAssetId)
+    .map((a) => ({ id: a.id, name: a.name, keys: (a.animation?.keys || []).map((k) => k.time) }));
+
   return (
     <div className="relative w-full h-[calc(100vh-61px)] overflow-hidden bg-background flex flex-col">
       {/* Viewport Area */}
@@ -676,7 +758,16 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
         <div className="flex-1 relative w-full h-full">
           <ThreeStage
             assets={assets}
-            selectedAssetId={null}
+            selectedAssetId={isPosing ? null : selectedAssetId}
+            onSelectAsset={(id) => {
+              // Posing an actor owns the viewport; a stray click on the set must not steal it.
+              if (isPosing) return;
+              setSelectedAssetId(id);
+              if (id) setIsPlaying(false);
+            }}
+            onUpdateAssetTransform={handleUpdateAssetTransform}
+            animateObjects
+            showObjectPaths
             pointLights={currentProject.pointLights}
             characters={characters.map((c) => ({ ...c, renderMode }))}
             // While posing (FK/IK), the actor the Rig panel edits is always selected in the viewport.
@@ -693,6 +784,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
               // hid every FK/IK handle while the Rig panel still showed the pose mode.
               if (!id && isPosing) return;
               setSelectedActorId(id || '');
+              if (id) setSelectedAssetId(null);
             }}
             onUpdateActorTransform={handleUpdateActorTransform}
             onUpdateActor={handleUpdateActor}
@@ -710,6 +802,30 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
             showPanorama={currentProject.showPanorama}
             splatUrl={currentProject.splatUrl}
           />
+
+          {/* Keys for the selected set object, floated over the viewport's bottom-left corner. */}
+          {selectedAsset && !isPosing && (
+            <div className="absolute left-4 bottom-4 z-40 pointer-events-none">
+              <ObjectAnimationPanel
+                asset={selectedAsset}
+                timelineSec={timelineSec}
+                onSetKey={handleSetObjectKey}
+                onDeleteKey={(time) => updateAsset(selectedAsset.id, (a) => ({ ...a, animation: withoutObjectKey(a.animation, time) }))}
+                onGoToKey={goToObjectKey}
+                onChangeKey={(time, change) =>
+                  updateAsset(selectedAsset.id, (a) =>
+                    a.animation
+                      ? { ...a, animation: { ...a.animation, keys: a.animation.keys.map((k) => (k === keyAt(a.animation, time) ? { ...k, ...change } : k)) } }
+                      : a
+                  )
+                }
+                onMoveKey={(time, newTime) => moveObjectKey(selectedAsset.id, time, newTime)}
+                onToggleAutoFace={(on) => updateAsset(selectedAsset.id, (a) => (a.animation ? { ...a, animation: { ...a.animation, autoFace: on } } : a))}
+                onClearAnimation={() => updateAsset(selectedAsset.id, (a) => ({ ...a, animation: undefined }))}
+                onClose={() => setSelectedAssetId(null)}
+              />
+            </div>
+          )}
 
           {/* Status Toast */}
           {statusText && (
@@ -1509,6 +1625,13 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
           onUpdateActorProps={handleUpdateActorProps}
           dialogue={dialogue}
           alignLeft={segmentsColumnOpen}
+          objectTracks={objectTracks}
+          selectedObjectId={isPosing ? null : selectedAssetId}
+          onSelectObject={(id) => {
+            if (isPosing) return;
+            setSelectedAssetId(id);
+          }}
+          onMoveObjectKey={moveObjectKey}
         />
         </div>
       </div>

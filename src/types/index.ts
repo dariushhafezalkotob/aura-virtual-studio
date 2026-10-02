@@ -288,7 +288,29 @@ export interface SceneAsset {
   emissiveBoost?: number;
   /** 0-1. Texture Glow only lights parts of the texture brighter than this (a lamp, not its pole). 0 = everything glows. */
   emissiveThreshold?: number;
+  /** Keyed movement over the scene's timeline (a car driving through the shot). Absent = it stays put. */
+  animation?: ObjectAnimation;
   createdAt: string;
+}
+
+/** Where an object is at one moment. Rotation is the same XYZ euler an object's own `rotation` uses. */
+export interface ObjectKeyframe {
+  time: number;
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: [number, number, number];
+  /**
+   * How the move behaves AT this key: 'linear' passes through at speed, 'ease' slows to a stop and
+   * pulls away again, 'hold' waits here and jumps at the next key. Defaults to 'linear'.
+   */
+  ease?: 'linear' | 'ease' | 'hold';
+}
+
+export interface ObjectAnimation {
+  /** In time order, never two on the same frame. */
+  keys: ObjectKeyframe[];
+  /** Turn with the path, so a car follows its route without a rotation key at every bend. */
+  autoFace?: boolean;
 }
 
 export interface MotionData {

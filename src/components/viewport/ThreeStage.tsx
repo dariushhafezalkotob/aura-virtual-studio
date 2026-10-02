@@ -24,6 +24,7 @@ import {
 import { CharacterActorModel, ActorErrorBoundary } from './CharacterActorModel';
 import { computeDeviceQuaternion } from '../../services/cameraRemoteService';
 import { SampledCamera, createSampledCamera, sampleCameraTake, samplePath } from '../../services/cameraAnimation';
+import { createSampledObject, sampleObjectAnimation, sampleObjectPath } from '../../services/objectAnimation';
 
 const _CAM_RIGHT_LOCAL = new THREE.Vector3(1, 0, 0);
 const _mirrorQuat = new THREE.Quaternion();
@@ -99,6 +100,10 @@ interface ThreeStageProps {
   onSelectIkEffector?: (effector: any) => void;
   currentTimelineTime?: number;
   isPlaying?: boolean;
+  /** Play the set objects' keyed movement at `currentTimelineTime` (off on Scene Design). */
+  animateObjects?: boolean;
+  /** Draw each moving object's route on the floor (the Acting screen). */
+  showObjectPaths?: boolean;
   showTrajectories?: boolean;
   showGrid?: boolean;
   isRecordingCamera?: boolean;
@@ -483,6 +488,14 @@ const GLTFModel: React.FC<{
   transformMode: TransformMode;
   rotationSnap?: number | null;
   stageSpecularity?: number;
+  /**
+   * The scene's time, on the screens where objects move (Acting, Camera Record, the phone).
+   * Undefined on Scene Design, where an object always sits where the designer put it.
+   */
+  animationTime?: number;
+  isPlaying?: boolean;
+  /** Draw the object's route on the floor. */
+  showPath?: boolean;
   onSelect: () => void;
   onDraggingChange: (isDragging: boolean) => void;
   onTransformChange?: (
@@ -497,11 +510,62 @@ const GLTFModel: React.FC<{
   transformMode,
   rotationSnap,
   stageSpecularity = 0.15,
+  animationTime,
+  isPlaying = false,
+  showPath = false,
   onSelect,
   onDraggingChange,
   onTransformChange,
 }) => {
   const groupRef = useRef<THREE.Group>(null);
+
+  // ---- Keyed movement ------------------------------------------------------------------------
+  const animation = animationTime !== undefined ? asset.animation : undefined;
+  const sampled = useMemo(createSampledObject, []);
+  const gizmoDraggingRef = useRef(false);
+  const appliedRef = useRef<{ time: number; animation: typeof animation } | null>(null);
+
+  useFrame(() => {
+    const group = groupRef.current;
+    if (!group || gizmoDraggingRef.current) return;
+    if (!animation || animationTime === undefined) {
+      if (appliedRef.current) {
+        // Its last key was just deleted: back to where the set designer put it.
+        appliedRef.current = null;
+        group.position.set(asset.position[0], asset.position[1], asset.position[2]);
+        group.rotation.set(asset.rotation[0], asset.rotation[1], asset.rotation[2]);
+        group.scale.set(asset.scale[0], asset.scale[1], asset.scale[2]);
+      }
+      return;
+    }
+    // Paused, the pose is applied only when the time or the keys change, so a move made with the
+    // gizmo stays put until it is keyed or the playhead moves on - the same rule the camera's
+    // keyed moves follow. Playing, the keys own the object every frame.
+    const applied = appliedRef.current;
+    if (!isPlaying && applied && applied.time === animationTime && applied.animation === animation) return;
+    appliedRef.current = { time: animationTime, animation };
+    if (!sampleObjectAnimation(animation, animationTime, sampled)) return;
+    group.position.copy(sampled.position);
+    group.quaternion.copy(sampled.quaternion);
+    group.scale.copy(sampled.scale);
+  });
+
+  const pathLine = useMemo(() => {
+    if (!showPath || !animation || animation.keys.length < 2) return null;
+    const points = sampleObjectPath(animation).map((p) => new THREE.Vector3(p.x, p.y + 0.03, p.z));
+    if (points.length < 2) return null;
+    return new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(points),
+      new THREE.LineBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.85 })
+    );
+  }, [showPath, animation]);
+  useEffect(
+    () => () => {
+      pathLine?.geometry.dispose();
+      (pathLine?.material as THREE.Material | undefined)?.dispose();
+    },
+    [pathLine]
+  );
   const { glbUrl, position, rotation, scale } = asset;
   const effectiveSpecularity = asset.specularity !== undefined ? asset.specularity : stageSpecularity;
   const effectiveEmissiveBoost = asset.emissiveBoost !== undefined ? asset.emissiveBoost : 0.35;
@@ -633,6 +697,7 @@ const GLTFModel: React.FC<{
   const pointerDownPosRef = useRef<{ x: number; y: number } | null>(null);
 
   const handleTransformEnd = () => {
+    gizmoDraggingRef.current = false;
     markTransformDragEnd();
     setIsRotating(false);
     setTimeout(() => {
@@ -722,6 +787,7 @@ const GLTFModel: React.FC<{
           rotationSnap={transformMode === 'rotate' ? (rotationSnap ?? null) : null}
           size={0.75}
           onMouseDown={() => {
+            gizmoDraggingRef.current = true;
             markTransformDragStart();
             if (transformMode === 'rotate' && groupRef.current) {
               const degX = Math.round(THREE.MathUtils.radToDeg(groupRef.current.rotation.x));
@@ -736,6 +802,17 @@ const GLTFModel: React.FC<{
           onMouseUp={handleTransformEnd}
         />
       )}
+
+      {/* The route, and a marker at each key, in world space. */}
+      {pathLine && <primitive object={pathLine} />}
+      {showPath &&
+        animation &&
+        animation.keys.map((k) => (
+          <mesh key={k.time} position={[k.position[0], k.position[1] + 0.03, k.position[2]]} rotation={[-Math.PI / 2, 0, 0]}>
+            <circleGeometry args={[0.09, 16]} />
+            <meshBasicMaterial color="#ffb020" side={THREE.DoubleSide} />
+          </mesh>
+        ))}
     </>
   );
 };
@@ -2146,6 +2223,8 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   onSelectIkEffector,
   currentTimelineTime = 0,
   isPlaying = false,
+  animateObjects = false,
+  showObjectPaths = false,
   showTrajectories = true,
   showGrid = true,
   isRecordingCamera = false,
@@ -2318,6 +2397,9 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
                 transformMode={transformMode}
                 rotationSnap={rotationSnap}
                 stageSpecularity={stageSpecularity}
+                animationTime={animateObjects ? currentTimelineTime : undefined}
+                isPlaying={isPlaying}
+                showPath={showObjectPaths}
                 onSelect={() => {
                   onSelectActor?.(null);
                   onSelectAsset?.(asset.id);

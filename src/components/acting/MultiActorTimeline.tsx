@@ -22,6 +22,11 @@ interface MultiActorTimelineProps {
    * so the timeline sits right beside it rather than leaving the centring margin as a visible gap.
    */
   alignLeft?: boolean;
+  /** Set objects with keyed movement (plus the selected one), each drawn as its own lane of keys. */
+  objectTracks?: { id: string; name: string; keys: number[] }[];
+  selectedObjectId?: string | null;
+  onSelectObject?: (id: string) => void;
+  onMoveObjectKey?: (objectId: string, time: number, newTime: number) => void;
 }
 
 /**
@@ -71,7 +76,44 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
   onUpdateActorProps,
   dialogue,
   alignLeft = false,
+  objectTracks = [],
+  selectedObjectId = null,
+  onSelectObject,
+  onMoveObjectKey,
 }) => {
+  // Dragging an object's key along its lane retimes it; the new time lands on release.
+  const objectLaneRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [keyDrag, setKeyDrag] = useState<{ objectId: string; from: number; time: number; moved: boolean } | null>(null);
+  const keyDragRef = useRef(keyDrag);
+  keyDragRef.current = keyDrag;
+
+  const beginKeyDrag = (e: React.PointerEvent, objectId: string, time: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const lane = objectLaneRefs.current[objectId];
+    if (!lane) return;
+    const startX = e.clientX;
+    setKeyDrag({ objectId, from: time, time, moved: false });
+    const onMove = (ev: PointerEvent) => {
+      const rect = lane.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const t = Math.max(0, Math.min(maxDuration, ((ev.clientX - rect.left) / rect.width) * maxDuration));
+      setKeyDrag({ objectId, from: time, time: Number(t.toFixed(2)), moved: Math.abs(ev.clientX - startX) > 3 });
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      const drag = keyDragRef.current;
+      setKeyDrag(null);
+      if (!drag) return;
+      onSelectObject?.(objectId);
+      if (drag.moved && Math.abs(drag.time - drag.from) > 1e-3) onMoveObjectKey?.(objectId, drag.from, drag.time);
+      else onSeek(drag.from);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
   const rulerRef = useRef<HTMLDivElement>(null);
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
   const [editingActorId, setEditingActorId] = useState<string | null>(null);
@@ -724,6 +766,72 @@ export const MultiActorTimeline: React.FC<MultiActorTimelineProps> = ({
                 {/* Interactive Playhead Needle Across Track */}
                 <div
                   className="absolute top-0 bottom-0 w-[2px] bg-primary z-20 pointer-events-none shadow-[0_0_8px_rgba(0,255,204,0.9)]"
+                  style={{ left: `${playheadPercent}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+
+        {/* 2b. Moving set objects: one lane per object, a diamond per key */}
+        {objectTracks.map((track) => {
+          const isSelected = track.id === selectedObjectId;
+          return (
+            <div
+              key={track.id}
+              onClick={() => onSelectObject?.(track.id)}
+              className={`flex items-stretch transition-colors cursor-pointer ${
+                isSelected ? 'bg-amber-400/5 hover:bg-amber-400/10' : 'bg-surface-container-lowest/40 hover:bg-surface-container-high/30'
+              }`}
+            >
+              <div
+                className={`w-44 shrink-0 px-2 flex items-center gap-1.5 border-r ${
+                  isSelected ? 'border-amber-400/50 bg-amber-400/10' : 'border-outline-variant/20'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[15px] text-amber-400">directions_car</span>
+                <span className="text-[11px] text-on-surface truncate flex-1" title={track.name}>{track.name}</span>
+                <span className="text-[9px] font-mono text-on-surface-variant">{track.keys.length}k</span>
+              </div>
+              <div
+                onMouseDown={handleMouseDown}
+                ref={(el) => (objectLaneRefs.current[track.id] = el)}
+                className="flex-1 relative h-8 overflow-hidden select-none bg-surface-container-lowest/30"
+              >
+                {tickMarks.map((sec) => {
+                  const leftPct = (sec / maxDuration) * 100;
+                  if (leftPct > 100) return null;
+                  return <div key={sec} className="absolute top-0 bottom-0 w-[1px] bg-outline-variant/10 pointer-events-none" style={{ left: `${leftPct}%` }} />;
+                })}
+                {track.keys.length >= 2 && (
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 h-[3px] bg-amber-400/40 pointer-events-none"
+                    style={{
+                      left: `${(track.keys[0] / maxDuration) * 100}%`,
+                      width: `${((track.keys[track.keys.length - 1] - track.keys[0]) / maxDuration) * 100}%`,
+                    }}
+                  />
+                )}
+                {track.keys.map((time) => {
+                  const dragging = keyDrag && keyDrag.objectId === track.id && keyDrag.from === time;
+                  const shown = dragging ? keyDrag!.time : time;
+                  const isCurrent = Math.abs(timelineSec - time) < 0.05;
+                  return (
+                    <div
+                      key={time}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onPointerDown={(e) => beginKeyDrag(e, track.id, time)}
+                      onClick={(e) => e.stopPropagation()}
+                      title={`Key at ${shown.toFixed(2)}s. Click to jump, drag to retime.`}
+                      className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rotate-45 border cursor-ew-resize z-20 transition-transform hover:scale-125 ${
+                        isCurrent || dragging ? 'bg-white border-amber-400 scale-110' : 'bg-amber-400 border-background'
+                      }`}
+                      style={{ left: `${(shown / maxDuration) * 100}%` }}
+                    />
+                  );
+                })}
+                <div
+                  className="absolute top-0 bottom-0 w-[2px] bg-primary z-10 pointer-events-none shadow-[0_0_8px_rgba(0,255,204,0.9)]"
                   style={{ left: `${playheadPercent}%` }}
                 />
               </div>

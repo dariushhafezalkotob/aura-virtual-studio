@@ -21,6 +21,7 @@ import { KeyInspector } from '../camera/KeyInspector';
 import { CameraPackagePicker } from '../camera/CameraPackagePicker';
 import { TakeRenderPanel, type FirstFrameCapture } from '../camera/TakeRenderPanel';
 import type { PeopleMask } from '../../services/renderService';
+import { objectAnimationEnd } from '../../services/objectAnimation';
 import { DEFAULT_PACKAGE, normalizePackage, packageLabel, cameraById, lensById, type CameraPackage } from '../../services/cameraPackage';
 import { useDialogueAudioSync } from '../../services/dialogueService';
 import qrcode from 'qrcode-generator';
@@ -133,7 +134,9 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   const maxDuration = Math.max(
     5.0,
     currentProject.dialogue?.duration || 0,
-    ...characters.map((c) => c.duration || (c.motionData?.duration) || 4.0)
+    ...characters.map((c) => c.duration || (c.motionData?.duration) || 4.0),
+    // A car still driving after the actors finish is part of the scene's length too.
+    objectAnimationEnd(assets)
   );
 
   // Active Take Reference
@@ -1322,6 +1325,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         selectedAssetId={null}
         pointLights={currentProject.pointLights}
         characters={characters}
+        animateObjects
         lightIntensity={(currentProject.lightIntensity !== undefined ? currentProject.lightIntensity : 1.0) * ((parseInt(iso, 10) || 800) / 800)}
         stageSpecularity={currentProject.stageSpecularity}
         environmentPreset={currentProject.environmentPreset || 'studio'}
