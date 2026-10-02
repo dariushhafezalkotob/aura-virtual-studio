@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import type { CameraTake, CharacterActor, FilmLook, TakeRender } from '../../types';
+import type { CameraTake, CharacterActor, FilmLook, TakeRender, TakeVideoRender } from '../../types';
 import { DEFAULT_PACKAGE, normalizePackage, packageLabel, type CameraPackage } from '../../services/cameraPackage';
 import { listLooks, uploadReferenceImage } from '../../services/lookService';
 import {
@@ -10,12 +10,16 @@ import {
   measurePeople,
   placementSentence,
   renderFrame,
+  renderVideo,
   standInColourName,
+  videoRenderCost,
+  VIDEO_RESOLUTIONS,
   type DepthInfo,
   type LensAtFrame,
   type PeopleMask,
   type RenderPass,
   type RenderStage,
+  type VideoResolution,
 } from '../../services/renderService';
 
 /** Frame 1 as the viewport drew it, its depth, and the lens it was drawn with. */
@@ -45,8 +49,26 @@ interface TakeRenderPanelProps {
   characters: CharacterActor[];
   /** Stores a changed sheet on its character (saved with the scene). */
   onUpdateCharacter: (id: string, patch: Partial<CharacterActor>) => void;
+  /** Keeps what was chosen here (package, grade, pass, note) on the take, so it opens set next time. */
+  onUpdateTake: (takeId: string, patch: Partial<CameraTake>) => void;
+  /** The package Camera Record is set to, for a take that has none of its own. */
+  fallbackPackage: CameraPackage;
+  /** The take's previs as a clip, cut to the same frame as the first-frame render. */
+  captureTakeVideo: () => Promise<Blob | null>;
+  onVideoRendered: (takeId: string, video: TakeVideoRender) => void;
+  /** The scene's approved render every other render is matched to, if one was chosen. */
+  setMasterUrl?: string;
+  onSetMaster: (url: string | undefined) => void;
   onClose: () => void;
 }
+
+const VIDEO_STAGE_TEXT: Record<RenderStage, string> = {
+  uploading: 'Making the previs clip and sending it…',
+  describing: 'Reading the action…',
+  rendering: 'Rendering the video… several minutes',
+};
+
+const lastLookKey = (projectId: string) => `pantilt.lastLook.${projectId}`;
 
 const STAGE_TEXT: Record<RenderStage, string> = {
   uploading: 'Sending the first frame…',
@@ -67,16 +89,52 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   onRendered,
   characters,
   onUpdateCharacter,
+  onUpdateTake,
+  fallbackPackage,
+  captureTakeVideo,
+  onVideoRendered,
+  setMasterUrl,
+  onSetMaster,
   onClose,
 }) => {
   const [capture, setCapture] = useState<FirstFrameCapture | null>(null);
   const frame = capture?.frame ?? null;
   const dof = capture ? depthOfField(capture.lens) : null;
   const [captureError, setCaptureError] = useState<string | null>(null);
-  const [pkg, setPkg] = useState<CameraPackage>(normalizePackage(take.cameraPackage || DEFAULT_PACKAGE));
+  // The window opens the way this take was last rendered: its own package, else the last render's,
+  // else what Camera Record is set to. It used to fall back to the default every time, so a keyed
+  // take (which carried no package) had to be set up again on every visit, grade and pass included.
+  const lastRender = take.renders?.length ? take.renders[take.renders.length - 1] : null;
+  const [pkg, setPkgState] = useState<CameraPackage>(
+    normalizePackage(take.cameraPackage || lastRender?.cameraPackage || fallbackPackage || DEFAULT_PACKAGE)
+  );
+  const setPkg = (next: CameraPackage) => {
+    setPkgState(next);
+    onUpdateTake(take.id, { cameraPackage: next });
+  };
   const [looks, setLooks] = useState<FilmLook[]>([]);
-  const [lookId, setLookId] = useState('');
-  const [note, setNote] = useState('');
+  const [lookId, setLookIdState] = useState<string>(() => {
+    if (take.renderSetup?.lookId !== undefined) return take.renderSetup.lookId;
+    if (lastRender) return lastRender.lookId || '';
+    try {
+      return localStorage.getItem(lastLookKey(projectId)) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [note, setNote] = useState(take.renderSetup?.note || '');
+  /** Stores one render-window setting on the take. */
+  const rememberSetup = (patch: NonNullable<CameraTake['renderSetup']>) =>
+    onUpdateTake(take.id, { renderSetup: { ...take.renderSetup, lookId, pass, note, ...patch } });
+  const setLookId = (next: string) => {
+    setLookIdState(next);
+    rememberSetup({ lookId: next });
+    try {
+      localStorage.setItem(lastLookKey(projectId), next);
+    } catch {
+      // The choice still holds for this take.
+    }
+  };
   // Characters left out of this one render (their sheet stays on the character).
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
   const [uploadingFor, setUploadingFor] = useState<string | null>(null);
@@ -95,7 +153,11 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
           return [placementSentence(sent ? `${c.name} (the ${colour} figure)` : `The ${colour} figure`, p)];
         })
       : [];
-  const [pass, setPass] = useState<RenderPass>(defaultPassFor(sceneHeading));
+  const [pass, setPassState] = useState<RenderPass>(take.renderSetup?.pass || lastRender?.pass || defaultPassFor(sceneHeading));
+  const setPass = (next: RenderPass) => {
+    setPassState(next);
+    rememberSetup({ pass: next });
+  };
   const [layouts, setLayouts] = useState<{ blur?: string; clay?: string }>({});
   const [layoutError, setLayoutError] = useState<string | null>(null);
   const [stage, setStage] = useState<RenderStage | null>(null);
@@ -103,6 +165,64 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
   const renders = take.renders || [];
   const [shownId, setShownId] = useState<string | null>(renders.length ? renders[renders.length - 1].id : null);
   const shown = renders.find((r) => r.id === shownId) || null;
+
+  // ---- Video ---------------------------------------------------------------------------------
+  const videos = take.videoRenders || [];
+  const [shownVideoId, setShownVideoId] = useState<string | null>(videos.length ? videos[videos.length - 1].id : null);
+  const shownVideo = videos.find((v) => v.id === shownVideoId) || null;
+  const [videoStage, setVideoStage] = useState<RenderStage | null>(null);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const [videoResolution, setVideoResolution] = useState<VideoResolution>('480p');
+  const [videoSound, setVideoSound] = useState(true);
+  // Everyone with a sheet goes with a video: someone out of shot at frame 1 may walk in later.
+  const videoCast = cast.filter((c) => c.referenceSheetUrl).slice(0, 8);
+  useEffect(() => {
+    if (videos.length) setShownVideoId(videos[videos.length - 1].id);
+  }, [videos.length]);
+
+  const handleRenderVideo = async () => {
+    if (!shown || videoStage || stage) return;
+    setVideoError(null);
+    setVideoStage('uploading');
+    try {
+      const clip = await captureTakeVideo();
+      if (!clip) throw new Error('The previs clip could not be made. This needs a recent Chrome, Edge or Safari, and the PanTilt tab has to stay visible.');
+      const result = await renderVideo(
+        {
+          projectId,
+          video: clip,
+          firstFrameUrl: shown.url,
+          resolution: videoResolution,
+          sound: videoSound,
+          cameraPackage: pkg,
+          focalLength: take.focalLength,
+          aperture: take.aperture,
+          iso: take.iso,
+          lookId: lookId || undefined,
+          sceneHeading,
+          note: note.trim() || undefined,
+          cast: videoCast.map((c) => ({ name: c.name, colorName: standInColourName(c.color), sheetUrl: c.referenceSheetUrl! })),
+        },
+        setVideoStage
+      );
+      onVideoRendered(take.id, {
+        id: `video_${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        url: result.url,
+        sourceUrl: result.sourceUrl,
+        firstFrameUrl: result.firstFrameUrl,
+        resolution: result.resolution,
+        cameraPackage: result.cameraPackage,
+        lookId: result.lookId,
+        prompt: result.prompt,
+        model: result.model,
+      });
+    } catch (err: any) {
+      setVideoError(err.message || 'The video render failed.');
+    } finally {
+      setVideoStage(null);
+    }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -118,7 +238,14 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
         else setCaptureError('The viewport could not be captured. Close this and try again.');
       })
       .catch(() => alive && setCaptureError('The viewport could not be captured.'));
-    listLooks(projectId).then((l) => alive && setLooks(l)).catch(() => {});
+    listLooks(projectId)
+      .then((l) => {
+        if (!alive) return;
+        setLooks(l);
+        // A remembered look that has since been deleted falls back to neutral.
+        setLookIdState((current) => (current && !l.some((x) => x.id === current) ? '' : current));
+      })
+      .catch(() => {});
     return () => {
       alive = false;
     };
@@ -173,6 +300,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
           dof,
           cast: castSent.map((c) => ({ name: c.name, colorName: standInColourName(c.color), sheetUrl: c.referenceSheetUrl! })),
           placements: placementsFor(capture?.people ?? null),
+          setMasterUrl,
         },
         setStage
       );
@@ -254,7 +382,10 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
                 const sent: { label: string; src: string | null }[] = [
                   { label: `1 · ${pass === 'full' ? 'frame' : `${pass} pass`}`, src: layout },
                   ...(lookPicture ? [{ label: `${2} · look`, src: lookPicture }] : []),
-                  ...castSent.map((c, i) => ({ label: `${(lookPicture ? 3 : 2) + i} · ${c.name}`, src: c.referenceSheetUrl! })),
+                  ...(setMasterUrl ? [{ label: `${lookPicture ? 3 : 2} · set master`, src: setMasterUrl }] : []),
+                  ...castSent
+                    .slice(0, setMasterUrl ? 7 : 8)
+                    .map((c, i) => ({ label: `${2 + (lookPicture ? 1 : 0) + (setMasterUrl ? 1 : 0) + i} · ${c.name}`, src: c.referenceSheetUrl! })),
                 ];
                 return (
                   <div className="flex flex-col gap-xs">
@@ -321,6 +452,29 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
               )}
 
               {shown && (
+                <div className="flex items-center justify-between gap-sm bg-surface-container rounded-lg border border-outline-variant/30 px-sm py-xs">
+                  <span className="text-[11px] text-on-surface-variant leading-snug">
+                    {setMasterUrl === shown.url
+                      ? 'This render is the set master: every other render of this scene is matched to its location, weather, light and colours.'
+                      : setMasterUrl
+                      ? 'Another render is this scene\'s set master. New renders are matched to it.'
+                      : 'Make an approved render the set master, so every shot of this scene shares one location, weather and look.'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onSetMaster(setMasterUrl === shown.url ? undefined : shown.url)}
+                    className={`shrink-0 text-[10px] font-label-caps px-sm py-[5px] rounded border cursor-pointer whitespace-nowrap ${
+                      setMasterUrl === shown.url
+                        ? 'border-amber-400 text-amber-300 bg-amber-400/10 hover:bg-amber-400/20'
+                        : 'border-outline-variant/50 text-on-surface-variant hover:text-primary hover:border-primary'
+                    }`}
+                  >
+                    {setMasterUrl === shown.url ? '★ SET MASTER · REMOVE' : 'USE AS SET MASTER'}
+                  </button>
+                </div>
+              )}
+
+              {shown && (
                 <details className="text-[11px] text-on-surface-variant">
                   <summary className="cursor-pointer font-label-caps text-[10px] tracking-wider">Show the prompt of this render</summary>
                   <pre className="mt-xs whitespace-pre-wrap bg-surface-container rounded-lg p-sm border border-outline-variant/30 font-mono text-[11px] leading-relaxed text-on-surface max-h-72 overflow-y-auto">
@@ -328,6 +482,59 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
                   </pre>
                 </details>
               )}
+
+              {/* Video: the take's previs clip remade as real footage, with the render above as its first frame. */}
+              <div className="flex flex-col gap-xs mt-md pt-md border-t border-outline-variant/30">
+                <span className="font-label-caps text-[10px] tracking-[0.15em] uppercase text-on-surface-variant">Video</span>
+                <div className="relative aspect-video bg-black/50 rounded-lg overflow-hidden border border-outline-variant/30 flex items-center justify-center">
+                  {shownVideo ? (
+                    <video key={shownVideo.id} src={shownVideo.url} poster={shownVideo.firstFrameUrl} controls loop className="w-full h-full object-contain bg-black" />
+                  ) : (
+                    <span className="text-[12px] text-on-surface-variant px-md text-center">
+                      {videoStage ? '' : shown ? 'Press Render video: the clip opens on the render shown above and follows the take.' : 'Render the first frame first. It gives the video its look.'}
+                    </span>
+                  )}
+                  {videoStage && (
+                    <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-sm text-on-surface">
+                      <span className="material-symbols-outlined text-[28px] text-amber-300 animate-spin">progress_activity</span>
+                      <span className="text-[12px]">{VIDEO_STAGE_TEXT[videoStage]}</span>
+                    </div>
+                  )}
+                </div>
+                {videos.length > 0 && (
+                  <div className="flex gap-xs overflow-x-auto pb-xs">
+                    {videos.map((v, i) => (
+                      <button
+                        key={v.id}
+                        onClick={() => setShownVideoId(v.id)}
+                        title={`${v.resolution} · ${packageLabel(v.cameraPackage)}`}
+                        className={`relative shrink-0 w-28 aspect-video rounded overflow-hidden border-2 cursor-pointer ${
+                          v.id === shownVideoId ? 'border-amber-400' : 'border-transparent opacity-70 hover:opacity-100'
+                        }`}
+                      >
+                        <img src={v.firstFrameUrl} alt="" className="w-full h-full object-cover" />
+                        <span className="absolute bottom-0 left-0 right-0 bg-black/70 text-[9px] text-on-surface px-[4px] py-[1px] flex justify-between">
+                          <span>Video {i + 1}</span>
+                          <span>{v.resolution}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {shownVideo && (
+                  <div className="flex items-center gap-md">
+                    <a href={shownVideo.url} download className="text-[11px] text-primary hover:underline font-label-caps tracking-wider">
+                      DOWNLOAD MP4
+                    </a>
+                    <details className="text-[11px] text-on-surface-variant flex-1 min-w-0">
+                      <summary className="cursor-pointer font-label-caps text-[10px] tracking-wider">Show the prompt of this video</summary>
+                      <pre className="mt-xs whitespace-pre-wrap bg-surface-container rounded-lg p-sm border border-outline-variant/30 font-mono text-[11px] leading-relaxed text-on-surface max-h-72 overflow-y-auto">
+                        {shownVideo.prompt}
+                      </pre>
+                    </details>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Settings */}
@@ -345,7 +552,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
                 </span>
               )}
                 {!take.cameraPackage && (
-                  <span className="text-[11px] text-amber-300/90">This take was recorded before packages existed; choose one here.</span>
+                  <span className="text-[11px] text-on-surface-variant/70">This take had no package of its own; it starts on Camera Record's. What you choose here is kept.</span>
                 )}
               </div>
 
@@ -480,6 +687,7 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
                   rows={3}
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
+                  onBlur={() => rememberSetup({ note })}
                   placeholder="Who the actors are, wardrobe, anything to change. e.g. The man is in his fifties, grey beard, brown leather jacket."
                   className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs text-[12px] text-on-surface outline-none focus:border-primary resize-y placeholder:text-on-surface-variant/40"
                 />
@@ -502,6 +710,56 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
               <span className="text-[10px] text-on-surface-variant/70 -mt-sm text-center">
                 Seedream 5 Pro · about two minutes · counts as one generation. You can close this window while it renders.
               </span>
+
+              <div className="flex flex-col gap-xs pt-md border-t border-outline-variant/30">
+                <span className="font-label-caps text-[10px] tracking-[0.15em] uppercase text-on-surface-variant">Video</span>
+                <div className="flex items-center gap-xs">
+                  <div className="flex flex-1 bg-surface-container rounded-lg border border-outline-variant p-[2px]">
+                    {VIDEO_RESOLUTIONS.map((r) => (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => setVideoResolution(r)}
+                        disabled={!!videoStage}
+                        className={`flex-1 py-[5px] rounded text-[11px] font-label-caps cursor-pointer disabled:cursor-wait ${
+                          videoResolution === r ? 'bg-amber-400 text-black font-bold' : 'text-on-surface-variant hover:text-on-surface'
+                        }`}
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
+                  <label className="flex items-center gap-[4px] text-[11px] text-on-surface-variant cursor-pointer" title="Let the model make the sound of the scene (rain, engine, steps)">
+                    <input type="checkbox" checked={videoSound} onChange={(e) => setVideoSound(e.target.checked)} className="accent-amber-400 cursor-pointer" />
+                    Sound
+                  </label>
+                </div>
+                <span className="text-[11px] text-on-surface-variant">
+                  About ${videoRenderCost(take.duration, videoResolution).toFixed(2)} for this take ({Math.min(15, take.duration).toFixed(1)} s).
+                  {take.duration > 15 && ' Only the first 15 seconds are rendered.'}
+                </span>
+                <span className="text-[10px] text-on-surface-variant/70 leading-snug">
+                  Sent: the take's previs clip, the render shown on the left as the first frame
+                  {videoCast.length ? `, and ${videoCast.length === 1 ? `${videoCast[0].name}'s sheet` : `${videoCast.length} character sheets`}` : ''}. The package, the grade and the note above go into the prompt.
+                </span>
+                {videoError && (
+                  <div role="alert" className="text-[12px] text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-sm py-xs">
+                    {videoError}
+                  </div>
+                )}
+                <button
+                  onClick={handleRenderVideo}
+                  disabled={!shown || !!videoStage || !!stage}
+                  title={shown ? 'Remake the take as real footage, opening on the render shown' : 'Render the first frame first'}
+                  className="inline-flex items-center justify-center gap-xs py-sm rounded-lg bg-amber-400 text-black font-label-caps text-[12px] tracking-wider font-bold hover:brightness-110 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span className="material-symbols-outlined text-[18px]">movie</span>
+                  {videoStage ? 'RENDERING VIDEO…' : videos.length ? 'RENDER VIDEO AGAIN' : 'RENDER VIDEO'}
+                </button>
+                <span className="text-[10px] text-on-surface-variant/70 text-center">
+                  Several minutes. Keep this window open and the PanTilt tab visible until the clip has been sent.
+                </span>
+              </div>
             </div>
           </div>
         </div>

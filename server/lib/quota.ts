@@ -22,6 +22,7 @@ const METERED_ROUTES = [
   '/api/reconstruct-hunyuan-world',
   // Starting a render; polling /api/render-jobs is free.
   '/api/render-frame',
+  '/api/render-video',
 ];
 
 export function isMeteredRoute(url: string | undefined): boolean {

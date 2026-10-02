@@ -122,6 +122,27 @@ export interface CameraTake {
   iso?: string;
   /** Realistic frames rendered from this take's first frame, newest last. */
   renders?: TakeRender[];
+  /** Realistic video made from this take's previs and one of its rendered first frames, newest last. */
+  videoRenders?: TakeVideoRender[];
+  /** What the render window was last set to for this take, so it opens the way it was left. */
+  renderSetup?: { lookId?: string; pass?: 'blur' | 'clay' | 'full'; note?: string };
+}
+
+/** One realistic clip made from a take (POST /api/render-video). */
+export interface TakeVideoRender {
+  id: string;
+  createdAt: string;
+  /** The finished clip, stored on the server (/api/assets/...mp4). */
+  url: string;
+  /** The previs clip it was made from. */
+  sourceUrl: string;
+  /** The rendered first frame that gave it its look. */
+  firstFrameUrl: string;
+  resolution: string;
+  cameraPackage: { cameraId: string; lensId: string; backId: string };
+  lookId?: string;
+  prompt: string;
+  model: string;
 }
 
 /** One realistic frame made from a take's first frame (POST /api/render-frame). */
@@ -198,6 +219,8 @@ export interface FilmScene {
   stageSpecularity?: number;
   lightIntensity?: number;
   environmentPreset?: LightingEnvironmentPreset;
+  /** An approved render of this location, sent with every later render so all shots share one world. */
+  setMasterUrl?: string;
   dialogue?: DialogueScene;
 }
 
@@ -221,6 +244,8 @@ export interface Project {
   stageSpecularity?: number;
   lightIntensity?: number;
   environmentPreset?: LightingEnvironmentPreset;
+  /** An approved render of this location, sent with every later render so all shots share one world. */
+  setMasterUrl?: string;
   dialogue?: DialogueScene;
 }
 

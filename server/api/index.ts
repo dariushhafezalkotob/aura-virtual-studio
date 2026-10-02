@@ -15,6 +15,7 @@ import { claimPairingCode, createPairingCode, remotePassCookie } from '../lib/ca
 import { handleCrewApi } from './crew';
 import { handleLooksApi } from './looks';
 import { handleRenderApi } from './render';
+import { handleRenderVideoApi } from './renderVideo';
 import { userForSession } from '../lib/users';
 import { generateWithTrellis2 } from '../lib/trellis2';
 import { modelJobSnapshot, startModelJob, type ModelJobResult, type ReportProgress } from '../lib/modelJobs';
@@ -195,6 +196,7 @@ export function createApiMiddleware(ctx: ApiContext) {
     if (await handleCrewApi(req, res)) return;
     if (await handleLooksApi(req, res)) return;
     if (await handleRenderApi(req, res)) return;
+    if (await handleRenderVideoApi(req, res)) return;
 
     // 0. Local Disk File Persistence for Projects & Scenes (Bulletproof Local Dev)
     if (req.url?.startsWith('/api/projects')) {

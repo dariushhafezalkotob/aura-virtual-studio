@@ -31,7 +31,7 @@ const RENDER_RESOLUTION = '1.5k';
 
 type JobStatus = 'describing' | 'rendering' | 'done' | 'error';
 
-interface RenderJob {
+export interface RenderJob {
   id: string;
   userId: string;
   /** The account to hand the generation back to if the render fails. */
@@ -40,16 +40,18 @@ interface RenderJob {
   createdAt: number;
   error?: string;
   result?: { url: string; sourceUrl: string; layoutUrl: string; pass: RenderPass; prompt: string; model: string; cameraPackage: any; lookId?: string };
+  /** A finished video render (POST /api/render-video); polled through the same job route. */
+  video?: { url: string; sourceUrl: string; firstFrameUrl: string; resolution: string; prompt: string; model: string; cameraPackage: any; lookId?: string };
 }
 
-const jobs = new Map<string, RenderJob>();
+export const jobs = new Map<string, RenderJob>();
 
-function forgetOldJobs() {
+export function forgetOldJobs() {
   const cutoff = Date.now() - 6 * 60 * 60 * 1000;
   for (const [id, job] of jobs) if (job.createdAt < cutoff) jobs.delete(id);
 }
 
-function readJsonBody(req: any, limit: number): Promise<any> {
+export function readJsonBody(req: any, limit: number): Promise<any> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -69,19 +71,19 @@ function readJsonBody(req: any, limit: number): Promise<any> {
   });
 }
 
-function sendJson(res: any, status: number, payload: any) {
+export function sendJson(res: any, status: number, payload: any) {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify(payload));
 }
 
-function assetsDir(): string {
+export function assetsDir(): string {
   const dir = path.join(process.cwd(), 'data', 'assets');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-function saveAsset(prefix: string, ext: string, buf: Buffer): string {
+export function saveAsset(prefix: string, ext: string, buf: Buffer): string {
   const filename = `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${ext}`;
   fs.writeFileSync(path.join(assetsDir(), filename), buf);
   return `/api/assets/${filename}`;
@@ -169,7 +171,7 @@ async function describeShot(frameBase64: string, mimeType: string, sceneHeading:
  * What a saved Look contributes: its grade paragraph (newer looks hold only that; older ones hold
  * a long text whose "Color grade:" part is taken) and its reference still, sent as image 2.
  */
-async function lookParts(projectId: string, lookId: string): Promise<{ grade: string | null; imageDataUrl: string | null }> {
+export async function lookParts(projectId: string, lookId: string): Promise<{ grade: string | null; imageDataUrl: string | null }> {
   const look = await getLook(projectId, lookId);
   if (!look) return { grade: null, imageDataUrl: null };
 
@@ -275,6 +277,8 @@ export interface RenderPromptInput {
   cast?: CastEntry[];
   /** One sentence per person in the frame on where they are and how big, measured in the browser. */
   placements?: string[];
+  /** An approved render of this location (/api/assets/...), so every shot of a scene shares one world. */
+  setMasterUrl?: string;
 }
 
 export interface CastEntry {
@@ -315,12 +319,24 @@ export async function buildRenderPrompt(input: RenderPromptInput): Promise<{ pro
   const grade = monochrome ? MONO_GRADE : look.grade || NEUTRAL_GRADE;
   const extraImages = look.imageDataUrl ? [look.imageDataUrl] : [];
 
+  // The set master follows the look: an approved render of this same location from another shot.
+  // Without it two shots of one street came back as a rainy night with a yellow taxi and a sunny
+  // haze with an orange one, and nothing downstream (the video step least of all) can reconcile
+  // that. It gives the WORLD only; this shot's framing still comes from image 1.
+  let setMasterLine: string | null = null;
+  const master = input.setMasterUrl ? assetDataUrl(input.setMasterUrl) : null;
+  if (master) {
+    extraImages.push(master);
+    const n = extraImages.length + 1;
+    setMasterLine = `Image ${n} is another shot of this same location, already photographed for real. Do not copy its camera angle, framing or the position of anything in it. Match its world exactly: the same buildings, materials and colours, the same vehicles and props, the same weather, time of day, light and grade. Where the description below and image ${n} disagree about a colour or a material, image ${n} wins.`;
+  }
+
   // Character sheets follow the look. Seedream Edit takes 10 images in all: the layout pass, the
   // look, and at most 8 people. Tested by hand 2026-09-29: with a sheet the same man came back in
   // separate renders, and "only for who he is" kept the sheet's white studio light out.
   const castLines: string[] = [];
   const castNotes: string[] = [];
-  for (const member of (input.cast || []).slice(0, 8)) {
+  for (const member of (input.cast || []).slice(0, master ? 7 : 8)) {
     const sheet = assetDataUrl(member.sheetUrl);
     if (!sheet) continue;
     extraImages.push(sheet);
@@ -337,6 +353,7 @@ export async function buildRenderPrompt(input: RenderPromptInput): Promise<{ pro
     const prompt = [
       shot.keep,
       look.imageDataUrl ? LOOK_IMAGE_LINE : null,
+      setMasterLine,
       ...castLines,
       ...packagePromptSections(input.cameraPackage, input.settings),
       shot.lighting,
@@ -352,6 +369,7 @@ export async function buildRenderPrompt(input: RenderPromptInput): Promise<{ pro
     [
       `${IMAGE_ROLE[input.pass]}: keep its camera angle, framing, the geometry of the space, where every object stands and every person's position and pose; it has no colour, texture or light, so invent them.`,
       look.imageDataUrl ? LOOK_IMAGE_LINE : null,
+      setMasterLine,
       ...castLines,
     ].filter(Boolean).join(' '),
     `A candid film still from a feature film, shot on location, not a render. ${lines.light}`,
@@ -391,6 +409,12 @@ async function runJob(job: RenderJob, input: RenderPromptInput & { layoutDataUrl
   }
 }
 
+/** Only a file stored on this server, or nothing. */
+export function cleanAssetUrl(input: any): string | undefined {
+  const url = String(input ?? '');
+  return /^\/api\/assets\/[A-Za-z0-9._-]+$/.test(url) ? url : undefined;
+}
+
 /** Placement sentences are built by the browser from numbers; keep them plain, short and few. */
 function cleanPlacements(input: any): string[] {
   if (!Array.isArray(input)) return [];
@@ -401,7 +425,7 @@ function cleanPlacements(input: any): string[] {
 }
 
 /** Only sheets stored on this server, with plain names and colour words, at most 8. */
-function cleanCast(input: any): CastEntry[] {
+export function cleanCast(input: any): CastEntry[] {
   if (!Array.isArray(input)) return [];
   return input
     .map((m: any) => ({
@@ -432,7 +456,7 @@ export async function handleRenderApi(req: any, res: any): Promise<boolean> {
     if (!job || job.userId !== user._id.toHexString()) {
       sendJson(res, 404, { success: false, error: 'That render is not known to the server any more.' });
     } else {
-      sendJson(res, 200, { success: true, status: job.status, error: job.error, result: job.result });
+      sendJson(res, 200, { success: true, status: job.status, error: job.error, result: job.result, video: job.video });
     }
     return true;
   }
@@ -510,6 +534,7 @@ export async function handleRenderApi(req: any, res: any): Promise<boolean> {
       dof: cleanDof(body.dof),
       cast: cleanCast(body.cast),
       placements: cleanPlacements(body.placements),
+      setMasterUrl: cleanAssetUrl(body.setMasterUrl),
     });
 
     sendJson(res, 200, { success: true, jobId: job.id });

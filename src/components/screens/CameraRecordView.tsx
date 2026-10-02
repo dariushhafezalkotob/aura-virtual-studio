@@ -10,6 +10,7 @@ import {
   CameraPoseData,
   DepthOfFieldConfig,
   TakeRender,
+  TakeVideoRender,
 } from '../../types';
 import { ThreeStage, type ActorVisibilityFn, type DepthCaptureFn, type DepthMap } from '../viewport/ThreeStage';
 import { DEFAULT_INITIAL_ACTORS } from './ActingSetupView';
@@ -310,6 +311,31 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     setTimeout(() => setToastMessage(null), 3000);
   }, []);
 
+  /** A change made in the render window (package, look, pass, note) is kept on the take. */
+  const handleUpdateTake = useCallback((takeId: string, patch: Partial<CameraTake>) => {
+    if (!mountedRef.current) return;
+    const { takes: latestTakes, currentProject: project, onUpdateProject: update } = latestRef.current;
+    const next = latestTakes.map((t) => (t.id === takeId ? { ...t, ...patch } : t));
+    setTakes(next);
+    update?.({ ...project, cameraTakes: next });
+  }, []);
+
+  const handleVideoRendered = useCallback((takeId: string, video: TakeVideoRender) => {
+    if (!mountedRef.current) return;
+    const { takes: latestTakes, currentProject: project, onUpdateProject: update } = latestRef.current;
+    const next = latestTakes.map((t) => (t.id === takeId ? { ...t, videoRenders: [...(t.videoRenders || []), video] } : t));
+    setTakes(next);
+    update?.({ ...project, cameraTakes: next });
+    setToastMessage('Video render finished.');
+    setTimeout(() => setToastMessage(null), 3000);
+  }, []);
+
+  /** The approved render every later render of this scene is matched to, or none. */
+  const handleSetMaster = useCallback((url: string | undefined) => {
+    const { currentProject: project, onUpdateProject: update } = latestRef.current;
+    update?.({ ...project, setMasterUrl: url });
+  }, []);
+
   const depthCaptureRef = useRef<DepthCaptureFn | null>(null);
   const actorVisibilityRef = useRef<ActorVisibilityFn | null>(null);
   // Read inside the capture above, which is created once.
@@ -454,6 +480,11 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       mode: 'keyed',
       tension: DEFAULT_TENSION,
       fps: 60,
+      // The same package and lens a recorded take is stamped with, so its render window opens set.
+      focalLength,
+      aperture,
+      iso,
+      cameraPackage,
     };
     const next = [...takes, keyed];
     setTakes(next);
@@ -1105,7 +1136,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
   // High-Quality 16:9 Viewfinder MP4 Video Export Engine
   /** The widest centred 16:9 of the viewport, as the export has always framed it. */
-  const drawViewport16x9 = (ctx: CanvasRenderingContext2D, webglCanvas: HTMLCanvasElement) => {
+  const drawViewport16x9 = (ctx: CanvasRenderingContext2D, webglCanvas: HTMLCanvasElement, width = 1920, height = 1080) => {
     const srcW = webglCanvas.width;
     const srcH = webglCanvas.height;
     const targetAspect = 16 / 9;
@@ -1117,7 +1148,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       sh = srcW / targetAspect;
       sy = (srcH - sh) / 2;
     }
-    ctx.drawImage(webglCanvas, sx, sy, sw, sh, 0, 0, 1920, 1080);
+    ctx.drawImage(webglCanvas, sx, sy, sw, sh, 0, 0, width, height);
   };
 
   /** Downloads the video and its first frame, and keeps that frame as the take's thumbnail. */
@@ -1150,27 +1181,47 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
   };
 
   /**
-   * Exports at an exact frame rate: the clock is stepped to frame/fps, the viewport is given time
-   * to draw that moment, and the frame is encoded with that timestamp. How long a frame takes to
-   * draw no longer matters, so a heavy scene exports as smoothly as a light one - just slower.
-   * Returns false when this browser has no H.264 encoder, so the caller can record live instead.
+   * Renders a take frame by frame at an exact frame rate: the clock is stepped to frame/fps, the
+   * viewport is given time to draw that moment, and the frame is encoded with that timestamp. How
+   * long a frame takes to draw no longer matters, so a heavy scene comes out as smooth as a light
+   * one - just slower. Returns 'unsupported' when this browser has no H.264 encoder.
+   *
+   * `crop` is what the picture is cut to: 'wide' is the widest 16:9 of the viewport, as EXPORT has
+   * always framed it; 'frame' is the blue camera frame, the same cut a first-frame render uses, so
+   * a video render and its first frame are the same picture.
    */
-  const exportTakeFrameByFrame = async (targetTake: CameraTake, webglCanvas: HTMLCanvasElement, fps: number): Promise<boolean> => {
-    const exporter = await createFrameExporter({ width: 1920, height: 1080, fps });
-    if (!exporter) return false;
+  const renderTakeFrames = async (
+    targetTake: CameraTake,
+    opts: { fps: number; width: number; height: number; crop: 'wide' | 'frame'; maxSeconds?: number; showProgress: boolean }
+  ): Promise<{ video: Blob; firstFrame: string | null; total: number } | 'unsupported' | 'cancelled'> => {
+    const webglCanvas = webglCanvasRef.current;
+    if (!webglCanvas) return 'unsupported';
+    const { fps, width, height } = opts;
+    const exporter = await createFrameExporter({ width, height, fps });
+    if (!exporter) return 'unsupported';
 
     const exportCanvas = document.createElement('canvas');
-    exportCanvas.width = 1920;
-    exportCanvas.height = 1080;
+    exportCanvas.width = width;
+    exportCanvas.height = height;
     const ctx = exportCanvas.getContext('2d', { alpha: false });
     if (!ctx) {
       exporter.cancel();
-      return false;
+      return 'unsupported';
     }
+    const draw = () => {
+      if (opts.crop === 'wide') {
+        drawViewport16x9(ctx, webglCanvas, width, height);
+      } else {
+        const r = frameRectOnCanvas(webglCanvas);
+        ctx.drawImage(webglCanvas, r.x * webglCanvas.width, r.y * webglCanvas.height, r.w * webglCanvas.width, r.h * webglCanvas.height, 0, 0, width, height);
+      }
+    };
 
     abortExportRef.current = false;
-    setIsExportingVideo(true);
-    setExportProgress(0);
+    if (opts.showProgress) {
+      setIsExportingVideo(true);
+      setExportProgress(0);
+    }
     setActiveTakeId(targetTake.id);
     setViewMode('playback');
     setFrameStepping(true);
@@ -1179,7 +1230,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
 
     const restore = () => {
       setFrameStepping(false);
-      setIsExportingVideo(false);
+      if (opts.showProgress) setIsExportingVideo(false);
       setIsPlaying(false);
       setTimelineSec(0);
     };
@@ -1190,40 +1241,70 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
       await new Promise((r) => setTimeout(r, 250));
 
       // Both ends of the take are frames: 2 s at 24 fps is frames 0..48.
-      const total = Math.max(1, Math.round(targetTake.duration * fps) + 1);
+      const seconds = Math.min(targetTake.duration, opts.maxSeconds ?? Infinity);
+      const total = Math.max(1, Math.round(seconds * fps) + 1);
       let firstFrame: string | null = null;
       for (let i = 0; i < total; i++) {
         if (abortExportRef.current) {
           exporter.cancel();
           restore();
-          setToastMessage('Export cancelled.');
-          setTimeout(() => setToastMessage(null), 3000);
-          return true;
+          return 'cancelled';
         }
         setTimelineSec(Math.min(targetTake.duration, i / fps));
         // One frame for the screen to take the new time, two for the viewport to have drawn it.
         await nextFrame();
         await nextFrame();
         await nextFrame();
-        drawViewport16x9(ctx, webglCanvas);
+        draw();
         if (i === 0) firstFrame = exportCanvas.toDataURL('image/png');
         await exporter.addFrame(exportCanvas, i);
-        setExportProgress(Math.round(((i + 1) / total) * 100));
+        if (opts.showProgress) setExportProgress(Math.round(((i + 1) / total) * 100));
       }
 
       const video = await exporter.finish();
       restore();
-      const safeName = targetTake.name.toLowerCase().replace(/\s+/g, '_');
-      deliverExport(targetTake, video, `${safeName}_16x9_${fps}fps.mp4`, firstFrame, `✅ ${targetTake.name} exported: MP4 at ${fps} fps (${total} frames) + first frame PNG.`);
-    } catch (err: any) {
-      console.error('Frame-by-frame export failed:', err);
+      return { video, firstFrame, total };
+    } catch (err) {
       exporter.cancel();
       restore();
+      throw err;
+    }
+  };
+
+  // Called from callbacks that are created once, so they reach the current one through a ref.
+  const renderTakeFramesRef = useRef(renderTakeFrames);
+  renderTakeFramesRef.current = renderTakeFrames;
+
+  /** EXPORT MP4 at an exact frame rate. Returns false when the browser cannot, so the caller records live. */
+  const exportTakeFrameByFrame = async (targetTake: CameraTake, fps: number): Promise<boolean> => {
+    try {
+      const result = await renderTakeFrames(targetTake, { fps, width: 1920, height: 1080, crop: 'wide', showProgress: true });
+      if (result === 'unsupported') return false;
+      if (result === 'cancelled') {
+        setToastMessage('Export cancelled.');
+        setTimeout(() => setToastMessage(null), 3000);
+        return true;
+      }
+      const safeName = targetTake.name.toLowerCase().replace(/\s+/g, '_');
+      deliverExport(targetTake, result.video, `${safeName}_16x9_${fps}fps.mp4`, result.firstFrame, `✅ ${targetTake.name} exported: MP4 at ${fps} fps (${result.total} frames) + first frame PNG.`);
+    } catch (err: any) {
+      console.error('Frame-by-frame export failed:', err);
       setToastMessage(`Export failed: ${err?.message || 'the video could not be encoded'}.`);
       setTimeout(() => setToastMessage(null), 5000);
     }
     return true;
   };
+
+  /**
+   * The take's previs as a clip for a video render: 24 fps, 720p, cut to the blue camera frame like
+   * the first-frame render, and at most the 15 seconds the video model reads.
+   */
+  const captureTakeVideo = useCallback(async (takeId: string): Promise<Blob | null> => {
+    const target = latestRef.current.takes.find((t) => t.id === takeId);
+    if (!target) return null;
+    const result = await renderTakeFramesRef.current(target, { fps: 24, width: 1280, height: 720, crop: 'frame', maxSeconds: 15, showProgress: false });
+    return typeof result === 'string' ? null : result.video;
+  }, []);
 
   const exportTakeToVideo = async (takeToExport?: CameraTake | null) => {
     const targetTake = takeToExport || activeTake;
@@ -1241,7 +1322,7 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     }
 
     if (exportFps !== 60) {
-      const done = await exportTakeFrameByFrame(targetTake, webglCanvas, exportFps);
+      const done = await exportTakeFrameByFrame(targetTake, exportFps);
       if (done) return;
       // This browser cannot encode H.264 itself: fall through to the live recording.
       setToastMessage('This browser cannot export at an exact frame rate. Recording live instead.');
@@ -2668,6 +2749,12 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
           onRendered={handleTakeRendered}
           characters={characters}
           onUpdateCharacter={handleUpdateCharacter}
+          onUpdateTake={handleUpdateTake}
+          fallbackPackage={cameraPackage}
+          captureTakeVideo={() => captureTakeVideo(renderTakeId)}
+          onVideoRendered={handleVideoRendered}
+          setMasterUrl={currentProject.setMasterUrl}
+          onSetMaster={handleSetMaster}
           onClose={() => setRenderTakeId(null)}
         />
       )}

@@ -475,6 +475,8 @@ export interface RenderRequest {
   cast?: CastReference[];
   /** One sentence per person in the frame on where they are and how big, from the frame-1 masks. */
   placements?: string[];
+  /** An approved render of this location, so every shot of the scene shares one world. */
+  setMasterUrl?: string;
 }
 
 export interface RenderResult {
@@ -527,5 +529,95 @@ export async function renderFrame(req: RenderRequest, onStage: (stage: RenderSta
     if (data.status === 'error') throw new Error(data.error || 'The render failed.');
     onStage(data.status === 'rendering' ? 'rendering' : 'describing');
     if (Date.now() - started > 10 * 60 * 1000) throw new Error('The render took longer than 10 minutes.');
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Video
+
+export const VIDEO_RESOLUTIONS = ['480p', '720p', '1080p'] as const;
+export type VideoResolution = (typeof VIDEO_RESOLUTIONS)[number];
+
+/** Dollars per billed second (Seedance 2.0 Fast video edit). Input and output seconds are both billed. */
+const VIDEO_RATE: Record<VideoResolution, number> = { '480p': 0.065, '720p': 0.13, '1080p': 0.325 };
+
+/** What a video render of a take this long costs, roughly: the model reads at most 15 s and returns 4-15 s. */
+export function videoRenderCost(takeSeconds: number, resolution: VideoResolution): number {
+  const input = Math.min(15, Math.max(2, takeSeconds));
+  const output = Math.min(15, Math.max(4, Math.ceil(takeSeconds)));
+  return (input + output) * VIDEO_RATE[resolution];
+}
+
+export interface VideoRenderRequest {
+  projectId: string;
+  /** The take's previs clip, 24 fps, cut to the camera frame. */
+  video: Blob;
+  /** The rendered first frame of this same take (/api/assets/...): it gives the clip its look. */
+  firstFrameUrl: string;
+  resolution: VideoResolution;
+  sound: boolean;
+  cameraPackage: CameraPackage;
+  focalLength?: string;
+  aperture?: string;
+  iso?: string;
+  lookId?: string;
+  sceneHeading?: string;
+  note?: string;
+  cast?: CastReference[];
+}
+
+export interface VideoRenderResult {
+  url: string;
+  sourceUrl: string;
+  firstFrameUrl: string;
+  resolution: string;
+  prompt: string;
+  model: string;
+  cameraPackage: CameraPackage;
+  lookId?: string;
+}
+
+const blobToDataUrl = (blob: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('The clip could not be read.'));
+    reader.readAsDataURL(blob);
+  });
+
+/** Sends a take's previs clip for a realistic video render and polls until it is done (several minutes). */
+export async function renderVideo(req: VideoRenderRequest, onStage: (stage: RenderStage) => void): Promise<VideoRenderResult> {
+  onStage('uploading');
+  const { video, ...rest } = req;
+  // The encoder labels the blob video/mp4; the server accepts exactly that.
+  const dataUrl = (await blobToDataUrl(video)).replace(/^data:[^;]*;base64,/, 'data:video/mp4;base64,');
+  let res: Response;
+  try {
+    res = await fetch('/api/render-video', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...rest, video: dataUrl }),
+    });
+  } catch {
+    throw new Error('Could not reach the server.');
+  }
+  const { jobId } = await readJson(res);
+
+  const started = Date.now();
+  let misses = 0;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 4000));
+    let data: any;
+    try {
+      data = await readJson(await fetch(`/api/render-jobs/${jobId}`));
+      misses = 0;
+    } catch (err: any) {
+      if (++misses >= 5) throw err;
+      continue;
+    }
+    if (data.status === 'done' && data.video) return data.video as VideoRenderResult;
+    if (data.status === 'error') throw new Error(data.error || 'The video render failed.');
+    onStage(data.status === 'rendering' ? 'rendering' : 'describing');
+    if (Date.now() - started > 25 * 60 * 1000) throw new Error('The video render took longer than 25 minutes.');
   }
 }

@@ -23,6 +23,7 @@ const SCENE_CONTENT_KEYS = [
   'lightIntensity',
   'environmentPreset',
   'dialogue',
+  'setMasterUrl',
 ] as const;
 
 export const SETTING_LABELS: Record<SceneSetting, string> = {
