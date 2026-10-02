@@ -122,7 +122,7 @@ Rules:
 - Say nothing about the camera, the framing, the lens or the focus: the clip itself carries them.
 - Say nothing about colours, materials, light, weather or style: a reference picture carries them.
 - Every single-colour, untextured human figure is a stand-in for a person. Its colour (turquoise, orange, yellow...) is only a marker: never give that colour to the person or their clothes. When the cast list names a figure, call the person by that name ("Soma walks from the pavement on the right toward the car"). Otherwise write "a man" or "a person".
-- Give people natural weight and body movement in a few words (steps off the kerb, leans in, turns his head), not a frame-by-frame pose list.
+- The figures move like puppets; do not describe that. Write what each person DOES the way a director would give it to an actor, with intent and natural body language in a few words (steps off the kerb and hurries across, leans in to the window, glances back over his shoulder). Never write that someone is stiff, T-posed, floating or sliding, and never list poses frame by frame.
 - Vehicles: say which way they travel relative to the camera and whether they stop.
 - Do not invent anything that is not in the clip. No dialogue.
 Return only the paragraph.`;
@@ -151,7 +151,23 @@ export interface VideoPromptInput {
   lookId?: string;
   sceneHeading: string;
   note: string;
+  /** A sentence per person on their path through the clip and what they were directed to do. */
+  blocking: string[];
 }
+
+/** Blocking sentences are built by the browser from measurements and the actor's own direction. */
+function cleanBlocking(input: any): string[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((v: any) => String(v ?? '').replace(/[^\p{L}\p{N} .,:;'()%-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 600))
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+// The previs actor is a puppet: its walk is a looped cycle, its arms hang, nothing has weight. A
+// video-edit model asked to keep "how they move" copied that faithfully. So the clip is trusted
+// for WHERE a person is and where they go, and the model is told to act the move itself.
+const PERFORMANCE = `People: the figures in the input video are crude animated stand-ins. Take from them only where each person is, where they go, which way they face and when; their body animation is a placeholder, so do not copy its poses, gait or arm movement frame by frame. Each person performs the same move as a real actor on a film set would: natural weight and balance, a real walking rhythm with heel strike and arm swing, shoulders and hips moving, the head and eyes leading a turn, hands doing something believable, clothes and hair moving with the body, small human hesitations. Feet stay planted on the ground with no sliding.`;
 
 /**
  * The prompt for one clip, in the order that tested well: what the input clip is for, what image 1
@@ -166,7 +182,7 @@ export async function buildVideoPrompt(input: VideoPromptInput): Promise<{ promp
   // Image 1 is the first frame; the sheets follow in the order they are sent.
   const castLines = input.cast.map(
     (m, i) =>
-      `The ${m.colorName} figure is a stand-in for ${m.name} in @Image ${i + 2}: the same face, hair, build and clothes. Its colour is only a marker, never clothing. ${m.name} stays exactly where the figure is and moves as it moves, with natural weight and steps. Use @Image ${i + 2} only for who they are, not for its lighting, background or pose.`
+      `The ${m.colorName} figure is a stand-in for ${m.name} in @Image ${i + 2}: the same face, hair, build and clothes. Its colour is only a marker, never clothing. ${m.name} follows the figure's position, path and timing. Use @Image ${i + 2} only for who they are, not for its lighting, background or pose.`
   );
   const castNote = input.cast.length
     ? `Cast: ${input.cast.map((m) => `the ${m.colorName} figure is ${m.name}`).join('; ')}.`
@@ -175,14 +191,16 @@ export async function buildVideoPrompt(input: VideoPromptInput): Promise<{ promp
   const action = await writeAction(input.videoBase64, input.sceneHeading, input.note, castNote);
 
   const prompt = [
-    'The input video is a rough 3D previs layout of this shot. Keep exactly its camera position, lens, framing and camera movement, its timing, and where every building, object, vehicle and person is and how they move. Do not keep its surfaces, colours, lighting or render quality: rebuild everything as real, photographed materials.',
+    'The input video is a rough 3D previs layout of this shot. Keep exactly its camera position, lens, framing and camera movement, its timing, where every building and object is, and how every vehicle moves. Do not keep its surfaces, colours, lighting or render quality: rebuild everything as real, photographed materials.',
     '@Image 1 is this same shot already photographed for real. The opening frame of the result looks like @Image 1, and the whole clip keeps its location, materials, colours, weather, light, colour grade and film grain.',
     castLines.join(' '),
+    input.blocking.length || input.cast.length ? PERFORMANCE : null,
+    input.blocking.length ? `Blocking: ${input.blocking.join(' ')}` : null,
     `Action: ${action}`,
     packageShortLine(input.cameraPackage, input.settings),
     grade,
     input.note && `Director's note: ${input.note}`,
-    'A candid live-action film shot, one continuous take. No cuts, no text, no subtitles, no extra people, no CG finish.',
+    'A candid live-action film shot, one continuous take. No cuts, no text, no subtitles, no extra people, no CG finish, no stiff, robotic or mannequin-like movement.',
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -300,6 +318,7 @@ export async function handleRenderVideoApi(req: any, res: any): Promise<boolean>
       lookId: body.lookId ? clip(body.lookId, 40) : undefined,
       sceneHeading: clip(body.sceneHeading, 200),
       note: clip(body.note, 1000),
+      blocking: cleanBlocking(body.blocking),
     });
 
     sendJson(res, 200, { success: true, jobId: job.id });

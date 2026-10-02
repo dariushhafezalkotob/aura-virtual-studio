@@ -9,6 +9,7 @@ import {
   makeClayPass,
   measurePeople,
   placementSentence,
+  blockingSentence,
   renderFrame,
   renderVideo,
   standInColourName,
@@ -18,6 +19,7 @@ import {
   type LensAtFrame,
   type PeopleMask,
   type RenderPass,
+  type ActorBlocking,
   type RenderStage,
   type VideoResolution,
 } from '../../services/renderService';
@@ -37,6 +39,13 @@ export interface FirstFrameCapture {
 }
 import { CameraPackagePicker } from './CameraPackagePicker';
 
+/** The take's previs as a clip, how long it is, and where each actor is over it. */
+export interface TakeVideoCapture {
+  video: Blob;
+  seconds: number;
+  blocking: ActorBlocking[];
+}
+
 interface TakeRenderPanelProps {
   projectId: string;
   take: CameraTake;
@@ -54,7 +63,7 @@ interface TakeRenderPanelProps {
   /** The package Camera Record is set to, for a take that has none of its own. */
   fallbackPackage: CameraPackage;
   /** The take's previs as a clip, cut to the same frame as the first-frame render. */
-  captureTakeVideo: () => Promise<Blob | null>;
+  captureTakeVideo: () => Promise<TakeVideoCapture | null>;
   onVideoRendered: (takeId: string, video: TakeVideoRender) => void;
   /** The scene's approved render every other render is matched to, if one was chosen. */
   setMasterUrl?: string;
@@ -185,12 +194,12 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
     setVideoError(null);
     setVideoStage('uploading');
     try {
-      const clip = await captureTakeVideo();
-      if (!clip) throw new Error('The previs clip could not be made. This needs a recent Chrome, Edge or Safari, and the PanTilt tab has to stay visible.');
+      const captured = await captureTakeVideo();
+      if (!captured) throw new Error('The previs clip could not be made. This needs a recent Chrome, Edge or Safari, and the PanTilt tab has to stay visible.');
       const result = await renderVideo(
         {
           projectId,
-          video: clip,
+          video: captured.video,
           firstFrameUrl: shown.url,
           resolution: videoResolution,
           sound: videoSound,
@@ -202,6 +211,18 @@ export const TakeRenderPanel: React.FC<TakeRenderPanelProps> = ({
           sceneHeading,
           note: note.trim() || undefined,
           cast: videoCast.map((c) => ({ name: c.name, colorName: standInColourName(c.color), sheetUrl: c.referenceSheetUrl! })),
+          // Each person's path through the clip, and what they were directed to do in Acting.
+          blocking: captured.blocking.flatMap((b) => {
+            const c = characters.find((x) => x.id === b.actorId);
+            if (!c) return [];
+            const colour = standInColourName(c.color);
+            const who = videoCast.some((x) => x.id === c.id) ? `${c.name} (the ${colour} figure)` : `The ${colour} figure`;
+            const direction = c.motionSegments?.length
+              ? c.motionSegments.map((sg) => `${sg.prompt} (${sg.duration} s)`).join(', then ')
+              : c.motionPrompt || c.currentAnimation || undefined;
+            const sentence = blockingSentence(who, b, captured.seconds, direction);
+            return sentence ? [sentence] : [];
+          }),
         },
         setVideoStage
       );

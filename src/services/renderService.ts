@@ -535,6 +535,76 @@ export async function renderFrame(req: RenderRequest, onStage: (stage: RenderSta
 // ---------------------------------------------------------------------------------------------
 // Video
 
+/** Where one actor is at one moment of the clip, measured from the actor masks. */
+export interface BlockingSample extends PersonPlacement {
+  time: number;
+}
+
+/** One actor's samples over the clip, in time order; moments they are out of shot are simply absent. */
+export interface ActorBlocking {
+  actorId: string;
+  samples: BlockingSample[];
+}
+
+/** Collects per-actor samples from the masks taken at each sampled moment of a clip. */
+export function collectBlocking(moments: { time: number; people: PeopleMask }[]): ActorBlocking[] {
+  const byActor = new Map<string, BlockingSample[]>();
+  for (const m of moments) {
+    for (const p of measurePeople(m.people)) {
+      // A few stray pixels of an arm at the frame edge are not "in shot".
+      if (p.heightShare * p.visibleShare < 0.03) continue;
+      if (!byActor.has(p.actorId)) byActor.set(p.actorId, []);
+      byActor.get(p.actorId)!.push({ ...p, time: m.time });
+    }
+  }
+  return [...byActor.entries()].map(([actorId, samples]) => ({ actorId, samples }));
+}
+
+const acrossWord = (x: number) =>
+  x < 0.2 ? 'the far left' : x < 0.4 ? 'left of centre' : x <= 0.6 ? 'the centre' : x <= 0.8 ? 'right of centre' : 'the far right';
+const sizeWord = (h: number) => (h < 0.2 ? 'small and far off' : h < 0.45 ? 'small in the frame' : h < 0.75 ? 'mid-sized in the frame' : 'large in the frame');
+
+/**
+ * One or two plain sentences on where a person is over the clip: when they come into shot, where
+ * they start and end, which way they travel across the frame and in depth, and what the director
+ * asked them to do. It pins the PATH so the video model can be told to leave the previs's stiff
+ * body animation behind and act the move like a real person.
+ */
+export function blockingSentence(who: string, blocking: ActorBlocking, clipSeconds: number, direction?: string): string | null {
+  const s = blocking.samples;
+  if (s.length === 0) return null;
+  const first = s[0];
+  const last = s[s.length - 1];
+  const sec = (t: number) => `${t < 10 ? t.toFixed(1) : Math.round(t)} s`;
+  const edge = (p: BlockingSample) => (p.cutBy.includes('left') ? 'the left edge' : p.cutBy.includes('right') ? 'the right edge' : null);
+
+  const parts: string[] = [];
+  if (first.time > 0.3) {
+    const from = edge(first);
+    parts.push(`${who} comes into shot at about ${sec(first.time)}${from ? ` from ${from}` : first.visibleShare < 0.85 ? ' from behind what stands in front' : ''}, ${sizeWord(first.heightShare)}`);
+  } else {
+    parts.push(`${who} starts at ${acrossWord(first.centreX)}, ${sizeWord(first.heightShare)}`);
+  }
+
+  const dx = last.centreX - first.centreX;
+  const grow = last.heightShare / Math.max(0.01, first.heightShare);
+  const moves: string[] = [];
+  if (Math.abs(dx) > 0.1) moves.push(`travels from ${dx > 0 ? 'left to right' : 'right to left'} across the frame, ending at ${acrossWord(last.centreX)}`);
+  if (grow > 1.3) moves.push('comes toward the camera');
+  else if (grow < 0.77) moves.push('moves away from the camera');
+  parts.push(moves.length ? moves.join(' and ') : `stays at ${acrossWord(last.centreX)}`);
+
+  if (last.time < clipSeconds - 0.6) {
+    const to = edge(last);
+    parts.push(`and is out of shot by about ${sec(last.time + 0.5)}${to ? ` past ${to}` : ''}`);
+  }
+  const hidden = s.filter((p) => p.visibleShare < 0.85).length;
+  if (hidden > s.length / 2) parts.push('partly hidden behind what stands in front for most of it');
+
+  const told = direction?.replace(/\s+/g, ' ').trim();
+  return `${parts.join(', ')}.${told ? ` Direction for this actor: ${told.slice(0, 220)}.` : ''}`;
+}
+
 export const VIDEO_RESOLUTIONS = ['480p', '720p', '1080p'] as const;
 export type VideoResolution = (typeof VIDEO_RESOLUTIONS)[number];
 
@@ -564,6 +634,8 @@ export interface VideoRenderRequest {
   sceneHeading?: string;
   note?: string;
   cast?: CastReference[];
+  /** A sentence per person on their path through the clip and what they were directed to do. */
+  blocking?: string[];
 }
 
 export interface VideoRenderResult {

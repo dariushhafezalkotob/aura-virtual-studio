@@ -20,8 +20,8 @@ import { DEFAULT_TENSION, insertKeyframe, withKeyHandles, EASY_EASE_HANDLE, acti
 import { KeyframeTimeline } from '../camera/KeyframeTimeline';
 import { KeyInspector } from '../camera/KeyInspector';
 import { CameraPackagePicker } from '../camera/CameraPackagePicker';
-import { TakeRenderPanel, type FirstFrameCapture } from '../camera/TakeRenderPanel';
-import type { PeopleMask } from '../../services/renderService';
+import { TakeRenderPanel, type FirstFrameCapture, type TakeVideoCapture } from '../camera/TakeRenderPanel';
+import { collectBlocking, type PeopleMask } from '../../services/renderService';
 import { objectAnimationEnd } from '../../services/objectAnimation';
 import { EXPORT_FRAME_RATES, createFrameExporter } from '../../services/videoExport';
 import { DEFAULT_PACKAGE, normalizePackage, packageLabel, cameraById, lensById, type CameraPackage } from '../../services/cameraPackage';
@@ -408,9 +408,9 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
    * Which actor covers each pixel of the camera frame right now: what the camera sees (things in
    * front hide an actor) and each whole figure, both cut to the blue frame like the picture.
    */
-  const peopleInFrame = (): PeopleMask | null => {
+  const peopleInFrame = (mapWidth = 1600): PeopleMask | null => {
     const canvas = webglCanvasRef.current;
-    const map = actorVisibilityRef.current?.(1600);
+    const map = actorVisibilityRef.current?.(mapWidth);
     if (!map || !canvas) return null;
     const r = frameRectOnCanvas(canvas);
     const x0 = Math.floor(r.x * map.width);
@@ -426,6 +426,9 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
     }
     return { width: w, height: h, ids, fullIds, actorIds: map.actorIds };
   };
+
+  const peopleInFrameRef = useRef(peopleInFrame);
+  peopleInFrameRef.current = peopleInFrame;
 
   /**
    * The actors that show in the frame, hidden ones (behind a wall, say) not counted. An actor needs
@@ -1192,8 +1195,17 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
    */
   const renderTakeFrames = async (
     targetTake: CameraTake,
-    opts: { fps: number; width: number; height: number; crop: 'wide' | 'frame'; maxSeconds?: number; showProgress: boolean }
-  ): Promise<{ video: Blob; firstFrame: string | null; total: number } | 'unsupported' | 'cancelled'> => {
+    opts: {
+      fps: number;
+      width: number;
+      height: number;
+      crop: 'wide' | 'frame';
+      maxSeconds?: number;
+      showProgress: boolean;
+      /** Called on every frame after it is drawn, for anything that has to be read at that moment. */
+      onFrame?: (index: number, time: number) => void;
+    }
+  ): Promise<{ video: Blob; firstFrame: string | null; total: number; seconds: number } | 'unsupported' | 'cancelled'> => {
     const webglCanvas = webglCanvasRef.current;
     if (!webglCanvas) return 'unsupported';
     const { fps, width, height } = opts;
@@ -1258,12 +1270,13 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
         draw();
         if (i === 0) firstFrame = exportCanvas.toDataURL('image/png');
         await exporter.addFrame(exportCanvas, i);
+        opts.onFrame?.(i, Math.min(targetTake.duration, i / fps));
         if (opts.showProgress) setExportProgress(Math.round(((i + 1) / total) * 100));
       }
 
       const video = await exporter.finish();
       restore();
-      return { video, firstFrame, total };
+      return { video, firstFrame, total, seconds };
     } catch (err) {
       exporter.cancel();
       restore();
@@ -1299,11 +1312,27 @@ export const CameraRecordView: React.FC<CameraRecordViewProps> = ({ currentProje
    * The take's previs as a clip for a video render: 24 fps, 720p, cut to the blue camera frame like
    * the first-frame render, and at most the 15 seconds the video model reads.
    */
-  const captureTakeVideo = useCallback(async (takeId: string): Promise<Blob | null> => {
+  const captureTakeVideo = useCallback(async (takeId: string): Promise<TakeVideoCapture | null> => {
     const target = latestRef.current.takes.find((t) => t.id === takeId);
     if (!target) return null;
-    const result = await renderTakeFramesRef.current(target, { fps: 24, width: 1280, height: 720, crop: 'frame', maxSeconds: 15, showProgress: false });
-    return typeof result === 'string' ? null : result.video;
+    // Twice a second, where each actor is in the frame: the prompt pins their path from this, so
+    // the video model can be freed from the previs's body animation.
+    const moments: { time: number; people: PeopleMask }[] = [];
+    const result = await renderTakeFramesRef.current(target, {
+      fps: 24,
+      width: 1280,
+      height: 720,
+      crop: 'frame',
+      maxSeconds: 15,
+      showProgress: false,
+      onFrame: (index, time) => {
+        if (index % 12 !== 0) return;
+        const people = peopleInFrameRef.current(640);
+        if (people) moments.push({ time, people });
+      },
+    });
+    if (typeof result === 'string') return null;
+    return { video: result.video, seconds: result.seconds, blocking: collectBlocking(moments) };
   }, []);
 
   const exportTakeToVideo = async (takeToExport?: CameraTake | null) => {
