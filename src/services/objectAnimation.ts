@@ -200,6 +200,9 @@ export function objectAnimationEnd(assets: SceneAsset[] | undefined): number {
   for (const a of assets || []) {
     const keys = a.animation?.keys;
     if (keys && keys.length) end = Math.max(end, keys[keys.length - 1].time);
+    // A rigged prop's own animation that plays once has to be seen to its end.
+    const clip = a.rigClip && a.animationClips?.[a.rigClip.index];
+    if (clip && a.rigClip && !a.rigClip.loop) end = Math.max(end, a.rigClip.start + clip.duration / Math.max(0.1, a.rigClip.speed));
   }
   return end;
 }

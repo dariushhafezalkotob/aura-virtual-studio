@@ -822,6 +822,7 @@ export const ActingSetupView: React.FC<ActingSetupViewProps> = ({
                 onMoveKey={(time, newTime) => moveObjectKey(selectedAsset.id, time, newTime)}
                 onToggleAutoFace={(on) => updateAsset(selectedAsset.id, (a) => (a.animation ? { ...a, animation: { ...a.animation, autoFace: on } } : a))}
                 onClearAnimation={() => updateAsset(selectedAsset.id, (a) => ({ ...a, animation: undefined }))}
+                onChangeRigClip={(rigClip) => updateAsset(selectedAsset.id, (a) => ({ ...a, rigClip }))}
                 onClose={() => setSelectedAssetId(null)}
               />
             </div>

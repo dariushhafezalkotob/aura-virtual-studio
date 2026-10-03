@@ -16,6 +16,8 @@ import {
 } from '../viewport/ThreeStage';
 import { RoomBakeStudio } from '../roombake/RoomBakeStudio';
 import { PRIMITIVE_DEFS, PrimitiveKind, createPrimitiveAssetUrl } from '../../services/primitiveAssets';
+import { MODEL_IMPORT_ACCEPT, importModelFile } from '../../services/modelImport';
+import { RigClipControls } from '../common/RigClipControls';
 import {
   TRELLIS_QUALITY_PRESETS,
   TrellisQuality,
@@ -119,6 +121,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
     };
   }, []);
   const [addingPrimitive, setAddingPrimitive] = useState<PrimitiveKind | null>(null);
+  const [importingModel, setImportingModel] = useState(false);
+  const modelInputRef = useRef<HTMLInputElement>(null);
 
   // Stage Saving & Stage Library State
   const [saveToast, setSaveToast] = useState<string | null>(null);
@@ -762,6 +766,49 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   };
 
   /**
+   * IMPORT MODEL: a file from outside becomes an ordinary GLB asset, like a primitive, so the
+   * gizmo, the inspector, RoomBake and object animation need no special case. Its own materials
+   * are kept (`imported`) and the first animation inside it, if any, is set to loop.
+   */
+  const handleImportModel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || importingModel) return;
+    setImportingModel(true);
+    try {
+      const model = await importModelFile(file);
+      pushUndoSnapshot();
+      const newAsset: SceneAsset = {
+        id: `import_${Date.now()}`,
+        name: model.name,
+        glbUrl: model.glbUrl,
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+        scale: [model.scale, model.scale, model.scale],
+        category: 'prop',
+        imported: true,
+        animationClips: model.clips.length ? model.clips : undefined,
+        rigClip: model.clips.length ? { index: 0, loop: true, start: 0, speed: 1 } : undefined,
+        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      onUpdateProject({ ...currentProject, scenes: [...assets, newAsset] });
+      setSelectedAssetId(newAsset.id);
+      const what = model.rigged
+        ? `rigged, ${model.clips.length} animation${model.clips.length === 1 ? '' : 's'}`
+        : model.clips.length
+        ? `${model.clips.length} animation${model.clips.length === 1 ? '' : 's'}`
+        : 'no animation';
+      setSaveToast(`✓ Imported "${model.name}" (${what}).${model.notes.length ? ' ' + model.notes.join(' ') : ''}`);
+      setTimeout(() => setSaveToast(null), 6000);
+    } catch (err: any) {
+      console.error(err);
+      alert(`Could not import the model: ${err.message || err}`);
+    } finally {
+      setImportingModel(false);
+    }
+  };
+
+  /**
    * Primitives are saved as ordinary GLB assets rather than a special asset kind, so the
    * gizmo, the object inspector and RoomBake all work on them with no extra cases.
    */
@@ -1363,6 +1410,20 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             )}
           </div>
 
+          {/* Import a model file: a prop, a set piece, or a rigged prop with its own animation */}
+          <button
+            onClick={() => modelInputRef.current?.click()}
+            disabled={importingModel}
+            className={`flex items-center gap-xs px-sm py-[4px] rounded-lg text-[11px] font-label-caps font-bold transition-all border cursor-pointer bg-surface-container-high/60 text-primary border-primary/40 hover:bg-primary/20 ${
+              importingModel ? 'opacity-60 cursor-wait' : ''
+            }`}
+            title="Bring in a .glb, .gltf, .fbx or .obj model. Rigged models play their own animations."
+          >
+            <span className="material-symbols-outlined text-[16px]">upload_file</span>
+            {importingModel ? 'IMPORTING…' : 'IMPORT MODEL'}
+          </button>
+          <input ref={modelInputRef} type="file" accept={MODEL_IMPORT_ACCEPT} className="hidden" onChange={handleImportModel} />
+
           {/* RoomBake AI Texture Studio Button */}
           <button
             onClick={() => setShowRoomBakeStudio(true)}
@@ -1959,6 +2020,19 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
               <div>SCL: {selectedAsset.scale.map((v) => v.toFixed(2)).join(', ')}</div>
             </div>
 
+            {/* A rigged or animated imported model: which of its own animations plays */}
+            {(selectedAsset.animationClips?.length ?? 0) > 0 && (
+              <div className="pt-1 border-t border-outline-variant/20">
+                <RigClipControls
+                  asset={selectedAsset}
+                  onChange={(rigClip) => {
+                    const updated = assets.map((a) => (a.id === selectedAsset.id ? { ...a, rigClip } : a));
+                    onUpdateProject({ ...currentProject, scenes: updated });
+                  }}
+                />
+              </div>
+            )}
+
             {/* Per-Object Specularity / Matte Control */}
             <div className="flex items-center justify-between text-[10px] font-mono pt-1 border-t border-outline-variant/20">
               <span className="text-on-surface-variant flex items-center gap-1">
@@ -1997,7 +2071,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                   min={0.0}
                   max={1.5}
                   step={0.05}
-                  value={selectedAsset.emissiveBoost !== undefined ? selectedAsset.emissiveBoost : 0.35}
+                  value={selectedAsset.emissiveBoost !== undefined ? selectedAsset.emissiveBoost : selectedAsset.imported ? 0 : 0.35}
                   onChange={(e) => {
                     const val = parseFloat(e.target.value);
                     const updated = assets.map((a) => (a.id === selectedAsset.id ? { ...a, emissiveBoost: val } : a));
@@ -2006,7 +2080,7 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
                   className="w-16 accent-amber-400 cursor-pointer h-1"
                 />
                 <span className="text-amber-300 font-bold w-7 text-right">
-                  {Math.round((selectedAsset.emissiveBoost !== undefined ? selectedAsset.emissiveBoost : 0.35) * 100)}%
+                  {Math.round((selectedAsset.emissiveBoost !== undefined ? selectedAsset.emissiveBoost : selectedAsset.imported ? 0 : 0.35) * 100)}%
                 </span>
               </div>
             </div>

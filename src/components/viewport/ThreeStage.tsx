@@ -25,6 +25,7 @@ import { CharacterActorModel, ActorErrorBoundary } from './CharacterActorModel';
 import { computeDeviceQuaternion } from '../../services/cameraRemoteService';
 import { SampledCamera, createSampledCamera, sampleCameraTake, samplePath } from '../../services/cameraAnimation';
 import { createSampledObject, sampleObjectAnimation, sampleObjectPath } from '../../services/objectAnimation';
+import { clone as cloneWithSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 const _CAM_RIGHT_LOCAL = new THREE.Vector3(1, 0, 0);
 const _mirrorQuat = new THREE.Quaternion();
@@ -414,8 +415,10 @@ class ModelErrorBoundary extends Component<
 }
 
 // Utility function to apply specularity / roughness / reflectivity / metalness and texture illumination dynamically to materials
-function applySpecularityToMaterial(mat: THREE.Material, spec: number, emissiveBoost: number = 0.35, glowThreshold: number = 0) {
+function applySpecularityToMaterial(mat: THREE.Material, spec: number | null, emissiveBoost: number = 0.35, glowThreshold: number = 0) {
   const m = mat as THREE.MeshStandardMaterial;
+  // null keeps the material's own roughness and metalness: an imported model was authored that way.
+  if (spec !== null) {
   // spec in [0, 1]:
   // 0.0 is completely matte (roughness 1.0, metalness 0.0, zero specular/env reflections)
   // 0.15 is default clean cinematic matte (roughness ~0.88, metalness ~0.05, very low specular)
@@ -432,6 +435,7 @@ function applySpecularityToMaterial(mat: THREE.Material, spec: number, emissiveB
   }
   if ('clearcoat' in m) {
     (m as any).clearcoat = 0;
+  }
   }
 
   // Self-illumination & baked texture luminance recovery (e.g. glowing night windows, illuminated facades from Trellis/Hunyuan)
@@ -567,8 +571,10 @@ const GLTFModel: React.FC<{
     [pathLine]
   );
   const { glbUrl, position, rotation, scale } = asset;
-  const effectiveSpecularity = asset.specularity !== undefined ? asset.specularity : stageSpecularity;
-  const effectiveEmissiveBoost = asset.emissiveBoost !== undefined ? asset.emissiveBoost : 0.35;
+  // An imported model keeps its authored roughness and glows not at all until someone asks it to;
+  // generated models have their light baked into the texture and need the boost and the matte look.
+  const effectiveSpecularity = asset.specularity !== undefined ? asset.specularity : asset.imported ? null : stageSpecularity;
+  const effectiveEmissiveBoost = asset.emissiveBoost !== undefined ? asset.emissiveBoost : asset.imported ? 0 : 0.35;
   const effectiveGlowThreshold = asset.emissiveThreshold ?? 0;
 
   // Live Rotation Angle HUD State (displays live degrees during rotation, disappears on release)
@@ -607,9 +613,12 @@ const GLTFModel: React.FC<{
 
   let content: ReactNode;
   if (isCustomModel) {
-    const { scene } = useGLTF(resolvedGlbUrl);
+    const { scene, animations } = useGLTF(resolvedGlbUrl);
     const cloned = React.useMemo(() => {
-      const c = scene.clone();
+      // SkeletonUtils.clone, not scene.clone(): a plain clone of a rigged model leaves every copy's
+      // skinned meshes bound to the ORIGINAL skeleton, so the copy cannot be posed or animated.
+      // For a model without a rig the two are the same.
+      const c = cloneWithSkeleton(scene);
       // Enhance brightness & PBR material properties across all meshes
       c.traverse((child) => {
         if ((child as THREE.Mesh).isMesh) {
@@ -657,6 +666,35 @@ const GLTFModel: React.FC<{
       [cloned]
     );
 
+    // ---- A rigged prop's own animation, timed against the scene's timeline ----------------------
+    const clipSettings = asset.rigClip;
+    const clip = clipSettings ? animations[clipSettings.index] : undefined;
+    const mixer = React.useMemo(() => new THREE.AnimationMixer(cloned), [cloned]);
+    const action = React.useMemo(() => {
+      mixer.stopAllAction();
+      if (!clip) return null;
+      const a = mixer.clipAction(clip);
+      a.setLoop(clipSettings?.loop === false ? THREE.LoopOnce : THREE.LoopRepeat, Infinity);
+      a.clampWhenFinished = true;
+      a.play();
+      return a;
+    }, [mixer, clip, clipSettings?.loop]);
+    useEffect(
+      () => () => {
+        mixer.stopAllAction();
+      },
+      [mixer]
+    );
+    useFrame(() => {
+      if (!action || !clip) return;
+      // Scene Design has no timeline: the prop holds the clip's first frame there.
+      const sceneTime = animationTime ?? 0;
+      const local = Math.max(0, (sceneTime - (clipSettings?.start ?? 0)) * (clipSettings?.speed ?? 1));
+      const t = clipSettings?.loop === false ? Math.min(local, clip.duration) : local % Math.max(1e-3, clip.duration);
+      action.time = t;
+      mixer.update(0);
+    });
+
     // Live specularity & emissive update without re-instantiation
     useEffect(() => {
       if (groupRef.current) {
@@ -687,8 +725,8 @@ const GLTFModel: React.FC<{
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial
           color="#38bdf8"
-          roughness={THREE.MathUtils.lerp(0.8, 0.2, effectiveSpecularity)}
-          metalness={THREE.MathUtils.lerp(0.05, 0.4, effectiveSpecularity)}
+          roughness={THREE.MathUtils.lerp(0.8, 0.2, effectiveSpecularity ?? stageSpecularity)}
+          metalness={THREE.MathUtils.lerp(0.05, 0.4, effectiveSpecularity ?? stageSpecularity)}
         />
       </mesh>
     );

@@ -1,5 +1,6 @@
 import React from 'react';
-import type { ObjectKeyframe, SceneAsset } from '../../types';
+import type { ObjectKeyframe, RigClipSettings, SceneAsset } from '../../types';
+import { RigClipControls } from '../common/RigClipControls';
 import { keyAt } from '../../services/objectAnimation';
 
 /**
@@ -20,6 +21,8 @@ interface ObjectAnimationPanelProps {
   onMoveKey: (time: number, newTime: number) => void;
   onToggleAutoFace: (on: boolean) => void;
   onClearAnimation: () => void;
+  /** Which of the model's own animations plays, and when (imported rigged props). */
+  onChangeRigClip: (rigClip: RigClipSettings | undefined) => void;
   onClose: () => void;
 }
 
@@ -39,6 +42,7 @@ export const ObjectAnimationPanel: React.FC<ObjectAnimationPanelProps> = ({
   onMoveKey,
   onToggleAutoFace,
   onClearAnimation,
+  onChangeRigClip,
   onClose,
 }) => {
   const keys = asset.animation?.keys || [];
@@ -59,6 +63,11 @@ export const ObjectAnimationPanel: React.FC<ObjectAnimationPanelProps> = ({
       </div>
 
       <div className="px-2.5 py-2 flex flex-col gap-2">
+        {(asset.animationClips?.length ?? 0) > 0 && (
+          <div className="pb-2 border-b border-outline-variant/20">
+            <RigClipControls asset={asset} onChange={onChangeRigClip} compact />
+          </div>
+        )}
         <div className="flex items-center gap-1">
           <button
             onClick={() => onGoToKey(-1)}

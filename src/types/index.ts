@@ -315,6 +315,15 @@ export interface SceneAsset {
   emissiveThreshold?: number;
   /** Keyed movement over the scene's timeline (a car driving through the shot). Absent = it stays put. */
   animation?: ObjectAnimation;
+  /**
+   * Brought in from a file (IMPORT MODEL) rather than generated. Its own materials are kept: no
+   * Texture Glow and no specularity override until those sliders are touched.
+   */
+  imported?: boolean;
+  /** The animations inside the model file, in file order (a rigged prop's walk cycle, a fan). */
+  animationClips?: { name: string; duration: number }[];
+  /** Which of those plays, timed against the scene's timeline. Absent = none plays. */
+  rigClip?: RigClipSettings;
   createdAt: string;
 }
 
@@ -329,6 +338,17 @@ export interface ObjectKeyframe {
    * pulls away again, 'hold' waits here and jumps at the next key. Defaults to 'linear'.
    */
   ease?: 'linear' | 'ease' | 'hold';
+}
+
+export interface RigClipSettings {
+  /** Index into `animationClips`. */
+  index: number;
+  /** Repeat for as long as the scene runs; otherwise play once and hold the last frame. */
+  loop: boolean;
+  /** Scene time in seconds at which the clip starts (before that it holds its first frame). */
+  start: number;
+  /** 1 = as authored. */
+  speed: number;
 }
 
 export interface ObjectAnimation {
