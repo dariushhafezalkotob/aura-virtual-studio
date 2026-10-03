@@ -221,6 +221,8 @@ export interface FilmScene {
   environmentPreset?: LightingEnvironmentPreset;
   /** An approved render of this location, sent with every later render so all shots share one world. */
   setMasterUrl?: string;
+  /** Scene Design's 1.70 m scale figure: whether it shows and where it stands. Never drawn elsewhere. */
+  scaleFigure?: { visible: boolean; position: [number, number, number] };
   dialogue?: DialogueScene;
 }
 
@@ -246,6 +248,8 @@ export interface Project {
   environmentPreset?: LightingEnvironmentPreset;
   /** An approved render of this location, sent with every later render so all shots share one world. */
   setMasterUrl?: string;
+  /** Scene Design's 1.70 m scale figure: whether it shows and where it stands. Never drawn elsewhere. */
+  scaleFigure?: { visible: boolean; position: [number, number, number] };
   dialogue?: DialogueScene;
 }
 

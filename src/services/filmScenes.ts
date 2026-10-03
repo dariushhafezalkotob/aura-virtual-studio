@@ -24,6 +24,7 @@ const SCENE_CONTENT_KEYS = [
   'environmentPreset',
   'dialogue',
   'setMasterUrl',
+  'scaleFigure',
 ] as const;
 
 export const SETTING_LABELS: Record<SceneSetting, string> = {

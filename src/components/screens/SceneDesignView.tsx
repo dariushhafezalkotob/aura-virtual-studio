@@ -122,6 +122,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
   }, []);
   const [addingPrimitive, setAddingPrimitive] = useState<PrimitiveKind | null>(null);
   const [importingModel, setImportingModel] = useState(false);
+  // The 1.70 m figure for judging scale: on by default, and it remembers where it was left.
+  const scaleFigure = currentProject.scaleFigure ?? { visible: true, position: [1.5, 0, 1.5] as [number, number, number] };
   const modelInputRef = useRef<HTMLInputElement>(null);
 
   // Stage Saving & Stage Library State
@@ -1410,6 +1412,20 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
             )}
           </div>
 
+          {/* 1.70 m man for scale (Scene Design only) */}
+          <button
+            onClick={() => onUpdateProject({ ...currentProject, scaleFigure: { ...scaleFigure, visible: !scaleFigure.visible } })}
+            className={`flex items-center gap-xs px-sm py-[4px] rounded-lg text-[11px] font-label-caps font-bold transition-all border cursor-pointer ${
+              scaleFigure.visible
+                ? 'bg-primary/15 text-primary border-primary'
+                : 'bg-surface-container-high/60 text-on-surface-variant border-outline-variant/40 hover:text-primary'
+            }`}
+            title="A 1.70 m man for judging scale. Click him in the viewport to move him. He only appears here, never in Acting, Camera Record or renders."
+          >
+            <span className="material-symbols-outlined text-[16px]">accessibility_new</span>
+            1.70 M
+          </button>
+
           {/* Import a model file: a prop, a set piece, or a rigged prop with its own animation */}
           <button
             onClick={() => modelInputRef.current?.click()}
@@ -1669,6 +1685,8 @@ export const SceneDesignView: React.FC<SceneDesignViewProps> = ({
           onCanvasReady={(canvas) => {
             viewportCanvasRef.current = canvas;
           }}
+          scaleFigure={scaleFigure.visible ? { position: scaleFigure.position } : null}
+          onMoveScaleFigure={(position) => onUpdateProject({ ...currentProject, scaleFigure: { ...scaleFigure, position } })}
           assets={assets}
           selectedAssetId={selectedAssetId}
           pointLights={pointLights}

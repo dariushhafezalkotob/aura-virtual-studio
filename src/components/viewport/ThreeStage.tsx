@@ -8,6 +8,7 @@ import {
   ContactShadows,
   Splat,
   Html,
+  useTexture,
 } from '@react-three/drei';
 import * as THREE from 'three';
 import {
@@ -105,6 +106,12 @@ interface ThreeStageProps {
   animateObjects?: boolean;
   /** Draw each moving object's route on the floor (the Acting screen). */
   showObjectPaths?: boolean;
+  /**
+   * A 1.70 m silhouette of a man for judging scale, on Scene Design only. Null or absent draws
+   * nothing, which is how every other screen (and the phone, renders and exports) leaves it out.
+   */
+  scaleFigure?: { position: [number, number, number] } | null;
+  onMoveScaleFigure?: (position: [number, number, number]) => void;
   showTrajectories?: boolean;
   showGrid?: boolean;
   isRecordingCamera?: boolean;
@@ -485,6 +492,84 @@ function applySpecularityToMaterial(mat: THREE.Material, spec: number | null, em
 
   m.needsUpdate = true;
 }
+
+// The silhouette PNG is cropped to the figure, so its full height is the man's height.
+const SCALE_FIGURE_HEIGHT_M = 1.7;
+const SCALE_FIGURE_ASPECT = 156 / 512;
+
+/**
+ * A 1.70 m man for judging scale while building a set. He turns about the vertical axis only, so
+ * he always faces the camera and stays standing. Click him to move him across the floor (the gizmo
+ * has no up/down handle: his feet stay on the ground). He is not an asset and is never saved with
+ * the stage; Scene Design hands his position in and is the only screen that does.
+ */
+const ScaleFigure: React.FC<{
+  position: [number, number, number];
+  onMove?: (position: [number, number, number]) => void;
+  onDraggingChange: (dragging: boolean) => void;
+}> = ({ position, onMove, onDraggingChange }) => {
+  const texture = useTexture('/models/scale_figure_170cm.png');
+  const groupRef = useRef<THREE.Group>(null);
+  const turnRef = useRef<THREE.Group>(null);
+  // Turn about the vertical only, toward where the camera is. (drei's Billboard with X and Z locked
+  // leans off true when the camera looks down: measured 46 deg off on a high three-quarter view.)
+  useFrame(({ camera }) => {
+    const g = groupRef.current;
+    const turn = turnRef.current;
+    if (!g || !turn) return;
+    turn.rotation.y = Math.atan2(camera.position.x - g.position.x, camera.position.z - g.position.z);
+  });
+  const [selected, setSelected] = useState(false);
+  const w = SCALE_FIGURE_HEIGHT_M * SCALE_FIGURE_ASPECT;
+
+  useEffect(() => {
+    groupRef.current?.position.set(position[0], 0, position[2]);
+  }, [position[0], position[2]]);
+
+  return (
+    <>
+      <group ref={groupRef} position={[position[0], 0, position[2]]}>
+        <group ref={turnRef}>
+          <mesh
+            position={[0, SCALE_FIGURE_HEIGHT_M / 2, 0]}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (isSelectionSuppressed()) return;
+              setSelected((v) => !v);
+            }}
+          >
+            <planeGeometry args={[w, SCALE_FIGURE_HEIGHT_M]} />
+            <meshBasicMaterial map={texture} transparent alphaTest={0.4} side={THREE.DoubleSide} toneMapped={false} />
+          </mesh>
+        </group>
+        {selected && (
+          <mesh position={[0, 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+            <ringGeometry args={[0.32, 0.36, 32]} />
+            <meshBasicMaterial color="#00ffcc" side={THREE.DoubleSide} />
+          </mesh>
+        )}
+      </group>
+      {selected && groupRef.current && (
+        <TransformControls
+          object={groupRef.current}
+          mode="translate"
+          showY={false}
+          size={0.6}
+          onMouseDown={() => {
+            markTransformDragStart();
+            onDraggingChange(true);
+          }}
+          onMouseUp={() => {
+            markTransformDragEnd();
+            setTimeout(() => onDraggingChange(false), 200);
+            const g = groupRef.current;
+            if (g) onMove?.([g.position.x, 0, g.position.z]);
+          }}
+        />
+      )}
+    </>
+  );
+};
 
 const GLTFModel: React.FC<{
   asset: SceneAsset;
@@ -2263,6 +2348,8 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
   isPlaying = false,
   animateObjects = false,
   showObjectPaths = false,
+  scaleFigure = null,
+  onMoveScaleFigure,
   showTrajectories = true,
   showGrid = true,
   isRecordingCamera = false,
@@ -2448,6 +2535,13 @@ export const ThreeStage: React.FC<ThreeStageProps> = ({
             </Suspense>
           </ModelErrorBoundary>
         ))}
+
+        {/* Scale reference: a 1.70 m man, Scene Design only */}
+        {scaleFigure && (
+          <Suspense fallback={null}>
+            <ScaleFigure position={scaleFigure.position} onMove={onMoveScaleFigure} onDraggingChange={setIsTransformDragging} />
+          </Suspense>
+        )}
 
         {/* Render All Character Actors with Kimodo Kinematics & Trajectories */}
         {characters.map((actor) => (
